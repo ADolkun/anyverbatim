@@ -44,6 +44,8 @@ class TextOptions:
     script: Literal["zh-Hans", "keep"] = "zh-Hans"
     # Verbatim by default: fillers are what was said, and removing them edits the quotable text.
     fillers: Literal["keep", "remove"] = "keep"
+    # Mandarin amounts as digits per GB/T 15835-2011 (3.5万, 80%, 2026年), or "keep" for the form as recognized.
+    numerals: Literal["digits", "keep"] = "digits"
 
 
 @dataclass(frozen=True)

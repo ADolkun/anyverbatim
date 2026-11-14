@@ -78,8 +78,11 @@ def to_units(text: str, language: Language, view: View) -> list[str]:
     """Normalize ``text`` and split it into comparison units.
 
     The raw view keeps surface form and the case of Latin tokens, so ``nvda`` against ``NVDA`` or
-    ``150期`` against ``一百五十期`` is an error. The itn view maps Chinese quantities to digits,
-    runs English through Whisper's normalizer and casefolds.
+    ``150期`` against ``一百五十期`` is an error. A Mandarin document from the pipeline writes amounts
+    as digits (its numerals stage), so against a reference that spells them out the raw view counts
+    every such numeral as an error; score engine rows, which come before that stage, or use the itn
+    view. The itn view maps Chinese quantities to digits, runs English through Whisper's normalizer
+    and casefolds, so it reads the display form and the spoken form alike.
     """
     text = canonical(text, language)
     if view == "itn":

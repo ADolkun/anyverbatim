@@ -23,7 +23,7 @@ from ytverbatim.errors import ConfigError, DependencyError, EngineError, LLMUnav
 from ytverbatim.llm import claude_cli
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from ytverbatim.pipeline import ProgressEvent, VideoResult, process_many
-from ytverbatim.text import guards, numbers, numeric
+from ytverbatim.text import guards, numbers, numerals, numeric
 from ytverbatim.text import punctuate as punctuate_module
 
 ZH = "zhVideo0001"
@@ -236,12 +236,12 @@ def test_end_to_end_with_a_fake_llm_punctuates_verifies_numbers_and_meters_token
 
     assert doc.transcript.punctuation == "llm" and doc.transcript.language == "zh"
     text = "".join(s.text for s in doc.segments)
-    assert text == "大家好欢迎回来，今天聊聊这只股票，上周涨了五十个百分点，非常强劲。"
+    assert text == "大家好欢迎回来，今天聊聊这只股票，上周涨了50个百分点，非常强劲。"
     fixed = [(s, f) for s in doc.segments for f in s.flags if f.kind == "numeric_fixed"]
     ((segment, flag),) = fixed
-    assert segment.text[flag.char_start : flag.char_end] == "五十个百分点"
+    assert segment.text[flag.char_start : flag.char_end] == "50个百分点"
     assert [r.source for r in flag.readings] == ["asr:w-prod", "caption_auto"]
-    assert ("numeric", "十五", "五十") in [(e.stage, e.before, e.after) for e in segment.edits]
+    assert ("numeric", "15", "50") in [(e.stage, e.before, e.after) for e in segment.edits]
     # The fixed word no longer matches its engine word, so its time is interpolated (JSON only).
     assert doc.quality.flags_by_kind == {"numeric_fixed": 1, "timing_interpolated": 1}
     assert {(u.stage, u.client, u.calls, u.input_tokens) for u in doc.llm_usage} == {
@@ -251,10 +251,19 @@ def test_end_to_end_with_a_fake_llm_punctuates_verifies_numbers_and_meters_token
     }
 
     markdown = (vdir / "context.md").read_text(encoding="utf-8")
-    assert "五十个百分点[^1]" in markdown and "十五个百分点 → 五十个百分点" in markdown
+    assert "50个百分点[^1]" in markdown and "五十个百分点: context; was 15" in markdown
     assert "punctuation: llm" in markdown
     assert "timing_interpolated" not in markdown
-    assert [e.stage for e in events] == ["fetch", "asr", "normalize", "punctuate", "correct", "numeric", "write"]
+    assert [e.stage for e in events] == [
+        "fetch",
+        "asr",
+        "normalize",
+        "punctuate",
+        "correct",
+        "numeric",
+        "numerals",
+        "write",
+    ]
     assert results[0].notices == () and not (vdir / "audio.wav").exists()
     assert {".lock", "audio.webm", "context.json", "context.md", ".stages"} <= {p.name for p in vdir.iterdir()}
 
@@ -275,7 +284,13 @@ def test_without_an_llm_the_stages_degrade_and_say_so(session_kit, worker) -> No
 def test_an_option_change_recomputes_only_the_stages_downstream_of_it(session_kit, worker) -> None:
     yt = zh_yt(session_kit)
     _, first, _ = run(session_kit, yt)
-    assert stored(first[0]) == {"asr": False, "normalize": False, "punctuate": False, "numeric": False}
+    assert stored(first[0]) == {
+        "asr": False,
+        "normalize": False,
+        "punctuate": False,
+        "numeric": False,
+        "numerals": False,
+    }
     converted = ffmpeg_calls(session_kit)
 
     llm = FakeLLM()
@@ -286,6 +301,7 @@ def test_an_option_change_recomputes_only_the_stages_downstream_of_it(session_ki
         "punctuate": False,
         "correct": False,
         "numeric": False,
+        "numerals": False,
     }
     assert len(worker.calls) == 1 and ffmpeg_calls(session_kit) == converted, "no audio once the ASR is stored"
     assert len(yt.labels("audio")) == 1 and "asr" not in [e.stage for e in events]
@@ -294,13 +310,27 @@ def test_an_option_change_recomputes_only_the_stages_downstream_of_it(session_ki
     asked = len(llm.requests)
     no_chapters = config.load_options(overrides={"text": {"chapters": "none"}})
     _, third, _ = run(session_kit, yt, options=no_chapters, llm=llm)
-    assert stored(third[0]) == {"asr": True, "normalize": True, "punctuate": True, "correct": True, "numeric": True}
+    assert stored(third[0]) == {
+        "asr": True,
+        "normalize": True,
+        "punctuate": True,
+        "correct": True,
+        "numeric": True,
+        "numerals": True,
+    }
     assert len(llm.requests) == asked and only_document(third).chapters == ()
 
     keep_script = config.load_options(overrides={"text": {"script": "keep"}})
     _, fourth, _ = run(session_kit, yt, options=keep_script, llm=llm)
     # The text was Simplified already, so normalize's output is unchanged and nothing after it reruns.
-    assert stored(fourth[0]) == {"asr": True, "normalize": False, "punctuate": True, "correct": True, "numeric": True}
+    assert stored(fourth[0]) == {
+        "asr": True,
+        "normalize": False,
+        "punctuate": True,
+        "correct": True,
+        "numeric": True,
+        "numerals": True,
+    }
     assert len(llm.requests) == asked
 
 
@@ -336,6 +366,7 @@ def test_an_llm_failure_fails_the_video_and_keeps_every_finished_stage(session_k
         "punctuate": False,
         "correct": False,
         "numeric": False,
+        "numerals": False,
     }
     assert len(worker.calls) == 1 and len(yt.labels("audio")) == 1
 
@@ -432,7 +463,7 @@ def test_the_resolved_value_is_what_the_stored_document_depends_on(session_kit, 
 
     _, off, events = run(session_kit, yt, options=with_correct(False), llm=llm)
     assert "skip" not in [e.stage for e in events] and only_document(off).transcript.correction_llm is None
-    assert stored(off[0]) == {"asr": True, "normalize": True, "punctuate": True, "numeric": True}
+    assert stored(off[0]) == {"asr": True, "normalize": True, "punctuate": True, "numeric": True, "numerals": True}
 
     _, on, _ = run(session_kit, yt, llm=llm)
     assert only_document(on).transcript.correction_llm == llm.id
@@ -743,6 +774,7 @@ def test_a_module_version_bump_redoes_its_stage_and_the_document(session_kit, wo
         "punctuate": False,
         "correct": True,
         "numeric": True,
+        "numerals": True,
     }
 
 
@@ -762,11 +794,65 @@ def test_a_tokenizer_or_guard_bump_rechecks_the_stored_replies(session_kit, work
         "punctuate": True,
         "correct": False,
         "numeric": False,
+        # The numerals stage reads quantities too; the guards are not part of it.
+        "numerals": module is guards,
     }
     assert len(llm.requests) == asked, (
         "no request changed, so correct and numeric re-apply their rules to the checkpointed replies"
     )
     assert only_document(results).quality.flags_by_kind == {"numeric_fixed": 1, "timing_interpolated": 1}
+
+
+def test_the_numerals_stage_is_stored_and_reused(session_kit, worker) -> None:
+    yt = zh_yt(session_kit)
+    llm = FakeLLM()
+    _, first, _ = run(session_kit, yt, llm=llm)
+    assert stored(first[0])["numerals"] is False
+    assert (session_kit.out / ZH / ".stages" / "numerals.json").is_file()
+    store.StageStore(session_kit.out / ZH).discard("context")
+    _, again, events = run(session_kit, yt, llm=llm)
+    assert stored(again[0])["numerals"] is True and "numerals" not in [e.stage for e in events]
+    assert "50个百分点" in "".join(s.text for s in only_document(again).segments)
+
+
+def test_keep_skips_the_numerals_stage_and_reruns_nothing_before_it(session_kit, worker) -> None:
+    yt = zh_yt(session_kit)
+    llm = FakeLLM()
+    run(session_kit, yt, llm=llm)
+    asked = len(llm.requests)
+    keep = config.load_options(overrides={"text": {"numerals": "keep"}})
+    _, results, events = run(session_kit, yt, options=keep, llm=llm)
+    assert "skip" not in [e.stage for e in events], "the document depends on the option"
+    assert stored(results[0]) == {"asr": True, "normalize": True, "punctuate": True, "correct": True, "numeric": True}
+    assert len(llm.requests) == asked
+    doc = only_document(results)
+    assert "五十个百分点" in "".join(s.text for s in doc.segments)
+    assert ("numeric", "十五", "五十") in [(e.stage, e.before, e.after) for s in doc.segments for e in s.edits]
+
+
+def test_a_transcript_in_another_language_skips_the_numerals_stage(session_kit, worker) -> None:
+    _, results, events = run(session_kit, session_kit.yt(), [EN], llm=FakeLLM())
+    assert "numerals" not in stored(results[0]) and "numerals" not in [e.stage for e in events]
+    assert not (session_kit.out / EN / ".stages" / "numerals.json").exists()
+
+
+def test_a_numerals_rule_change_reruns_only_numerals_and_the_document(session_kit, worker, monkeypatch) -> None:
+    yt = zh_yt(session_kit)
+    llm = FakeLLM()
+    run(session_kit, yt, llm=llm)
+    asked = len(llm.requests)
+    monkeypatch.setattr(numerals, "VERSION", numerals.VERSION + "-bumped")
+    _, results, events = run(session_kit, yt, llm=llm)
+    assert "skip" not in [e.stage for e in events]
+    assert stored(results[0]) == {
+        "asr": True,
+        "normalize": True,
+        "punctuate": True,
+        "correct": True,
+        "numeric": True,
+        "numerals": False,
+    }
+    assert len(llm.requests) == asked and len(worker.calls) == 1
 
 
 def test_correction_reruns_when_its_glossary_changes(session_kit, worker) -> None:
@@ -803,7 +889,14 @@ def test_the_creator_note_reaches_correction_only_when_the_option_is_on(session_
     _, results, _ = note_run(session_kit, yt, llm, note=True)
     assert llm.stages() == ["correct"], "only correction is asked again"
     assert all(NOTE_TEXT in prompt for prompt in correct_prompts(llm))
-    assert stored(results[0]) == {"asr": True, "normalize": True, "punctuate": True, "correct": False, "numeric": True}
+    assert stored(results[0]) == {
+        "asr": True,
+        "normalize": True,
+        "punctuate": True,
+        "correct": False,
+        "numeric": True,
+        "numerals": True,
+    }
     assert only_document(results).video.creator_note is not None
 
     llm = FakeLLM()
@@ -821,7 +914,14 @@ def test_turning_the_note_on_for_a_video_without_one_reuses_correction(session_k
     llm = FakeLLM()
     _, results, _ = note_run(session_kit, yt, llm, note=True)
     assert llm.requests == []
-    assert stored(results[0]) == {"asr": True, "normalize": True, "punctuate": True, "correct": True, "numeric": True}
+    assert stored(results[0]) == {
+        "asr": True,
+        "normalize": True,
+        "punctuate": True,
+        "correct": True,
+        "numeric": True,
+        "numerals": True,
+    }
     assert only_document(results).video.creator_note is None
 
 
