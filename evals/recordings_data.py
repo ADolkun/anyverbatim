@@ -32,7 +32,7 @@ from typing import Literal
 
 import click
 import numpy as np
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from evals import disk
 from evals.diarization import Turn, write_rttm
@@ -95,11 +95,15 @@ class CorpusIndex(_Frozen):
 
 
 class OwnerEntry(_Frozen):
-    """One of the owner's own recordings: a generic label, no reference, and the speaker count only if they know it."""
+    """One of the owner's own recordings: a generic label, no reference, and the speaker count only if they know it.
+
+    The audio is always ``<owner folder>/<id>/audio.wav`` (16 kHz mono 16-bit, made with ffmpeg from the original), so
+    each recording has a folder of its own for ``words.json`` and the other files derived from it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
-    # 16 kHz mono 16-bit WAV, relative to the owner folder or absolute; made with ffmpeg from the original.
-    audio: str
     language: Literal["zh", "en", "zh+en"] = "zh+en"
     speakers: int | None = None
 
@@ -107,7 +111,7 @@ class OwnerEntry(_Frozen):
     @classmethod
     def _generic(cls, value: str) -> str:
         if not _OWNER_ID.match(value):
-            raise ValueError(f"owner recording ids are generic labels such as rec-01, got {value!r}")
+            raise ValueError("owner recording ids are generic labels such as rec-01")
         return value
 
 
@@ -146,35 +150,45 @@ def load_index(corpus_dir: Path) -> CorpusIndex:
 
 
 def load_owner(owner_dir: Path) -> list[OwnerRecording]:
-    """Read the private owner index and check each listed file is the 16 kHz mono 16-bit WAV the evals decode."""
+    """Read the private owner index and check each recording's ``<id>/audio.wav`` is what the evals decode.
+
+    Errors name the generic id and never the index's own text, which could hold a title or a name.
+    """
     path = owner_dir / INDEX
     if not path.is_file():
-        raise ConfigError(f"no owner index at {path}; list the owner's WAV files there (see OwnerIndex)")
-    index = OwnerIndex.model_validate_json(path.read_text(encoding="utf-8"))
+        raise ConfigError(f"no owner index at {path}; list the owner's recordings there (see OwnerIndex)")
+    try:
+        index = OwnerIndex.model_validate_json(path.read_text(encoding="utf-8"))
+    except ValidationError as exc:
+        problems = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors(include_input=False))
+        raise ConfigError(f"the owner index is invalid ({problems})") from None
     ids = [e.id for e in index.recordings]
     if len(set(ids)) != len(ids):
         raise ConfigError(f"{path} lists a recording id more than once")
     found: list[OwnerRecording] = []
     for entry in index.recordings:
-        wav = owner_dir / entry.audio
+        wav = owner_dir / entry.id / AUDIO
         if not wav.is_file():
-            raise ConfigError(f"{entry.id}: {wav} does not exist")
-        found.append(OwnerRecording(entry, wav, wav_seconds(wav)))
+            raise ConfigError(f"{entry.id}: expected its audio at {entry.id}/{AUDIO}, which does not exist")
+        found.append(OwnerRecording(entry, wav, wav_seconds(wav, entry.id)))
     return found
 
 
-def wav_seconds(path: Path) -> float:
-    """Duration of a 16 kHz mono 16-bit WAV file; any other format is refused with the conversion to run."""
+def wav_seconds(path: Path, label: str | None = None) -> float:
+    """Duration of a 16 kHz mono 16-bit WAV file; any other format is refused with the conversion to run.
+
+    Errors name ``label`` (default: the file name), so a private recording can be named by its generic id instead.
+    """
+    name = label or path.name
     try:
         with wave.open(str(path), "rb") as handle:
             shape = (handle.getframerate(), handle.getnchannels(), handle.getsampwidth())
             frames = handle.getnframes()
     except (wave.Error, EOFError) as exc:
-        raise ConfigError(f"{path.name} is not a readable WAV file: {exc}") from exc
+        raise ConfigError(f"{name} is not a readable WAV file: {exc}") from exc
     if shape != (SAMPLE_RATE, 1, 2):
         raise ConfigError(
-            f"{path.name} must be 16 kHz mono 16-bit; convert it with "
-            "`ffmpeg -i IN -ac 1 -ar 16000 -c:a pcm_s16le OUT.wav`"
+            f"{name} must be 16 kHz mono 16-bit; convert it with `ffmpeg -i IN -ac 1 -ar 16000 -c:a pcm_s16le OUT.wav`"
         )
     return frames / SAMPLE_RATE
 

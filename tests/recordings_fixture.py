@@ -53,13 +53,14 @@ def make_meeting(
 
 
 def make_owner(root: Path, entries: Sequence[tuple[str, float, dict[str, object]]]) -> None:
-    """Write the owner index and a silent WAV for each ``(id, seconds, extra index fields)``."""
+    """Write the owner index and ``<id>/audio.wav`` (silent) for each ``(id, seconds, extra index fields)``."""
     folder = root / OWNER
     folder.mkdir(parents=True, exist_ok=True)
     records = []
     for recording_id, seconds, extra in entries:
-        (folder / f"{recording_id}.wav").write_bytes(silent(seconds))
-        records.append({"id": recording_id, "audio": f"{recording_id}.wav", **extra})
+        (folder / recording_id).mkdir(exist_ok=True)
+        (folder / recording_id / "audio.wav").write_bytes(silent(seconds))
+        records.append({"id": recording_id, **extra})
     (folder / INDEX).write_text(json.dumps({"recordings": records}), encoding="utf-8")
 
 
