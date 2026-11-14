@@ -466,6 +466,12 @@ def test_a_whole_file_engine_is_refused_as_the_numeric_second_opinion(session_ki
         run(session_kit, zh_yt(session_kit), options=options)
 
 
+def test_a_runs_engine_is_refused_as_the_numeric_second_opinion(session_kit, worker) -> None:
+    options = config.load_options(overrides={"text": {"numeric_second_opinion": "w-runs-lid"}})
+    with pytest.raises(ConfigError, match="merges same-language spans into runs"):
+        run(session_kit, zh_yt(session_kit), options=options)
+
+
 def invoke(kit, yt, monkeypatch: pytest.MonkeyPatch, *args: str):
     monkeypatch.setattr(session, "SubprocessRunner", lambda *, sleep_args=(): yt)
     return CliRunner().invoke(main, ["run", "--out", str(kit.out), *args])

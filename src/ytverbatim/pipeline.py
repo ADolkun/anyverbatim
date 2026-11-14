@@ -340,6 +340,11 @@ def _settings(
                 f"text.numeric_second_opinion = {second.spec.id!r} decodes whole files; it needs a chunked engine "
                 "that can re-decode just the numeric spans"
             )
+        if second.decodes_runs():
+            raise ConfigError(
+                f"text.numeric_second_opinion = {second.spec.id!r} merges same-language spans into runs, so it would "
+                "decode the audio between the numeric spans too; choose a chunk-by-chunk engine such as w-vad"
+            )
         registry.check_dependencies(second)
     if llm is None and options.llm.provider != "none":
         # A missing `claude` CLI or base URL must fail now, not after an hour of ASR.
