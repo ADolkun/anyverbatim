@@ -70,7 +70,11 @@ class BoundedResponse:
         self._deadline = time.monotonic() + timeout_s
         self._buffer = bytearray()
         self._expired = threading.Event()
-        self._socket = _socket(response)
+        try:
+            self._socket = _socket(response)
+        except RuntimeError:
+            response.close()
+            raise
         self._timer: threading.Timer | None = None
         if self._socket is not None:
             self._timer = threading.Timer(max(timeout_s, 0.0), self._expire)
@@ -111,14 +115,15 @@ class BoundedResponse:
             self._socket.settimeout(remaining)
         try:
             chunk = self._response.read1(_READ_SIZE)
-        except (OSError, http.client.HTTPException) as exc:
+        except Exception as exc:
+            # A read the deadline's shutdown interrupts can fail in ways no live stream does; it is the timeout.
             if self._expired.is_set() or isinstance(exc, TimeoutError):
                 raise TimeoutError from None
-            if isinstance(exc, OSError):
-                raise
-            raise ConnectionError(f"the HTTP response broke off ({type(exc).__name__})") from None
+            if isinstance(exc, http.client.HTTPException):
+                raise ConnectionError(f"the HTTP response broke off ({type(exc).__name__})") from None
+            raise
         # The deadline's shutdown reads as a clean end of stream; it must not pass for one.
-        if not chunk and self._expired.is_set():
+        if self._expired.is_set():
             raise TimeoutError
         return chunk
 
@@ -126,7 +131,9 @@ class BoundedResponse:
         self._expired.set()
         if self._socket is not None:
             with suppress(OSError):
-                self._socket.shutdown(socket.SHUT_RDWR)
+                # The plain socket's shutdown, not SSLSocket's: that one unwraps the SSL object under a concurrent
+                # read, which then fails with ValueError or AttributeError instead of seeing the end of the stream.
+                socket.socket.shutdown(self._socket, socket.SHUT_RDWR)
 
 
 def _socket(response: http.client.HTTPResponse) -> socket.socket | None:

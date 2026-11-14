@@ -526,3 +526,39 @@ def test_a_peer_that_trickles_bytes_cannot_hold_login_past_its_deadline() -> Non
         stop.set()
     assert raised.value.code == "timeout"
     assert time.monotonic() - started < 3.0
+
+
+def test_a_refresh_refused_for_its_client_resets_the_registration() -> None:
+    store_account(expires_at=NOW)
+    opener = FakeOpener({f"POST {TOKEN_URL}": http_error(401, {"error": "invalid_client"})})
+    with pytest.raises(ChatGPTAuthError, match="ytverbatim llm login") as raised:
+        chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
+    assert raised.value.code == "invalid_client"
+    state = stored_state()
+    assert state.client_id is None
+    assert state.account is not None and state.account.access_token == state.account.refresh_token == ""
+
+
+def test_an_exchange_refused_for_its_client_resets_the_registration() -> None:
+    browser = Browser(approve)
+    with pytest.raises(ChatGPTAuthError, match="reset") as raised:
+        login(browser, FakeOpener({f"POST {TOKEN_URL}": http_error(401, {"error": "invalid_client"})}))
+    assert raised.value.code == "invalid_client"
+    assert stored_state().client_id is None
+
+    again = Browser(approve)
+    login(again, token_endpoint(again))
+    assert again.query["client_id"] == chatgpt_auth.DYNAMIC_CLIENT
+
+
+def test_logout_clears_the_tokens_even_when_revocation_fails_unexpectedly() -> None:
+    store_account()
+
+    def broken(_request: object) -> FakeResponse:
+        raise RuntimeError("unexpected")
+
+    opener = FakeOpener({f"GET {DISCOVERY_URL}": json_response(DISCOVERY), f"POST {REVOKE_URL}": broken})
+    with pytest.raises(RuntimeError):
+        chatgpt_auth.logout(opener=opener)
+    account = stored_state().account
+    assert account is not None and account.access_token == "" and account.refresh_token == ""
