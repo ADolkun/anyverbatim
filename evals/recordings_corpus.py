@@ -24,9 +24,15 @@ from evals.recordings_data import (
     recordings_dir,
     wav_seconds,
 )
-from evals.store import Layout
-from ytverbatim.asr.models import METRICS_FILE, REQUEST_FILE
+from evals.run_asr import ALLOWED_LANGUAGES
+from evals.store import Layout, read_rows
+from ytverbatim import atomic
+from ytverbatim.asr import registry
+from ytverbatim.asr.models import HYPOTHESES_FILE, METRICS_FILE, REQUEST_FILE, ChunkHypothesis, FileJob, WorkerRequest
+from ytverbatim.asr.protocol import EngineDef
+from ytverbatim.asr.runner import stored_fingerprint
 from ytverbatim.errors import ConfigError
+from ytverbatim.mlx_worker import without_wav
 
 Metric = Literal["wer", "cer", "mer"]
 
@@ -35,10 +41,14 @@ ALIMEETING = "alimeeting"
 ASCEND = "ascend"
 ASCEND_UTTERANCES = "ascend-utterances"
 ASR_CORPORA = (AMI, ALIMEETING, ASCEND, ASCEND_UTTERANCES, OWNER)
+# What a command runs without --corpus: the public corpora. The owner's recordings run only when asked for, so a
+# missing owner index never stops the public runs.
+PUBLIC_CORPORA = (AMI, ALIMEETING, ASCEND, ASCEND_UTTERANCES)
 # Corpora with one folder per recording, so a ``words.json`` can sit next to each audio file.
 FOLDER_CORPORA = (AMI, ALIMEETING, ASCEND, OWNER)
 METRICS: dict[str, Metric] = {AMI: "wer", ALIMEETING: "cer", ASCEND: "mer", ASCEND_UTTERANCES: "mer"}
 ASR_DIR = "asr"
+INPUTS_FILE = "inputs.json"
 UTTERANCES = "utterances"
 
 
@@ -75,13 +85,88 @@ def batch_key(ids: Sequence[str]) -> str:
     return "batch-" + hashlib.sha256("\0".join(ids).encode()).hexdigest()[:12]
 
 
-def finished_ids(layout: Layout, hypothesis: str) -> set[str]:
-    """Ids of every recording whose worker ran to the end (it writes its metrics last)."""
-    done: set[str] = set()
+def audio_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1 << 20):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def recording_job(item: Item, definition: EngineDef) -> FileJob:
+    """Build a job with no language hint; a language-ID hypothesis gets the allowed set instead."""
+    detects = definition.language_policy() == "detect"
+    return FileJob(id=item.id, wav=str(item.wav), languages=ALLOWED_LANGUAGES if detects else ())
+
+
+def stamp_inputs(folder: Path, items: Sequence[Item]) -> None:
+    """Record a digest of each item's audio in a worker folder, or fail if the folder holds another audio's run.
+
+    The worker's own fingerprint leaves the audio path out, so replacing a file under the same id would otherwise
+    resume or reuse the old audio's rows.
+    """
+    digests = {item.id: audio_digest(item.wav) for item in items}
+    path = folder / INPUTS_FILE
+    if not path.is_file():
+        folder.mkdir(parents=True, exist_ok=True)
+        atomic.write_text(path, json.dumps(digests, indent=2) + "\n")
+        return
+    check_stamp(folder, items, digests)
+
+
+def check_stamp(folder: Path, items: Sequence[Item], digests: dict[str, str] | None = None) -> None:
+    path = folder / INPUTS_FILE
+    stored: dict[str, str] = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    for item in items:
+        digest = digests[item.id] if digests else audio_digest(item.wav)
+        if stored.get(item.id) != digest:
+            raise ConfigError(
+                f"the audio of {item.id} is not what worker folder {folder.name} decoded (or the folder has no input "
+                "stamp); move that folder aside to decode it again"
+            )
+
+
+def finished_folders(layout: Layout, hypothesis: str, items: Sequence[Item]) -> dict[str, Path]:
+    """Map each selected item to the one finished worker folder that decoded it (a worker writes its metrics last).
+
+    A folder is refused, loudly, when it was made by another engine definition or another job for one of the selected
+    items, when the audio has changed since, or when a second finished folder holds the same item.
+    """
+    definition = registry.get(hypothesis)
+    wanted = {item.id: item for item in items}
+    found: dict[str, Path] = {}
     for metrics in sorted(layout.run_dir(hypothesis).glob(f"*/{METRICS_FILE}")):
-        request = json.loads((metrics.parent / REQUEST_FILE).read_text(encoding="utf-8"))
-        done.update(job["id"] for job in request["files"])
-    return done
+        folder = metrics.parent
+        request = WorkerRequest.model_validate_json((folder / REQUEST_FILE).read_text(encoding="utf-8"))
+        stored = stored_fingerprint(folder)
+        if request.engine != definition or stored is None or without_wav(stored) != without_wav(request.fingerprint()):
+            raise ConfigError(f"worker folder {folder.name} was not made by the current {hypothesis} definition")
+        mine = [job for job in request.files if job.id in wanted]
+        for job in mine:
+            expected = recording_job(wanted[job.id], definition)
+            if job.model_copy(update={"wav": ""}) != expected.model_copy(update={"wav": ""}):
+                raise ConfigError(f"{job.id} was decoded with a different job than {hypothesis} gets now")
+        check_stamp(folder, [wanted[job.id] for job in mine])
+        for job in mine:
+            if job.id in found:
+                raise ConfigError(
+                    f"{job.id} is finished in two {hypothesis} worker folders ({found[job.id].name} and "
+                    f"{folder.name}); move one aside"
+                )
+            found[job.id] = folder
+    return found
+
+
+def finished_rows(layout: Layout, hypothesis: str, items: Sequence[Item]) -> dict[str, list[ChunkHypothesis]]:
+    """Rows of each finished item, read from the one folder ``finished_folders`` names for it."""
+    folders = finished_folders(layout, hypothesis, items)
+    cache: dict[Path, list[ChunkHypothesis]] = {}
+    rows: dict[str, list[ChunkHypothesis]] = {}
+    for item_id, folder in folders.items():
+        if folder not in cache:
+            cache[folder] = read_rows(folder / HYPOTHESES_FILE)
+        rows[item_id] = sorted((r for r in cache[folder] if r.file == item_id), key=lambda r: r.chunk)
+    return rows
 
 
 def _utterances(path: Path) -> tuple[RefUtterance, ...]:

@@ -1,9 +1,10 @@
 """Language-policy and meeting ASR eval (E2/E3): ``uv run python -m evals.run_recordings_asr``.
 
-One hypothesis at a time: ``run --hyp H`` decodes AMI, AliMeeting, the ASCEND sessions and clips and the owner's
-recordings with it, resuming per chunk and per finished worker folder. Then ``score --hyp H`` (error rate and
+One hypothesis at a time: ``run --hyp H`` decodes AMI, AliMeeting, the ASCEND sessions and clips with it (the owner's
+recordings only with ``--corpus owner``), resuming per chunk and per finished worker folder. Each worker folder keeps a
+digest of its audio, so replaced audio under the same id is refused, not scored with the old rows. Then ``score --hyp H`` (error rate and
 translation incidents per corpus), ``compare --a H --b H`` (paired bootstrap per corpus and over the two meeting
-corpora) and ``words --hyp H`` (the ``words.json`` that ``evals.run_diarization`` scores WDER with). Everything prints
+corpora; the recording-clustered ``decision`` interval is the one to decide on) and ``words --hyp H`` (the ``words.json`` that ``evals.run_diarization`` scores WDER with). Everything prints
 aggregates only; the owner's disputes come from ``python -m evals.disputes``.
 
 No hypothesis gets a language hint. The two language-ID hypotheses choose within ``run_asr.ALLOWED_LANGUAGES``.
@@ -26,15 +27,20 @@ from evals.recordings_corpus import (
     ASR_CORPORA,
     FOLDER_CORPORA,
     METRICS,
+    PUBLIC_CORPORA,
     Item,
     asr_layout,
     batch_key,
-    finished_ids,
+    finished_folders,
+    finished_rows,
     load_items,
+    recording_job,
+    stamp_inputs,
 )
 from evals.recordings_data import OWNER
 from evals.recordings_scoring import (
     MEETINGS,
+    Scored,
     WindowScore,
     language_seconds,
     paired,
@@ -42,13 +48,11 @@ from evals.recordings_scoring import (
     summarize_corpus,
     write_words_for,
 )
-from evals.run_asr import ALLOWED_LANGUAGES
-from evals.store import Layout, rows_by_file
+from evals.store import Layout
 from ytverbatim import config
 from ytverbatim.asr import registry
-from ytverbatim.asr.models import FileJob, RunMetrics, WorkerRequest
-from ytverbatim.asr.protocol import EngineDef
-from ytverbatim.asr.runner import WorkerResult, finished, memory_cap_bytes, run_worker
+from ytverbatim.asr.models import ChunkHypothesis, RunMetrics, WorkerRequest
+from ytverbatim.asr.runner import WorkerResult, memory_cap_bytes, run_worker
 from ytverbatim.errors import ConfigError, YtverbatimError
 
 E2_HYPOTHESES = ("w-prod", "w-vad", "w-vad-lid", "w-runs-lid")
@@ -66,12 +70,6 @@ class RunSummary:
     metrics: tuple[RunMetrics, ...]
 
 
-def recording_job(item: Item, definition: EngineDef) -> FileJob:
-    """Build a job with no language hint; a language-ID hypothesis gets the allowed set instead."""
-    detects = definition.language_policy() == "detect"
-    return FileJob(id=item.id, wav=str(item.wav), languages=ALLOWED_LANGUAGES if detects else ())
-
-
 def batches(items: Sequence[Item], size: int) -> list[list[Item]]:
     return [list(items[i : i + size]) for i in range(0, len(items), size)]
 
@@ -85,37 +83,36 @@ def run_corpus(
     worker: Worker = run_worker,
     memory_cap: int | None = None,
 ) -> RunSummary:
-    """Decode ``items`` with one hypothesis, one worker per batch; a batch finished before is not decoded again."""
+    """Decode ``items`` with one hypothesis, one worker per batch; what a finished worker holds is not decoded again.
+
+    Only the unfinished items are batched, so a different ``batch_size`` or a subset never decodes an item twice.
+    """
     definition = registry.get(hypothesis)
-    decoded = resumed = 0
+    done = finished_folders(layout, hypothesis, items)
+    pending = [i for i in items if i.id not in done]
     metrics: list[RunMetrics] = []
-    for batch in batches(items, batch_size):
+    for batch in batches(pending, batch_size):
+        stamp_inputs(layout.run_dir(hypothesis) / batch_key([i.id for i in batch]), batch)
         request = WorkerRequest(
             engine=definition,
             out_dir=str(layout.run_dir(hypothesis) / batch_key([i.id for i in batch])),
             files=tuple(recording_job(i, definition) for i in batch),
             memory_cap_bytes=memory_cap,
         )
-        if finished(request) is not None:
-            resumed += len(batch)
-            continue
         metrics.append(worker(request).metrics)
-        decoded += len(batch)
-    return RunSummary(decoded, resumed, tuple(metrics))
+    return RunSummary(len(pending), len(done), tuple(metrics))
 
 
-def scored_windows(
-    corpus: str, hypothesis: str, view: View, items: Sequence[Item], root: Path | None = None
-) -> list[WindowScore]:
+def scored(corpus: str, hypothesis: str, view: View, items: Sequence[Item], root: Path | None = None) -> Scored:
     if corpus not in METRICS:
         raise ConfigError(f"{corpus} has no reference to score against; it is judged by disputes only")
-    layout = asr_layout(corpus, root)
-    missing = [i.id for i in items if i.id not in finished_ids(layout, hypothesis)]
+    rows = finished_rows(asr_layout(corpus, root), hypothesis, items)
+    missing = [i.id for i in items if i.id not in rows]
     if missing:
         raise ConfigError(
             f"{hypothesis} is not finished for {len(missing)} of {len(items)} {corpus} recordings; run it first"
         )
-    return score_items(items, rows_by_file(layout, hypothesis), METRICS[corpus], view)
+    return score_items(items, rows, METRICS[corpus], view)
 
 
 def _only(corpora: Sequence[str], recordings: str | None) -> list[str]:
@@ -125,8 +122,19 @@ def _only(corpora: Sequence[str], recordings: str | None) -> list[str]:
     return ids
 
 
+def _load_all(corpora: Sequence[str], only: Sequence[str]) -> dict[str, list[Item]]:
+    """Load every selected corpus first, so a missing one stops the command before any decoding or scoring."""
+    return {corpus: load_items(corpus, only) for corpus in corpora}
+
+
 _corpus_option = click.option(
-    "--corpus", "corpora", multiple=True, type=click.Choice(ASR_CORPORA), default=ASR_CORPORA, show_default=True
+    "--corpus",
+    "corpora",
+    multiple=True,
+    type=click.Choice(ASR_CORPORA),
+    default=PUBLIC_CORPORA,
+    show_default=True,
+    help="The owner corpus runs only when named.",
 )
 _recordings_option = click.option("--recordings", help="Comma-separated recording ids (needs one --corpus).")
 _hyp_option = click.option("--hyp", "hypothesis", required=True, type=click.Choice(E2_HYPOTHESES))
@@ -154,8 +162,10 @@ def run(hypothesis: str, corpora: tuple[str, ...], recordings: str | None, batch
     only = _only(corpora, recordings)
     registry.check_dependencies(registry.get(hypothesis))
     cap = memory_cap_bytes(config.load_options().asr.memory_cap_gib)
-    for corpus in corpora:
-        items = load_items(corpus, only)
+    loaded = _load_all(corpora, only)
+    for corpus, items in loaded.items():
+        finished_folders(asr_layout(corpus), hypothesis, items)
+    for corpus, items in loaded.items():
         size = batch_size if corpus == ASCEND_UTTERANCES else 1
         summary = run_corpus(asr_layout(corpus), hypothesis, items, batch_size=size, worker=run_worker, memory_cap=cap)
         decode = sum(m.decode_s for m in summary.metrics)
@@ -173,47 +183,61 @@ def run(hypothesis: str, corpora: tuple[str, ...], recordings: str | None, batch
 @_view_option
 def score(hypothesis: str, corpora: tuple[str, ...], recordings: str | None, view: View) -> None:
     """Error rate and translation incidents per corpus; for the owner corpus, the languages the run chose."""
-    only = _only(corpora, recordings)
     report: dict[str, object] = {}
-    for corpus in corpora:
-        items = load_items(corpus, only)
+    for corpus, items in _load_all(corpora, _only(corpora, recordings)).items():
         if corpus == OWNER:
-            layout = asr_layout(corpus)
-            rows = rows_by_file(layout, hypothesis)
+            rows = finished_rows(asr_layout(corpus), hypothesis, items)
             report[corpus] = {
                 "recordings": len(items),
                 "audio_hours": sum(i.duration_s for i in items) / 3600,
-                "decoded_recordings": len(finished_ids(layout, hypothesis) & {i.id for i in items}),
+                "decoded_recordings": len(rows),
                 "language_seconds": language_seconds([r for rs in rows.values() for r in rs]),
             }
             continue
-        windows = scored_windows(corpus, hypothesis, view, items)
-        report[corpus] = summarize_corpus(corpus, METRICS[corpus], view, items, windows).model_dump()
+        scores = scored(corpus, hypothesis, view, items)
+        report[corpus] = summarize_corpus(corpus, METRICS[corpus], view, items, scores).model_dump()
     click.echo(json.dumps({"hypothesis": hypothesis, "corpora": report}, indent=2))
 
 
 @main.command(name="compare")
 @click.option("--a", "first", required=True, type=click.Choice(E2_HYPOTHESES))
 @click.option("--b", "second", required=True, type=click.Choice(E2_HYPOTHESES))
-@click.option("--corpus", "corpora", multiple=True, type=click.Choice(SCORED_CORPORA), default=SCORED_CORPORA)
+@click.option("--corpus", "corpora", multiple=True, type=click.Choice(SCORED_CORPORA), default=PUBLIC_CORPORA)
 @_view_option
 @click.option("--seed", default=0, show_default=True)
 def compare_command(first: str, second: str, corpora: tuple[str, ...], view: View, seed: int) -> None:
-    """Paired bootstrap of the pooled error-rate difference A minus B over windows, per corpus.
+    """Paired bootstrap of the pooled error-rate difference A minus B, per corpus.
 
-    ``meetings`` pools the AMI and AliMeeting windows, so a recording's weight is its reference length whichever of
-    WER or CER the corpus uses.
+    ``decision`` is the interval to decide on: it resamples recordings, because the windows of one recording are
+    correlated. ``by_window`` resamples windows and is narrower; it is there for comparison.
+
+    ``meetings`` pools the AMI and AliMeeting windows by reference unit, so AliMeeting's characters outnumber AMI's
+    words and dominate the figure; ``macro_difference`` averages the two corpora's differences with equal weight.
     """
     left: dict[str, list[WindowScore]] = {}
     right: dict[str, list[WindowScore]] = {}
-    for corpus in corpora:
-        items = load_items(corpus)
-        left[corpus] = scored_windows(corpus, first, view, items)
-        right[corpus] = scored_windows(corpus, second, view, items)
+    for corpus, items in _load_all(corpora, ()).items():
+        left[corpus] = scored(corpus, first, view, items).windows
+        right[corpus] = scored(corpus, second, view, items).windows
     results = {corpus: paired(left[corpus], right[corpus], seed).model_dump() for corpus in corpora}
     if set(MEETING_CORPORA) <= set(corpora):
-        results[MEETINGS] = paired(_pool(left, MEETING_CORPORA), _pool(right, MEETING_CORPORA), seed).model_dump()
-    click.echo(json.dumps({"a": first, "b": second, "difference_is_a_minus_b": True, "results": results}, indent=2))
+        results[MEETINGS] = {
+            **paired(_pool(left, MEETING_CORPORA), _pool(right, MEETING_CORPORA), seed).model_dump(),
+            "macro_difference": sum(results[c]["difference"] for c in MEETING_CORPORA) / len(MEETING_CORPORA),
+            "note": "pooled over reference units: AliMeeting characters outnumber AMI words and dominate",
+        }
+    click.echo(
+        json.dumps(
+            {
+                "a": first,
+                "b": second,
+                "difference_is_a_minus_b": True,
+                "decision_interval": "decision",
+                "results": results,
+            },
+            indent=2,
+        )
+    )
 
 
 def _pool(windows: Mapping[str, Sequence[WindowScore]], corpora: Sequence[str]) -> list[WindowScore]:
@@ -223,18 +247,26 @@ def _pool(windows: Mapping[str, Sequence[WindowScore]], corpora: Sequence[str]) 
 
 @main.command()
 @_hyp_option
-@click.option("--corpus", "corpora", multiple=True, type=click.Choice(FOLDER_CORPORA), default=FOLDER_CORPORA)
+@click.option(
+    "--corpus",
+    "corpora",
+    multiple=True,
+    type=click.Choice(FOLDER_CORPORA),
+    default=tuple(c for c in FOLDER_CORPORA if c != OWNER),
+    help="The owner corpus runs only when named.",
+)
 @_recordings_option
 def words(hypothesis: str, corpora: tuple[str, ...], recordings: str | None) -> None:
     """Write words.json next to each recording's audio from this hypothesis's rows (for WDER)."""
-    only = _only(corpora, recordings)
-    for corpus in corpora:
-        items = load_items(corpus, only)
-        layout = asr_layout(corpus)
-        unfinished = [i.id for i in items if i.id not in finished_ids(layout, hypothesis)]
+    ready: dict[str, tuple[list[Item], dict[str, list[ChunkHypothesis]]]] = {}
+    for corpus, items in _load_all(corpora, _only(corpora, recordings)).items():
+        rows = finished_rows(asr_layout(corpus), hypothesis, items)
+        unfinished = [i.id for i in items if i.id not in rows]
         if unfinished:
             raise ConfigError(f"{hypothesis} is not finished for {len(unfinished)} {corpus} recordings; run it first")
-        click.echo(f"{corpus}: wrote words.json for {write_words_for(items, rows_by_file(layout, hypothesis))}")
+        ready[corpus] = (items, rows)
+    for corpus, (items, rows) in ready.items():
+        click.echo(f"{corpus}: wrote words.json for {write_words_for(items, rows)}")
 
 
 def run_cli() -> None:

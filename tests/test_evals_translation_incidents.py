@@ -38,7 +38,7 @@ def test_the_seventy_percent_boundary_counts_on_both_sides():
     assert not translation_incident(ScriptMix(6, 4), ScriptMix(0, 10))
 
 
-def test_a_mixed_reference_is_no_incident_whatever_the_hypothesis():
+def test_a_reference_below_seventy_percent_in_either_script_is_never_an_incident():
     assert not translation_incident(script_mix("我们 meeting 很 long"), script_mix("all english words here"))
 
 
