@@ -30,7 +30,7 @@ from evals.screen import Span
 from evals.session import SessionKey, Stratum
 from ytverbatim.contract.models import Flag
 from ytverbatim.errors import ConfigError
-from ytverbatim.text.numbers import quantity_tokens
+from ytverbatim.text.numbers import QToken, quantity_tokens
 
 OVER_CORRECTION_MAX = 0.15
 # With few labels the percentile bootstrap collapses (no "before" answer means it almost never reaches 0), so an
@@ -149,13 +149,16 @@ def breaks_numbers(before: str, after: str, flags: Sequence[Flag], language: Lan
 
     Each flag covers one changed ticker. A ticker respelled in place needs a flag with its before and after. One that
     vanishes into a name (open AI→OpenAI) or appears out of one has no counterpart, so a flag naming it on its own side
-    covers it (``AI → OpenAI``).
+    covers it (``AI → OpenAI``), provided the flag's other side is really there: in the corrected text between the
+    unchanged tickers around the block for a vanish, in the original text there for an appearance.
     """
-    tokens = [quantity_tokens(canonical(text, language)) for text in (before, after)]
-    quantities = [[(t.value_itn, t.kind) for t in found if t.kind != "ticker"] for found in tokens]
+    texts = [canonical(text, language) for text in (before, after)]
+    found = [quantity_tokens(text) for text in texts]
+    quantities = [[(t.value_itn, t.kind) for t in tokens if t.kind != "ticker"] for tokens in found]
     if quantities[0] != quantities[1]:
         return True
-    old, new = ([t.surface for t in found if t.kind == "ticker"] for found in tokens)
+    old_tokens, new_tokens = ([t for t in tokens if t.kind == "ticker"] for tokens in found)
+    old, new = ([t.surface for t in tokens] for tokens in (old_tokens, new_tokens))
     unused = _respellings(flags, language)
     for tag, i1, i2, j1, j2 in SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
         if tag == "equal":
@@ -172,19 +175,37 @@ def breaks_numbers(before: str, after: str, flags: Sequence[Flag], language: Lan
             unused[b, a] -= paired
             gone[b] -= paired
             came[a] -= paired
-        if not all(_use(unused, before=b) for b in gone.elements()):
+        corrected = _between(new_tokens, texts[1], j1, j2)
+        original = _between(old_tokens, texts[0], i1, i2)
+        if not all(_use(unused, before=b, within=corrected) for b in gone.elements()):
             return True
-        if not all(_use(unused, after=a) for a in came.elements()):
+        if not all(_use(unused, after=a, within=original) for a in came.elements()):
             return True
     return False
 
 
-def _use(unused: Counter[tuple[str, str]], *, before: str | None = None, after: str | None = None) -> bool:
-    """Spend one unused flag with this ``before`` and ``after`` (None matches any); False when there is none."""
-    pair = next(
-        ((b, a) for (b, a), count in unused.items() if count > 0 and before in (None, b) and after in (None, a)),
-        None,
-    )
+def _between(tokens: Sequence[QToken], text: str, lo: int, hi: int) -> str:
+    """Return the text from the ticker before ``tokens[lo:hi]`` to the one after it, or to the text's end."""
+    return text[tokens[lo - 1].char_end if lo else 0 : tokens[hi].char_start if hi < len(tokens) else len(text)]
+
+
+def _use(
+    unused: Counter[tuple[str, str]], *, before: str | None = None, after: str | None = None, within: str | None = None
+) -> bool:
+    """Spend one unused flag with this ``before`` or ``after`` (None matches any) whose other side is in ``within``.
+
+    With ``before`` given the flag's ``after`` must be in ``within``, with ``after`` given its ``before`` must be.
+    A pair given whole (both set) is an exact match and ``within`` is not used. False when no flag qualifies.
+    """
+
+    def qualifies(b: str, a: str) -> bool:
+        if before is not None and after is not None:
+            return (b, a) == (before, after)
+        if before is not None:
+            return b == before and (within is None or a in within)
+        return a == after and (within is None or b in within)
+
+    pair = next(((b, a) for (b, a), count in unused.items() if count > 0 and qualifies(b, a)), None)
     if pair is None:
         return False
     unused[pair] -= 1
