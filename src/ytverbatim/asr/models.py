@@ -20,7 +20,10 @@ class _Model(BaseModel):
 
 
 class ChunkHypothesis(_Model):
-    """One line of `hypotheses.jsonl`; times are absolute seconds in the source file."""
+    """One line of `hypotheses.jsonl`; times are absolute seconds in the source file.
+
+    Under a runs hypothesis a line is one same-language run, and `chunk` is the run's index.
+    """
 
     hypothesis: str
     file: str
@@ -29,6 +32,9 @@ class ChunkHypothesis(_Model):
     end: Seconds
     text: str
     language: str | None = None
+    # The detector's unrestricted probability for the language this row was decoded with; for a run, the lowest of
+    # its chunks'. None when no detection chose it.
+    language_prob: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     words: tuple[Word, ...] = ()
     generated_tokens: int | None = None
     max_tokens: int | None = None
@@ -62,7 +68,7 @@ class FileJob(_Model):
     """One WAV to transcribe. Without `chunks` the worker plans them with the VAD.
 
     `language` is the metadata language, as production would pass it; the engine's language policy decides whether
-    the engine sees it.
+    the engine sees it. `languages` is the set a `detect` engine may choose from; empty allows any.
     """
 
     id: str
@@ -70,6 +76,9 @@ class FileJob(_Model):
     language: str | None = None
     context: AsrContext | None = None
     chunks: tuple[Chunk, ...] | None = None
+    # Left out of every dump while empty, so requests made before the field existed keep their fingerprint and with
+    # it their worker folder.
+    languages: tuple[str, ...] = Field(default=(), exclude_if=lambda value: not value)
 
 
 class WorkerRequest(_Model):
@@ -87,9 +96,14 @@ class WorkerRequest(_Model):
         ids = [job.id for job in self.files]
         if len(set(ids)) != len(ids):
             raise ValueError("file ids must be unique within a request")
-        if self.engine.spec.max_chunk_s is None and any(job.chunks is not None for job in self.files):
-            raise ValueError(f"{self.engine.spec.id} decodes whole files and cannot take a chunk plan")
-        self.engine.language_policy()
+        engine = self.engine
+        if engine.spec.max_chunk_s is None and any(job.chunks is not None for job in self.files):
+            raise ValueError(f"{engine.spec.id} decodes whole files and cannot take a chunk plan")
+        detects = engine.language_policy() == "detect"
+        if engine.spec.max_chunk_s is None and (detects or engine.decodes_runs()):
+            raise ValueError(f"{engine.spec.id} detects languages per chunk, so its spec needs a max_chunk_s")
+        if not detects and any(job.languages for job in self.files):
+            raise ValueError(f"{engine.spec.id} does not detect languages, so it cannot take an allowed language set")
         return self
 
     def fingerprint(self) -> dict[str, JsonValue]:

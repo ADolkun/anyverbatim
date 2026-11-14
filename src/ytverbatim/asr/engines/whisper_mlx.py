@@ -1,8 +1,9 @@
-"""The Whisper control (`w-prod`, `w-vad`): mlx-whisper decoding exactly as the production pipeline does it.
+"""The Whisper control (`w-prod`, `w-vad`) and its language-ID variants: mlx-whisper decoding as production does.
 
-Both modes make the same call. `whole_file` hands over the entire recording and lets mlx-whisper window it;
-`chunk` hands over one planned chunk (at most 30 s). Production quirks are kept on purpose, for example the Mandarin
-punctuation prompt that is only sent when a language is declared; fixing them belongs to a later text unit.
+Every mode makes the same call. `whole_file` hands over the entire recording and lets mlx-whisper window it;
+`chunk` hands over one planned chunk (at most 30 s); `runs` hands over one same-language run of chunks, which
+mlx-whisper windows like a whole file. Production quirks are kept on purpose, for example the Mandarin punctuation
+prompt that is only sent when a language is known; fixing them belongs to a later text unit.
 """
 
 import importlib
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-Mode = Literal["whole_file", "chunk"]
+Mode = Literal["whole_file", "chunk", "runs"]
 
 # A single fixed temperature would disable Whisper's fallback re-decode and let a repetition loop run unchecked.
 TEMPERATURE_SCHEDULE = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
@@ -49,18 +50,40 @@ class _WhisperSegment(TypedDict, total=False):
     words: list[_WhisperWord]
 
 
+class _Dims(Protocol):
+    n_mels: int
+
+
+class _WhisperModel(Protocol):
+    dims: _Dims
+
+    def detect_language(self, mel: Any) -> tuple[Any, dict[str, float]]: ...
+
+
+class _MelArray(Protocol):
+    def astype(self, dtype: object) -> "_MelArray": ...
+
+
+class _AudioModule(Protocol):
+    N_SAMPLES: int
+    N_FRAMES: int
+
+    def log_mel_spectrogram(self, audio: Any, n_mels: int, padding: int) -> _MelArray: ...
+    def pad_or_trim(self, array: _MelArray, length: int, *, axis: int) -> _MelArray: ...
+
+
 class _WhisperModule(Protocol):
     def transcribe(self, audio: Any, **kwargs: Any) -> dict[str, Any]: ...
 
 
 class _ModelHolder(Protocol):
-    def get_model(self, model_path: str, dtype: object) -> object: ...
+    def get_model(self, model_path: str, dtype: object) -> _WhisperModel: ...
 
 
 def create(spec: EngineSpec, variant: Mapping[str, JsonValue]) -> "WhisperEngine":
     mode = variant.get("mode")
-    if mode not in ("whole_file", "chunk"):
-        raise ConfigError(f"{spec.id}: Whisper mode must be 'whole_file' or 'chunk', got {mode!r}")
+    if mode not in ("whole_file", "chunk", "runs"):
+        raise ConfigError(f"{spec.id}: Whisper mode must be 'whole_file', 'chunk' or 'runs', got {mode!r}")
     if (mode == "whole_file") != (spec.max_chunk_s is None):
         raise ConfigError(f"{spec.id}: mode {mode!r} contradicts max_chunk_s={spec.max_chunk_s}")
     return WhisperEngine(spec, mode)
@@ -90,6 +113,9 @@ class WhisperEngine:
         self._model_path: str | None = None
         self._whisper: _WhisperModule | None = None
         self._mx: _MlxCore | None = None
+        self._model: _WhisperModel | None = None
+        self._audio: _AudioModule | None = None
+        self._float16: object = None
 
     def load(self) -> None:
         path = snapshot_path(self.spec)
@@ -97,14 +123,28 @@ class WhisperEngine:
             whisper = importlib.import_module("mlx_whisper")
             mx = importlib.import_module("mlx.core")
             holder = cast(_ModelHolder, importlib.import_module("mlx_whisper.transcribe").ModelHolder)
+            audio = importlib.import_module("mlx_whisper.audio")
         except ImportError as exc:
             raise DependencyError("install ytverbatim[whisper]") from exc
         # transcribe() reuses the holder's model for the same path and dtype, so this moves the load out of the first
-        # decode and times it as load.
-        holder.get_model(str(path), mx.float16)
+        # decode and times it as load, and language detection shares the one copy.
+        self._model = holder.get_model(str(path), mx.float16)
         self._model_path = str(path)
         self._whisper = cast(_WhisperModule, whisper)
         self._mx = cast(_MlxCore, mx)
+        self._audio = cast(_AudioModule, audio)
+        self._float16 = mx.float16
+
+    def detect_language(self, audio: "NDArray[np.float32]") -> dict[str, float]:
+        """Language probabilities for the first 30 s of `audio`, computed exactly as mlx-whisper's own detect-once."""
+        if self._model is None or self._audio is None or self._mx is None:
+            raise RuntimeError("load() must be called before detect_language()")
+        mel_audio = self._audio
+        with _bounded_mlx_cache(self._mx):
+            mel = mel_audio.log_mel_spectrogram(audio, n_mels=self._model.dims.n_mels, padding=mel_audio.N_SAMPLES)
+            segment = mel_audio.pad_or_trim(mel, mel_audio.N_FRAMES, axis=-2).astype(self._float16)
+            _, probabilities = self._model.detect_language(segment)
+        return {code: float(p) for code, p in probabilities.items()}
 
     def transcribe(self, audio: "NDArray[np.float32]", *, language: str | None, context: AsrContext | None) -> RawChunk:
         if self._whisper is None or self._mx is None or self._model_path is None:

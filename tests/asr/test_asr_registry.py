@@ -7,7 +7,7 @@ from ytverbatim.asr import registry
 from ytverbatim.asr.protocol import EngineDef
 from ytverbatim.errors import ConfigError, DependencyError
 
-EXPECTED = {"w-prod", "w-vad", "q-base", "q-ctx", "f-aed", "m-4bit"}
+EXPECTED = {"w-prod", "w-vad", "w-vad-lid", "w-runs-lid", "q-base", "q-ctx", "f-aed", "m-4bit"}
 
 
 def test_every_hypothesis_is_registered_with_a_pinned_revision() -> None:
@@ -58,6 +58,8 @@ def test_whisper_passes_the_metadata_language_and_the_challengers_detect_their_o
     assert policies == {
         "w-prod": "pass",
         "w-vad": "pass",
+        "w-vad-lid": "detect",
+        "w-runs-lid": "detect",
         "q-base": "auto",
         "q-ctx": "auto",
         "f-aed": "auto",
@@ -66,3 +68,22 @@ def test_whisper_passes_the_metadata_language_and_the_challengers_detect_their_o
     assert registry.get("q-base").engine_language("zh+en") is None
     assert registry.get("w-prod").engine_language("zh") == "zh"
     assert registry.get("w-prod").engine_language(None) is None
+    assert registry.get("w-runs-lid").engine_language("zh") == "zh"
+
+
+def test_the_language_id_variants_share_the_whisper_control_weights_and_differ_in_how_they_decode() -> None:
+    control = registry.get("w-vad")
+    for hypothesis_id, mode in (("w-vad-lid", "chunk"), ("w-runs-lid", "runs")):
+        entry = registry.get(hypothesis_id)
+        assert (entry.spec.repo, entry.spec.revision, entry.factory) == (
+            control.spec.repo,
+            control.spec.revision,
+            control.factory,
+        )
+        assert entry.variant == {"mode": mode, "language": "detect"}
+    assert [registry.get(i).decodes_runs() for i in ("w-prod", "w-vad", "w-vad-lid", "w-runs-lid")] == [
+        False,
+        False,
+        False,
+        True,
+    ]

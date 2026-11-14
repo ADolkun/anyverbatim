@@ -9,6 +9,7 @@ import pytest
 from fake_engine import write_silence
 
 from ytverbatim.asr import registry, worker
+from ytverbatim.asr.chunks import Chunk
 from ytverbatim.asr.engines import whisper_mlx
 from ytverbatim.asr.engines.whisper_mlx import WhisperEngine
 from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, FileJob, WorkerRequest
@@ -47,6 +48,30 @@ class FakeMx:
             raise error
 
 
+class FakeMel:
+    """Records how the mel was built, so a test can check it matches mlx-whisper's own detection input."""
+
+    def __init__(self, steps: tuple[Any, ...]) -> None:
+        self.steps = steps
+
+    def astype(self, dtype: object) -> "FakeMel":
+        return FakeMel((*self.steps, ("astype", dtype)))
+
+
+class FakeModel:
+    def __init__(self, mx: FakeMx) -> None:
+        self.mx = mx
+        self.dims = ModuleType("dims")
+        self.dims.n_mels = 128  # type: ignore[attr-defined]
+        self.probabilities = {"en": 0.25, "zh": 0.7, "yue": 0.05}
+        self.mels: list[FakeMel] = []
+
+    def detect_language(self, mel: FakeMel) -> tuple[None, dict[str, float]]:
+        self.mx.events.append(("detect", None))
+        self.mels.append(mel)
+        return None, self.probabilities
+
+
 class FakeWhisper:
     def __init__(self, mx: FakeMx) -> None:
         self.mx = mx
@@ -54,6 +79,7 @@ class FakeWhisper:
         self.result: dict[str, Any] = RESULT
         self.error: Exception | None = None
         self.loads: list[tuple[str, object]] = []
+        self.model = FakeModel(mx)
 
     def transcribe(self, audio: Any, **kwargs: Any) -> dict[str, Any]:
         self.mx.events.append(("transcribe", None))
@@ -86,20 +112,25 @@ def snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture
 def fake(monkeypatch: pytest.MonkeyPatch, mx: FakeMx, snapshot: Path) -> FakeWhisper:
     whisper = FakeWhisper(mx)
-    package, transcribe_module, tokenizer = (
+    package, transcribe_module, tokenizer, audio = (
         ModuleType("mlx_whisper"),
         ModuleType("mlx_whisper.transcribe"),
         ModuleType("mlx_whisper.tokenizer"),
+        ModuleType("mlx_whisper.audio"),
     )
     package.transcribe = whisper.transcribe  # type: ignore[attr-defined]
 
     class ModelHolder:
         @classmethod
-        def get_model(cls, model_path: str, dtype: object) -> object:
+        def get_model(cls, model_path: str, dtype: object) -> FakeModel:
             whisper.loads.append((model_path, dtype))
-            return object()
+            return whisper.model
 
     transcribe_module.ModelHolder = ModelHolder  # type: ignore[attr-defined]
+    audio.N_SAMPLES = 480_000  # type: ignore[attr-defined]
+    audio.N_FRAMES = 3000  # type: ignore[attr-defined]
+    audio.log_mel_spectrogram = lambda samples, n_mels, padding: FakeMel((samples, n_mels, padding))  # type: ignore[attr-defined]
+    audio.pad_or_trim = lambda mel, length, *, axis: FakeMel((*mel.steps, ("trim", length, axis)))  # type: ignore[attr-defined]
     tokenizer.LANGUAGES = {"en": "english", "zh": "chinese", "yue": "cantonese"}  # type: ignore[attr-defined]
     tokenizer.TO_LANGUAGE_CODE = {"chinese": "zh", "mandarin": "zh"}  # type: ignore[attr-defined]
     core = ModuleType("mlx.core")
@@ -115,6 +146,7 @@ def fake(monkeypatch: pytest.MonkeyPatch, mx: FakeMx, snapshot: Path) -> FakeWhi
         ("mlx_whisper", package),
         ("mlx_whisper.transcribe", transcribe_module),
         ("mlx_whisper.tokenizer", tokenizer),
+        ("mlx_whisper.audio", audio),
     ):
         monkeypatch.setitem(sys.modules, name, module)
     return whisper
@@ -306,3 +338,50 @@ def test_the_worker_decodes_a_whole_file_in_one_call_with_absolute_times(tmp_pat
     row = ChunkHypothesis.model_validate_json(line)
     assert (row.start, row.end, row.text, row.language, row.confidence) == (0.0, 12.0, "示例，你好", "zh", 0.5)
     assert [w.text for w in row.words] == ["示例，", "你好", "x"]
+
+
+def test_detection_uses_the_loaded_model_on_mlx_whispers_own_detection_input(fake: FakeWhisper, mx: FakeMx) -> None:
+    engine = loaded("w-runs-lid", fake)
+    assert engine.detect_language(AUDIO) == {"en": 0.25, "zh": 0.7, "yue": 0.05}
+    (mel,) = fake.model.mels
+    assert mel.steps == (AUDIO, 128, 480_000, ("trim", 3000, -2), ("astype", mx.float16))
+    assert len(fake.loads) == 1
+    assert ("detect", None) in mx.events
+    assert mx.events[-1] == ("limit", 123)
+
+
+def test_detecting_before_loading_is_a_programming_error(fake: FakeWhisper) -> None:
+    engine = registry.build_engine(registry.get("w-runs-lid"))
+    assert isinstance(engine, WhisperEngine)
+    with pytest.raises(RuntimeError, match="load"):
+        engine.detect_language(AUDIO)
+
+
+def test_the_worker_decodes_runs_with_their_language_and_the_zh_prompt_only_on_zh(
+    tmp_path: Path, fake: FakeWhisper, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    detections = [{"zh": 0.8, "en": 0.2}, {"zh": 0.1, "en": 0.9}, {"zh": 0.7, "en": 0.3}]
+
+    def detect(mel: Any) -> tuple[None, dict[str, float]]:
+        return None, detections.pop(0)
+
+    monkeypatch.setattr(fake.model, "detect_language", detect)
+    wav = write_silence(tmp_path / "-dash.wav", 30.0)
+    chunks = (Chunk(0.5, 9.0), Chunk(10.0, 19.0), Chunk(20.0, 29.0))
+    request = WorkerRequest(
+        engine=registry.get("w-runs-lid"),
+        out_dir=str(tmp_path / "out"),
+        files=(FileJob(id="f1", wav=str(wav), chunks=chunks, languages=("zh", "en")),),
+    )
+    worker.run_request(request)
+    assert [(len(audio), kwargs["language"], kwargs["initial_prompt"]) for audio, kwargs in fake.calls] == [
+        (136_000, "zh", whisper_mlx.ZH_INITIAL_PROMPT),
+        (144_000, "en", None),
+        (144_000, "zh", whisper_mlx.ZH_INITIAL_PROMPT),
+    ]
+    rows = [
+        ChunkHypothesis.model_validate_json(line)
+        for line in (tmp_path / "out" / HYPOTHESES_FILE).read_text(encoding="utf-8").splitlines()
+    ]
+    assert [(r.start, r.end, r.language_prob) for r in rows] == [(0.5, 9.0, 0.8), (10.0, 19.0, 0.9), (20.0, 29.0, 0.7)]
+    assert [w.start for w in rows[1].words] == [10.5, 11.0, 12.0]

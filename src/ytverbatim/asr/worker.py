@@ -12,7 +12,8 @@ import resource
 import sys
 import time
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -31,7 +32,16 @@ from ytverbatim.asr.models import (
     WorkerError,
     WorkerRequest,
 )
-from ytverbatim.asr.protocol import ChunkFlag, ChunkInput, Engine, EngineDef, Guard, GuardedChunk, RawChunk
+from ytverbatim.asr.protocol import (
+    ChunkFlag,
+    ChunkInput,
+    Engine,
+    EngineDef,
+    Guard,
+    GuardedChunk,
+    LanguageDetector,
+    RawChunk,
+)
 from ytverbatim.asr.registry import build_engine
 from ytverbatim.asr.vad import speech_regions
 from ytverbatim.contract.models import Word
@@ -46,6 +56,15 @@ CACHE_LIMIT_BYTES = 0
 # The process footprint always exceeds MLX's own active memory (Python, weights being read, Metal bookkeeping), so a
 # limit equal to the cap would never come into play before the parent kills the worker.
 MLX_LIMIT_FRACTION = 0.85
+
+
+@dataclass(frozen=True, slots=True)
+class DecodeUnit:
+    """One decode: the span of audio handed to the engine and the language hint it is decoded with."""
+
+    chunk: Chunk
+    language: str | None = None
+    language_prob: float | None = None
 
 
 class _MlxCore(Protocol):
@@ -83,22 +102,33 @@ def run_request(
     if mlx is not None:
         bound_allocator(mlx, request.memory_cap_bytes)
     session = _Session(request.engine, engine, guard, mlx)
+    runs = request.engine.decodes_runs()
     decoded = skipped = 0
     audio_s = 0.0
     with sink_path.open("a", encoding="utf-8") as sink:
         for job in request.files:
             audio = load_wav(Path(job.wav))
-            for index, chunk in enumerate(_plan(job, request.engine, audio)):
+            chunks = _plan(job, request.engine, audio)
+            if runs:
+                finished = [row for (file, _), row in done.items() if file == job.id]
+                if _tiles(finished, chunks):
+                    skipped += len(finished)
+                    continue
+                spans = plan_runs([session.label(job, audio, chunk) for chunk in chunks])
+            else:
+                spans = [DecodeUnit(chunk) for chunk in chunks]
+            for index, span in enumerate(spans):
                 existing = done.get((job.id, index))
                 if existing is not None:
-                    _require_same_chunk(existing, chunk)
+                    _require_same_chunk(existing, span.chunk)
                     skipped += 1
                     continue
-                row = session.decode(spec.id, job, audio, index, chunk)
+                unit = span if runs else session.label(job, audio, span.chunk)
+                row = session.decode(spec.id, job, audio, index, unit)
                 sink.write(row.model_dump_json() + "\n")
                 sink.flush()
                 decoded += 1
-                audio_s += chunk.duration
+                audio_s += unit.chunk.duration
     metrics = RunMetrics(
         hypothesis=spec.id,
         files=len(request.files),
@@ -129,10 +159,33 @@ class _Session:
         self.load_s = 0.0
         self.decode_s = 0.0
 
-    def decode(self, hypothesis: str, job: FileJob, audio: Audio, index: int, chunk: Chunk) -> ChunkHypothesis:
+    def label(self, job: FileJob, audio: Audio, chunk: Chunk) -> DecodeUnit:
+        """Choose the language `chunk` is decoded with: the declared one, else under `detect` the detected one."""
+        declared = self._definition.engine_language(job.language)
+        if declared is not None or self._definition.language_policy() != "detect":
+            return DecodeUnit(chunk, declared)
         engine = self._ready()
+        hypothesis = self._definition.spec.id
+        if not isinstance(engine, LanguageDetector):
+            raise EngineError(f"{hypothesis} detects languages, but its engine has no detect_language")
+        started = time.perf_counter()
+        try:
+            language, probability = pick_language(
+                engine.detect_language(audio.slice(chunk.start, chunk.end)), job.languages
+            )
+        except Exception as exc:
+            where = f"{job.id} ({chunk.start:.1f}-{chunk.end:.1f}s)"
+            raise EngineError(f"{hypothesis} language detection failed on {where}: {exc}") from exc
+        finally:
+            self.decode_s += time.perf_counter() - started
+        if self._mlx is not None:
+            self._mlx.clear_cache()
+        return DecodeUnit(chunk, language, probability)
+
+    def decode(self, hypothesis: str, job: FileJob, audio: Audio, index: int, unit: DecodeUnit) -> ChunkHypothesis:
+        engine = self._ready()
+        chunk, language = unit.chunk, unit.language
         samples = audio.slice(chunk.start, chunk.end)
-        language = self._definition.engine_language(job.language)
         started = time.perf_counter()
         try:
             raw = engine.transcribe(samples, language=language, context=job.context)
@@ -148,7 +201,7 @@ class _Session:
             self.decode_s += time.perf_counter() - started
         if self._mlx is not None:
             self._mlx.clear_cache()
-        return _row(hypothesis, job.id, index, chunk, guarded)
+        return _row(hypothesis, job.id, index, unit, guarded)
 
     def _ready(self) -> Engine:
         if self._engine is None:
@@ -161,8 +214,8 @@ class _Session:
         return self._engine
 
 
-def _row(hypothesis: str, file: str, index: int, chunk: Chunk, guarded: GuardedChunk) -> ChunkHypothesis:
-    raw = guarded.raw
+def _row(hypothesis: str, file: str, index: int, unit: DecodeUnit, guarded: GuardedChunk) -> ChunkHypothesis:
+    raw, chunk = guarded.raw, unit.chunk
     flags: list[ChunkFlag] = ["forced_cut"] if chunk.forced_cut else []
     if raw.generated_tokens is not None and raw.max_tokens is not None and raw.generated_tokens >= raw.max_tokens:
         flags.append("token_cap_hit")
@@ -175,6 +228,7 @@ def _row(hypothesis: str, file: str, index: int, chunk: Chunk, guarded: GuardedC
         end=chunk.end,
         text=raw.text,
         language=raw.language,
+        language_prob=unit.language_prob,
         words=_absolute(raw, chunk.start),
         generated_tokens=raw.generated_tokens,
         max_tokens=raw.max_tokens,
@@ -198,14 +252,71 @@ def _plan(job: FileJob, definition: EngineDef, audio: Audio) -> list[Chunk]:
     return plan_chunks(speech_regions(audio), audio.duration, max_chunk_s=max_chunk_s, frame_energy=frame_energy(audio))
 
 
-def default_guard(request: WorkerRequest) -> Guard | None:
-    """Return the guard `main` runs: none when the request opts out, flag-only for a whole-file hypothesis.
+def pick_language(probabilities: Mapping[str, float], allowed: Sequence[str]) -> tuple[str, float]:
+    """Return the most probable language within `allowed` (any when empty) and the detector's probability for it.
 
-    A whole-file hypothesis is the production control, so re-decoding part of it would stop it being one.
+    The probability is the unrestricted one, so a low value says the audio sounded like none of the allowed
+    languages. A tie goes to the earlier entry of `allowed`.
+    """
+    missing = [code for code in allowed if code not in probabilities]
+    if missing:
+        raise ValueError(f"the allowed languages {missing} are not ones the detector knows")
+    candidates = list(allowed or probabilities)
+    if not candidates:
+        raise ValueError("the detector returned no languages")
+    best = max(candidates, key=lambda code: probabilities[code])
+    return best, probabilities[best]
+
+
+def plan_runs(units: Sequence[DecodeUnit]) -> list[DecodeUnit]:
+    """Merge consecutive units with the same language into one run spanning the first's start to the last's end.
+
+    The pauses between a run's chunks are decoded with it, as a whole-file decode would. A run keeps the forced cut
+    of its last chunk, since that is where it ends, and the lowest language probability among its chunks.
+    """
+    runs: list[DecodeUnit] = []
+    for unit in units:
+        last = runs[-1] if runs else None
+        if last is None or last.language != unit.language:
+            runs.append(unit)
+            continue
+        probability = (
+            None
+            if last.language_prob is None or unit.language_prob is None
+            else min(last.language_prob, unit.language_prob)
+        )
+        span = Chunk(last.chunk.start, unit.chunk.end, forced_cut=unit.chunk.forced_cut)
+        runs[-1] = DecodeUnit(span, unit.language, probability)
+    return runs
+
+
+def _tiles(rows: Sequence[ChunkHypothesis], chunks: Sequence[Chunk]) -> bool:
+    """Whether finished run rows cover every chunk of the plan, so a resumed run need not detect languages again."""
+    ordered = sorted(rows, key=lambda row: row.chunk)
+    if [row.chunk for row in ordered] != list(range(len(ordered))):
+        return False
+    remaining = iter(chunks)
+    for row in ordered:
+        chunk = next(remaining, None)
+        if chunk is None or not math.isclose(chunk.start, row.start, abs_tol=_PLAN_TOLERANCE_S):
+            return False
+        while not math.isclose(chunk.end, row.end, abs_tol=_PLAN_TOLERANCE_S):
+            chunk = next(remaining, None)
+            if chunk is None or chunk.end > row.end + _PLAN_TOLERANCE_S:
+                return False
+    return next(remaining, None) is None
+
+
+def default_guard(request: WorkerRequest) -> Guard | None:
+    """Return the guard `main` runs: none when the request opts out, flag-only for whole-file decoding.
+
+    A whole-file hypothesis is the production control, so re-decoding part of it would stop it being one; a runs
+    hypothesis decodes each run with those same whole-file semantics.
     """
     if not request.quality_guard:
         return None
-    return QualityGuard(redecode=request.engine.spec.max_chunk_s is not None)
+    engine = request.engine
+    return QualityGuard(redecode=engine.spec.max_chunk_s is not None and not engine.decodes_runs())
 
 
 def _claim_output(out: Path, request: WorkerRequest) -> None:
