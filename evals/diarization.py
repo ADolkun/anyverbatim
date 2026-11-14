@@ -289,6 +289,21 @@ class Dispute:
         return self.end - self.start
 
 
+def align_labels(candidates: Mapping[str, Sequence[Turn]]) -> dict[str, list[Turn]]:
+    """Relabel every candidate's turns in the first candidate's speaker names, by best overlap.
+
+    A speaker with no partner keeps a label of its own (``<candidate>:<speaker>``).
+    """
+    names = list(candidates)
+    base = _annotation(candidates[names[0]])
+    mapped: dict[str, list[Turn]] = {names[0]: list(candidates[names[0]])}
+    metric = cast(Any, DiarizationErrorRate())
+    for name in names[1:]:
+        mapping = cast(Mapping[str, str], metric.optimal_mapping(base, _annotation(candidates[name])))
+        mapped[name] = [Turn(t.start, t.end, mapping.get(t.speaker, f"{name}:{t.speaker}")) for t in candidates[name]]
+    return mapped
+
+
 def disagreement_runs(candidates: Mapping[str, Sequence[Turn]], *, min_run_s: float = 2.0) -> list[Dispute]:
     """Find runs of at least ``min_run_s`` where the candidates name different speaker sets, after mapping.
 
@@ -296,15 +311,9 @@ def disagreement_runs(candidates: Mapping[str, Sequence[Turn]], *, min_run_s: fl
     where only some candidates are silent is not a dispute about who speaks, so a stretch counts only when at least
     two candidates name different non-empty sets.
     """
-    names = list(candidates)
-    if len(names) < MIN_CANDIDATES:
+    if len(candidates) < MIN_CANDIDATES:
         raise ValueError("a dispute needs at least two candidates")
-    base = _annotation(candidates[names[0]])
-    mapped: dict[str, list[Turn]] = {names[0]: list(candidates[names[0]])}
-    metric = cast(Any, DiarizationErrorRate())
-    for name in names[1:]:
-        mapping = cast(Mapping[str, str], metric.optimal_mapping(base, _annotation(candidates[name])))
-        mapped[name] = [Turn(t.start, t.end, mapping.get(t.speaker, f"{name}:{t.speaker}")) for t in candidates[name]]
+    mapped = align_labels(candidates)
     edges = sorted({edge for turns in mapped.values() for t in turns for edge in (t.start, t.end)})
     runs: list[Dispute] = []
     run: list[_Piece] = []
