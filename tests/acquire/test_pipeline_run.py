@@ -217,7 +217,7 @@ def test_process_returns_the_document(session_kit, worker: FakeWorker) -> None:
 def test_process_takes_a_single_video(session_kit, worker: FakeWorker) -> None:
     with pytest.raises(ValueError, match="one YouTube video"):
         process("https://www.youtube.com/playlist?list=PLsynthetic", out=session_kit.out)
-    with pytest.raises(ValueError, match="one YouTube video"):
+    with pytest.raises(ValueError, match="not a YouTube URL or id, and there is no such file"):
         process("not a url", out=session_kit.out)
 
 
@@ -494,7 +494,7 @@ def test_turning_the_option_off_drops_a_saved_note_from_the_document(session_kit
 
 def settings_for(kit, options: config.Options) -> pipeline._Settings:
     return pipeline._settings(
-        options, None, kit.out, force=False, captions=True, emit=lambda _e: None, clock=lambda: NOW
+        options, None, kit.out, kind="youtube", force=False, captions=True, emit=lambda _e: None, clock=lambda: NOW
     )
 
 

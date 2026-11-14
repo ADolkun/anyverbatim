@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from ytverbatim.ids import is_video_id
+from ytverbatim.ids import is_recording_id, is_video_id
 
 _APP = "ytverbatim"
 _PRIVATE_MODE = 0o700
@@ -116,3 +116,12 @@ def video_dir(video_id: str, out: Path | None = None) -> Path:
     if not is_video_id(video_id):
         raise ValueError(f"not a YouTube video id: {video_id!r}")
     return (out if out is not None else default_output_root()) / video_id
+
+
+def source_dir(source_id: str, out: Path | None = None) -> Path:
+    """Return a video's or a recording's folder; without `out`, under the default root of its kind."""
+    if is_video_id(source_id):
+        return video_dir(source_id, out)
+    if not is_recording_id(source_id):
+        raise ValueError(f"not a YouTube video id or a recording id: {source_id!r}")
+    return (out if out is not None else recordings_root()) / source_id

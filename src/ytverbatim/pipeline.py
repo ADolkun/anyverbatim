@@ -1,4 +1,4 @@
-"""`ytverbatim run`: fetch, transcribe, refine the text and write `context.json` plus `context.md` per video.
+"""`ytverbatim run`: transcribe, refine the text and write `context.json` plus `context.md` per video or recording.
 
 Stages, per video under its directory lock: metadata, captions and audio (the fetch session's) → asr (the worker
 subprocess, which also plans the VAD chunks) or manual captions → normalize → punctuate → correct → numeric →
@@ -8,27 +8,33 @@ recomputes only the stages those options reach, and an interrupted run resumes w
 deleted once the ASR output is stored; the compressed audio stays.
 
 `_YouTubeRun` is the YouTube adapter: it fetches, then hands a `_Prepared` source to `_Transcription`, which runs
-everything from asr to the written files and knows nothing of where the source came from.
+everything from asr to the written files and knows nothing of where the source came from. `_FileRun` is the adapter
+for a local recording, whose id is the hash of its audio (`acquire.local`). Both run inside `_run_source`, which
+holds the source's lock, skips a current document and records a failure as the source's outcome. YouTube batches are
+the fetch session's, with cooldowns; local files get the plain loop in `process_files`.
 """
 
 import hashlib
 import json
 import logging
+import os
 import shutil
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
-from ytverbatim import atomic, config, ids, paths, stages, store
+from ytverbatim import atomic, config, ids, index, paths, stages, store
+from ytverbatim.acquire import local
 from ytverbatim.acquire.audio import WAV_NAME
 from ytverbatim.acquire.captions import CaptionKind, CaptionTrack
 from ytverbatim.acquire.metadata import VideoMetadata, info_path, load_metadata
 from ytverbatim.acquire.session import (
+    REPORT_FILE,
     BatchReport,
     FetchOptions,
     FetchSession,
@@ -46,7 +52,15 @@ from ytverbatim.asr.models import METRICS_FILE, ChunkHypothesis, FileJob, Worker
 from ytverbatim.asr.protocol import EngineDef
 from ytverbatim.auth.cooldown import utcnow
 from ytverbatim.auth.source import CookieSource, resolve_source
-from ytverbatim.contract import Access, ContextDocument, LLMUsage, YouTubeSource, dump_document, load_document
+from ytverbatim.contract import (
+    Access,
+    ContextDocument,
+    LLMUsage,
+    RecordingSource,
+    YouTubeSource,
+    dump_document,
+    load_document,
+)
 from ytverbatim.errors import (
     BatchStopError,
     BusyError,
@@ -74,6 +88,7 @@ from ytverbatim.stages import (
 )
 from ytverbatim.store import StageStore, input_hash
 from ytverbatim.store import lock as video_lock
+from ytverbatim.targets import classify as classify_target
 from ytverbatim.text import clean, guards, numbers, numerals, numeric
 from ytverbatim.text import correct as correct_module
 from ytverbatim.text import punctuate as punctuate_module
@@ -133,9 +148,14 @@ __all__ = [
     "VideoResult",
     "build_document",
     "process",
+    "process_files",
     "process_many",
     "video_lock",
 ]
+
+SourceKind = Literal["youtube", "recording"]
+# The engine a source gets when `[asr] engine` is unset; recordings move to the language policy once it is chosen.
+_DEFAULT_ENGINE: dict[SourceKind, str] = {"youtube": "w-prod", "recording": "w-prod"}
 
 
 @dataclass(frozen=True)
@@ -163,46 +183,63 @@ class VideoResult:
     # Stages that could not run as asked (no LLM for punctuation, no manual captions); also in `quality.warnings`.
     notices: tuple[str, ...] = ()
     timings: tuple[StageTiming, ...] = ()
+    # A local recording's file name, which says more to a reader than its id; None for a video.
+    name: str | None = None
 
 
 def process(  # noqa: PLR0913
-    url: str,
+    target: str | os.PathLike[str],
     options: config.Options | None = None,
     *,
     llm: LLMClient | None = None,
     out: Path | None = None,
     auth: str | None = None,
-    captions: bool = True,
+    captions: bool | None = None,
     force: bool = False,
-    cookies_first: bool = False,
+    cookies_first: bool | None = None,
     interactive: bool = False,
     progress: Callable[[ProgressEvent], None] | None = None,
     runner_factory: Callable[[Sequence[str]], YtDlpRunner] = default_runner,
 ) -> ContextDocument:
-    """Produce the context document for one video, reusing it when nothing it depends on has changed.
+    """Produce the context document for one video or local file, reusing it when nothing it depends on has changed.
 
+    `target` is a YouTube video URL or id, or a local audio or video file (a path object is always a file).
     `llm` is the client for punctuation, correction and numeric verdicts; without it the configured `[llm]`
     provider applies, and with none configured those stages degrade as `quality.warnings` records. Raises the
-    video's own error (`AuthError`, `EngineError`, `LLMError`, `ContractError`, ...), or `BatchStopError` when
-    YouTube asked us to back off before the video was done. `auth` is an auth spec as for `--auth`; without it the
-    configured source applies. `cookies_first` sends the video's first request with cookies, for a video known to need
-    a login such as one from a members playlist; without it the first request is anonymous and cookies follow only
-    when YouTube asks for them. `interactive` lets the configured chatgpt LLM open a browser to sign in again when its
-    sign-in is missing or lapses; off by default, because a library must not open a browser on its own.
+    source's own error (`AuthError`, `EngineError`, `LLMError`, `ContractError`, `MediaValidationError`, ...), or
+    `BatchStopError` when YouTube asked us to back off before the video was done. `interactive` lets the configured
+    chatgpt LLM open a browser to sign in again when its sign-in is missing or lapses; off by default, because a
+    library must not open a browser on its own.
+
+    YouTube only, and a `ValueError` when given for a file: `auth` is an auth spec as for `--auth`; without it the
+    configured source applies. `captions` (default on) downloads the caption tracks. `cookies_first` sends the video's
+    first request with cookies, for a video known to need a login such as one from a members playlist; without it the
+    first request is anonymous and cookies follow only when YouTube asks for them.
     """
-    ref = ids.classify(url)
-    if ref is None or ref.kind is not ids.RefKind.VIDEO:
-        raise ValueError(f"process takes one YouTube video, not {url!r}; use process_many for playlists and channels")
+    found = classify_target(target)
+    if isinstance(found, Path):
+        youtube_only = {"auth": auth, "captions": captions, "cookies_first": cookies_first}
+        given = [name for name, value in youtube_only.items() if value is not None]
+        if given:
+            raise ValueError(f"{', '.join(given)} only apply to YouTube videos, not to the local file {found.name}")
+        if found.is_dir():
+            raise ValueError(f"process takes one file, not the folder {found.name}; call it once per file")
+        return _process_file(found, options, llm=llm, out=out, force=force, interactive=interactive, progress=progress)
+    if not isinstance(found, ids.YouTubeRef) or found.kind is not ids.RefKind.VIDEO:
+        raise ValueError(
+            f"process takes one YouTube video or local file, not {target!r}; use process_many for playlists and "
+            "channels"
+        )
     results: list[VideoResult] = []
     report = process_many(
-        [url],
+        [found.url],
         options,
         llm=llm,
         out=out,
         source=resolve_source(auth),
-        captions=captions,
+        captions=True if captions is None else captions,
         force=force,
-        cookies_first=cookies_first,
+        cookies_first=bool(cookies_first),
         interactive=interactive,
         progress=progress,
         on_video=results.append,
@@ -212,10 +249,41 @@ def process(  # noqa: PLR0913
     if result.document is not None:
         if report.stopped is not None:
             # The cooldown file is already written, so later runs wait; this video itself finished.
-            log.warning("%s is done, but YouTube asked to back off: %s", ref.id, report.stopped)
+            log.warning("%s is done, but YouTube asked to back off: %s", found.id, report.stopped)
         return result.document
     if report.stopped is not None:
         raise report.stopped
+    _raise(result)
+
+
+def _process_file(
+    path: Path,
+    options: config.Options | None,
+    *,
+    llm: LLMClient | None,
+    out: Path | None,
+    force: bool,
+    interactive: bool,
+    progress: Callable[[ProgressEvent], None] | None,
+) -> ContextDocument:
+    results: list[VideoResult] = []
+    process_files(
+        [path],
+        options,
+        llm=llm,
+        out=out,
+        force=force,
+        interactive=interactive,
+        progress=progress,
+        on_video=results.append,
+    )
+    (result,) = results
+    if result.document is not None:
+        return result.document
+    _raise(result)
+
+
+def _raise(result: VideoResult) -> NoReturn:
     if result.error is not None:
         raise result.error
     raise _error_for(result.outcome)
@@ -255,6 +323,7 @@ def process_many(  # noqa: PLR0913
         options,
         llm,
         out,
+        kind="youtube",
         force=force,
         captions=captions,
         interactive=interactive,
@@ -291,12 +360,85 @@ def process_many(  # noqa: PLR0913
     )
 
 
+def process_files(
+    files: Sequence[Path],
+    options: config.Options | None = None,
+    *,
+    llm: LLMClient | None = None,
+    out: Path | None = None,
+    force: bool = False,
+    interactive: bool = False,
+    progress: Callable[[ProgressEvent], None] | None = None,
+    on_video: Callable[[VideoResult], None] | None = None,
+    clock: Callable[[], datetime] = utcnow,
+) -> BatchReport:
+    """Run every local audio or video file into `<out>/<rec-id>/`; write `<out>/batch_report.json` and `index.md`.
+
+    A recording's id is the hash of its audio, so the same audio under two names, or in another container, runs once.
+    Option errors are raised before any file is read, as for `process_many`; a file that cannot be read or
+    transcribed is an error in the report, keyed by its file name until it has an id. `EngineMemoryError` ends the
+    batch after the report is written.
+    """
+    options = options or config.load_options()
+    out = out if out is not None else paths.recordings_root()
+    settings = _settings(
+        options,
+        llm,
+        out,
+        kind="recording",
+        force=force,
+        captions=False,
+        interactive=interactive,
+        emit=progress or _no_progress,
+        clock=clock,
+    )
+    started = clock()
+    outcomes: list[VideoOutcome] = []
+    seen: dict[str, str] = {}
+    try:
+        for path in files:
+            result = _run_file(path, settings, seen)
+            if result is None:
+                continue
+            outcomes.append(result.outcome)
+            if result.document is not None and "context" not in result.outcome.reused:
+                index.write_index(out)
+            if on_video is not None:
+                on_video(result)
+    finally:
+        report = BatchReport(tuple(outcomes), started_at=started, finished_at=clock())
+        out.mkdir(parents=True, exist_ok=True)
+        atomic.write_json(out / REPORT_FILE, report.to_json())
+    index.write_index(out)
+    return report
+
+
+def _run_file(path: Path, settings: "_Settings", seen: dict[str, str]) -> VideoResult | None:
+    """Run one file; None when its audio already ran in this batch under another name."""
+    began = time.monotonic()
+    try:
+        recording = local.open_recording(path)
+    except (YtverbatimError, ValueError, OSError) as exc:
+        return replace(_failed(path.name, exc), name=path.name)
+    if recording.id in seen:
+        settings.emit(ProgressEvent(recording.id, "skip", f"same audio as {seen[recording.id]}"))
+        return None
+    seen[recording.id] = recording.file_name
+    sdir = paths.source_dir(recording.id, settings.out)
+    adapter = _FileRun(recording, sdir, settings)
+    result = _run_source(recording.id, sdir, settings, reuse=adapter.reuse, run=adapter.run)
+    return replace(result, elapsed_s=time.monotonic() - began, name=recording.file_name)
+
+
 def _no_progress(_event: ProgressEvent) -> None:
     return None
 
 
 @dataclass(frozen=True)
 class _Settings:
+    """One batch's settings; a batch runs one kind of source, and every source default is resolved for it."""
+
+    kind: SourceKind
     text: config.TextOptions
     source: Literal["asr", "captions"]
     definition: EngineDef
@@ -310,26 +452,34 @@ class _Settings:
     video: bool
     emit: Callable[[ProgressEvent], None]
     clock: Callable[[], datetime]
+    # The language forced on every source, else None.
+    language: str | None = None
+    # The allowed set handed to a detecting engine; empty unless the batch's sources and engine use it.
+    languages: tuple[str, ...] = ()
 
     @property
     def llm_id(self) -> str | None:
         return self.llm.id if self.llm is not None else None
 
     def run_key(self) -> str:
-        """Everything a finished document depends on besides the video itself; a change means a rerun."""
+        """Everything a finished document depends on besides the source itself; a change means a rerun."""
         versions = stage_versions()
         inputs: dict[str, JsonValue] = {
             "versions": dict[str, JsonValue](versions),
-            "source": self.source,
-            "captions": self.captions,
             "engine": _engine_key(self.definition),
             "second_opinion": _engine_key(self.second_opinion) if self.second_opinion else None,
             "text": _plain(asdict(self.text)),
             "llm": self.llm_id,
         }
+        if self.kind == "youtube":
+            inputs |= {"source": self.source, "captions": self.captions}
+        # Each added only when set, so the keys of documents made before the option existed stay valid.
         if self.creator_note:
-            # Added only when on, so the keys of documents made before the option existed stay valid.
             inputs["creator_note"] = True
+        if self.language is not None:
+            inputs["language"] = self.language
+        if self.languages:
+            inputs["languages"] = list(self.languages)
         return input_hash("context", versions["context"], inputs)
 
 
@@ -338,14 +488,16 @@ def _settings(
     llm: LLMClient | None,
     out: Path,
     *,
+    kind: SourceKind,
     force: bool,
     captions: bool,
     emit: Callable[[ProgressEvent], None],
     clock: Callable[[], datetime],
     interactive: bool = False,
 ) -> _Settings:
-    definition = registry.get(options.asr.engine)
+    definition = registry.get(options.asr.engine or _DEFAULT_ENGINE[kind])
     registry.check_dependencies(definition)
+    languages = _allowed_languages(options.asr.languages, definition) if kind == "recording" else ()
     second: EngineDef | None = None
     if options.text.numeric_second_opinion != "off":
         second = registry.get(options.text.numeric_second_opinion)
@@ -368,21 +520,37 @@ def _settings(
         raise ConfigError("correction needs an LLM; pass --llm PROVIDER:MODEL or set [llm], or use --no-correct")
     text = replace(options.text, correct=llm is not None if options.text.correct is None else options.text.correct)
     memory_cap = asr_runner.memory_cap_bytes(options.asr.memory_cap_gib)
+    youtube = kind == "youtube"
     return _Settings(
-        text,
-        options.asr.source,
-        definition,
-        second,
-        llm,
-        memory_cap,
-        out,
-        force,
-        captions,
-        options.ytdlp.creator_note,
-        options.ytdlp.video,
-        emit,
-        clock,
+        kind=kind,
+        text=text,
+        source=options.asr.source,
+        definition=definition,
+        second_opinion=second,
+        llm=llm,
+        memory_cap_bytes=memory_cap,
+        out=out,
+        force=force,
+        captions=captions,
+        creator_note=youtube and options.ytdlp.creator_note,
+        video=youtube and options.ytdlp.video,
+        emit=emit,
+        clock=clock,
+        language=options.asr.language,
+        languages=languages,
     )
+
+
+def _allowed_languages(languages: tuple[str, ...], definition: EngineDef) -> tuple[str, ...]:
+    """Return the allowed set as the worker takes it; an engine that does not detect languages has no use for one."""
+    if not languages or definition.language_policy() != "detect":
+        return ()
+    try:
+        job = FileJob(id="check", wav="", languages=languages)
+        WorkerRequest(engine=definition, out_dir="", files=(job,))
+    except ValidationError as exc:
+        raise ConfigError(f"asr.languages = {list(languages)} cannot run with {definition.spec.id}:\n{exc}") from exc
+    return job.languages
 
 
 def _engine_key(definition: EngineDef) -> JsonValue:
@@ -442,46 +610,76 @@ def _reusable(vdir: Path, settings: _Settings) -> ContextDocument | None:
         return None
 
 
-def _run_video(session: FetchSession, planned: PlannedVideo, settings: _Settings) -> VideoResult:
-    video_id = planned.video_id
-    vdir = paths.video_dir(video_id, settings.out)
+def _run_source(
+    source_id: str,
+    sdir: Path,
+    settings: _Settings,
+    *,
+    reuse: Callable[[ContextDocument], VideoResult],
+    run: Callable[["_Trace"], VideoResult],
+) -> VideoResult:
+    """Run one source of any kind under its directory lock, and record its own failure as its outcome.
+
+    A current document is reused, its Markdown written again when missing, and handed to `reuse`; otherwise `run`
+    makes it, from a cleared stage store under `--force`. Only what ends the batch is raised.
+    """
     try:
-        with video_lock(vdir):
-            document = _reusable(vdir, settings)
+        with video_lock(sdir):
+            document = _reusable(sdir, settings)
             if document is not None:
-                access = document.source.access if isinstance(document.source, YouTubeSource) else None
-                settings.emit(ProgressEvent(video_id, "skip", f"{CONTEXT_JSON} exists"))
-                if not (vdir / CONTEXT_MD).is_file():
-                    atomic.write_text(vdir / CONTEXT_MD, render_markdown(document))
-                outcome = VideoOutcome(
-                    video_id,
-                    VideoStatus.OK,
-                    access=access,
-                    chapters=len(document.chapters),
-                    reused=("context",),
-                )
-                timings: tuple[StageTiming, ...] = ()
-                if settings.video and ready_video(vdir) is None:
-                    # The video is not part of the run key, so a current document says nothing about it. The saved
-                    # info is usually too old to reuse, so the earlier auth decision spares a refused anonymous try.
-                    settings.emit(ProgressEvent(video_id, "fetch"))
-                    began = time.monotonic()
-                    cookies_first = planned.cookies_first or (access is not None and access.cookies_used)
-                    fetched = session.fetch_video(video_id, cookies_first=cookies_first, audio=False, captions=False)
-                    if fetched.status is not VideoStatus.OK:
-                        return VideoResult(fetched)
-                    outcome = replace(outcome, reused=("context", *fetched.reused))
-                    timings = (StageTiming("fetch", time.monotonic() - began, reused=False),)
-                return VideoResult(outcome, document, vdir / CONTEXT_MD, timings=timings)
+                settings.emit(ProgressEvent(source_id, "skip", f"{CONTEXT_JSON} exists"))
+                if not (sdir / CONTEXT_MD).is_file():
+                    atomic.write_text(sdir / CONTEXT_MD, render_markdown(document))
+                return reuse(document)
             if settings.force:
-                StageStore(vdir).clear()
-            return _YouTubeRun(session, planned, vdir, settings, _Trace(video_id, settings.emit)).run()
+                StageStore(sdir).clear()
+            return run(_Trace(source_id, settings.emit))
     except (BatchStopError, DependencyError, EngineMemoryError):
         raise
     except (YtverbatimError, ValueError, OSError) as exc:
-        detail = str(exc) if isinstance(exc, YtverbatimError) else f"{type(exc).__name__}: {exc}"
-        outcome = VideoOutcome(video_id, VideoStatus.ERROR, error=_error_kind(exc), detail=redact(detail))
-        return VideoResult(outcome, error=exc)
+        return _failed(source_id, exc)
+
+
+def _failed(source_id: str, exc: YtverbatimError | ValueError | OSError) -> VideoResult:
+    detail = str(exc) if isinstance(exc, YtverbatimError) else f"{type(exc).__name__}: {exc}"
+    outcome = VideoOutcome(
+        source_id, VideoStatus.ERROR, error=_error_kind(exc), detail=redact(detail), fix=getattr(exc, "fix", "")
+    )
+    return VideoResult(outcome, error=exc)
+
+
+def _run_video(session: FetchSession, planned: PlannedVideo, settings: _Settings) -> VideoResult:
+    vdir = paths.video_dir(planned.video_id, settings.out)
+
+    def reuse(document: ContextDocument) -> VideoResult:
+        return _reused_video(session, planned, vdir, settings, document)
+
+    def run(trace: _Trace) -> VideoResult:
+        return _YouTubeRun(session, planned, vdir, settings, trace).run()
+
+    return _run_source(planned.video_id, vdir, settings, reuse=reuse, run=run)
+
+
+def _reused_video(
+    session: FetchSession, planned: PlannedVideo, vdir: Path, settings: _Settings, document: ContextDocument
+) -> VideoResult:
+    video_id = planned.video_id
+    access = document.source.access if isinstance(document.source, YouTubeSource) else None
+    chapters = len(document.chapters)
+    outcome = VideoOutcome(video_id, VideoStatus.OK, access=access, chapters=chapters, reused=("context",))
+    timings: tuple[StageTiming, ...] = ()
+    if settings.video and ready_video(vdir) is None:
+        # The video is not part of the run key, so a current document says nothing about it. The saved info is
+        # usually too old to reuse, so the earlier auth decision spares a refused anonymous try.
+        settings.emit(ProgressEvent(video_id, "fetch"))
+        began = time.monotonic()
+        cookies_first = planned.cookies_first or (access is not None and access.cookies_used)
+        fetched = session.fetch_video(video_id, cookies_first=cookies_first, audio=False, captions=False)
+        if fetched.status is not VideoStatus.OK:
+            return VideoResult(fetched)
+        outcome = replace(outcome, reused=("context", *fetched.reused))
+        timings = (StageTiming("fetch", time.monotonic() - began, reused=False),)
+    return VideoResult(outcome, document, vdir / CONTEXT_MD, timings=timings)
 
 
 def _error_kind(exc: Exception) -> str:
@@ -564,12 +762,13 @@ class _Prepared:
     `ensure_wav` puts the 16 kHz WAV at `dir / WAV_NAME`, or raises an error its adapter handles; it is called only when
     a stage still has audio to decode, so a rerun over stored stages needs no audio at all. `correction` is read only
     when correction runs, after any `ensure_wav`, since getting the audio may refresh what the context is made from.
+    `captions` is None for a source that never has captions, so nothing reports them missing.
     """
 
     info: SourceInfo
     dir: Path
     language: str | None
-    captions: tuple[CaptionTrack, ...]
+    captions: tuple[CaptionTrack, ...] | None
     correction: Callable[[], CorrectionContext]
     ensure_wav: Callable[[], None]
 
@@ -617,7 +816,14 @@ class _Decoding:
         request = WorkerRequest(
             engine=self.settings.definition,
             out_dir=str(self.store.work_dir("asr")),
-            files=(FileJob(id=self.source_id, wav=str(self.dir / WAV_NAME), language=self.language),),
+            files=(
+                FileJob(
+                    id=self.source_id,
+                    wav=str(self.dir / WAV_NAME),
+                    language=self.language,
+                    languages=self.settings.languages,
+                ),
+            ),
             memory_cap_bytes=self.settings.memory_cap_bytes,
         )
         return self.placed("asr", request)
@@ -696,7 +902,8 @@ class _YouTubeRun:
         settings = self.settings
         cached = self._local_metadata()
         need_audio = settings.source == "asr" and (
-            cached is None or _Decoding(settings, self.video_id, self.vdir, cached.language).needs_audio()
+            cached is None
+            or _Decoding(settings, self.video_id, self.vdir, settings.language or cached.language).needs_audio()
         )
         outcome = self._fetch(audio=need_audio)
         if not self._accept(outcome):
@@ -712,7 +919,7 @@ class _YouTubeRun:
         prepared = _Prepared(
             info=SourceInfo(id=self.video_id, chapters=metadata.chapters, describe=describe),
             dir=self.vdir,
-            language=metadata.language,
+            language=settings.language or metadata.language,
             captions=saved_captions(self.vdir),
             correction=lambda: correction_context(metadata, self.tags),
             ensure_wav=self._ensure_wav,
@@ -763,6 +970,55 @@ class _YouTubeRun:
             return None
 
 
+@dataclass(frozen=True)
+class _FileRun:
+    """One local recording's run: its audio comes from the file, and nothing else is fetched."""
+
+    recording: local.LocalRecording
+    dir: Path
+    settings: _Settings
+
+    def outcome(self, *, reused: tuple[str, ...] = ()) -> VideoOutcome:
+        return VideoOutcome(self.recording.id, VideoStatus.OK, audio_s=self.recording.duration_s, reused=reused)
+
+    def reuse(self, document: ContextDocument) -> VideoResult:
+        return VideoResult(self.outcome(reused=("context",)), document, self.dir / CONTEXT_MD)
+
+    def run(self, trace: _Trace) -> VideoResult:
+        recording = self.recording
+        language = self.settings.language
+
+        def describe(_stretches: Sequence[Stretch]) -> RecordingSource:
+            return recording.source(language)
+
+        def ensure_wav() -> None:
+            wav = self.dir / WAV_NAME
+            if wav.is_file():
+                return
+            trace.emit("fetch")
+            began = time.monotonic()
+            local.to_wav(recording, wav)
+            trace.timings.append(StageTiming("fetch", time.monotonic() - began, reused=False))
+
+        prepared = _Prepared(
+            info=SourceInfo(id=recording.id, chapters=(), describe=describe),
+            dir=self.dir,
+            language=language,
+            captions=None,
+            correction=CorrectionContext,
+            ensure_wav=ensure_wav,
+        )
+        transcription = _Transcription(prepared, self.settings, trace)
+        document = transcription.run()
+        return VideoResult(
+            self.outcome(),
+            document,
+            self.dir / CONTEXT_MD,
+            notices=tuple(transcription.notices),
+            timings=tuple(trace.timings),
+        )
+
+
 @dataclass
 class _Transcription:
     """The source-agnostic part of a run, from the audio or a manual caption track to `context.json` and `context.md`.
@@ -787,8 +1043,8 @@ class _Transcription:
         settings = self.settings
         prepared = self.prepared
         source: Transcribed | None = None
-        if settings.source == "captions":
-            source = self._from_captions()
+        if settings.source == "captions" and prepared.captions is not None:
+            source = self._from_captions(prepared.captions)
         if source is None:
             if self.decoding.needs_audio():
                 prepared.ensure_wav()
@@ -861,9 +1117,9 @@ class _Transcription:
         engine = request.engine.spec.id
         return self._stage("asr", decoding.asr_key(request), Transcribed, compute, engine, keep=Path(request.out_dir))
 
-    def _from_captions(self) -> Transcribed | None:
+    def _from_captions(self, captions: Sequence[CaptionTrack]) -> Transcribed | None:
         language = self.prepared.language
-        track, missing = _manual_track(self.prepared.captions, language)
+        track, missing = _manual_track(captions, language)
         if track is None:
             self.notices.append(f"{missing}; transcribed with ASR instead")
             return None
@@ -961,7 +1217,8 @@ class _Transcription:
 
     def _numeric(self, previous: _TextResult, source: Transcribed, second: numeric.SecondOpinion | None) -> _TextResult:
         llm = self.settings.llm
-        evidence_tracks = _evidence_tracks(self.prepared.captions, source)
+        captions = self.prepared.captions
+        evidence_tracks = _evidence_tracks(captions or (), source)
         inputs: dict[str, JsonValue] = {
             "text": _text_key(previous.stretches),
             "captions": [_track_key(track) for track in evidence_tracks],
@@ -987,8 +1244,9 @@ class _Transcription:
             )
             notices: list[str] = []
             if not evidence_tracks and second is None and result.stats.single_source:
+                missing = f"no captions in {source.language}" if captions is not None else "the source has no captions"
                 notices.append(
-                    f"numbers not cross-checked: no captions in {source.language} and no second opinion; "
+                    f"numbers not cross-checked: {missing} and no second opinion; "
                     f"{result.stats.single_source} number(s) rest on the transcript alone"
                 )
             if llm is None and result.stats.disputed:

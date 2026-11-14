@@ -5,6 +5,9 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 _VIDEO_ID = re.compile(r"[0-9A-Za-z_-]{11}")
 _LIST_ID = re.compile(r"[0-9A-Za-z_-]+")
+_RECORDING_ID = re.compile(r"rec-[0-9a-f]{16}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+RECORDING_PREFIX = "rec-"
 
 _YOUTUBE_HOSTS = frozenset(
     {
@@ -42,6 +45,17 @@ class YouTubeRef:
 
 def is_video_id(text: str) -> bool:
     return _VIDEO_ID.fullmatch(text) is not None
+
+
+def is_recording_id(text: str) -> bool:
+    return _RECORDING_ID.fullmatch(text) is not None
+
+
+def recording_id(audio_sha256: str) -> str:
+    """Return the id of a recording whose transcribed stream's encoded packets hash to `audio_sha256`."""
+    if _SHA256.fullmatch(audio_sha256) is None:
+        raise ValueError(f"not a lowercase sha256 hex digest: {audio_sha256!r}")
+    return f"{RECORDING_PREFIX}{audio_sha256[:16]}"
 
 
 def video_url(video_id: str) -> str:

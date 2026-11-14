@@ -54,7 +54,7 @@ timeout_s = 60
     assert options.ytdlp.creator_note is True
     assert options.ytdlp.video is True
     assert options.asr.source == "captions"
-    assert options.asr.engine == "w-prod"
+    assert options.asr.engine is None
     assert options.text.chapters == "none"
     assert options.llm == LLMOptions(provider="openai-compat", base_url="http://localhost:8080/v1", timeout_s=60.0)
     assert isinstance(options.llm.timeout_s, float)

@@ -241,6 +241,16 @@ def test_to_wav16k_converts_to_the_asr_format_and_writes_atomically(tmp_path: Pa
     assert argv[-1] != str(destination)
     assert destination.read_bytes() == b"RIFF"
     assert sorted(p.name for p in tmp_path.iterdir()) == ["audio.wav", "audio.webm"]
+    assert "-map" not in argv, "without a stream ffmpeg keeps choosing the audio, as for YouTube"
+
+
+def test_to_wav16k_converts_the_chosen_audio_stream(tmp_path: Path, fake_proc) -> None:
+    source = tmp_path / "memo.qta"
+    source.write_bytes(b"x")
+    converting_ffmpeg(fake_proc)
+    fake_proc.probe_returns("600\n")
+    audio.to_wav16k(source, tmp_path / "audio.wav", stream=1)
+    assert arg_after(fake_proc.calls[0], "-map") == "0:a:1"
 
 
 def test_probe_stderr_shows_the_home_directory_as_tilde(

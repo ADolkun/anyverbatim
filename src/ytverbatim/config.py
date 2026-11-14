@@ -26,8 +26,14 @@ class YtdlpOptions:
 
 @dataclass(frozen=True)
 class AsrOptions:
-    engine: str = "w-prod"
+    # None is the source's default: w-prod for YouTube and, until the language policy lands, for recordings too.
+    # Set, it wins for every source.
+    engine: str | None = None
     source: Literal["asr", "captions"] = "asr"
+    # Forces one language for every source; None lets YouTube's declared language or the engine decide.
+    language: str | None = None
+    # The languages a detecting engine may choose from, for recordings only; empty allows any.
+    languages: tuple[str, ...] = ()
     # The ASR worker is killed above this physical footprint, so a runaway model cannot take down the Mac.
     # None means half of physical memory.
     memory_cap_gib: float | None = None
