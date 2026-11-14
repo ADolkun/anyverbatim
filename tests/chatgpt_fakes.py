@@ -114,6 +114,7 @@ def store_account(
     access: str = "access-1",
     refresh: str = "refresh-1",
     earliest_refresh_at: float = 0.0,
+    refresh_refused: bool = False,
 ) -> State:
     with chatgpt_auth._locked() as state:
         stored = State(
@@ -127,6 +128,7 @@ def store_account(
                 scopes=scopes,
                 expires_at=expires_at,
                 earliest_refresh_at=earliest_refresh_at,
+                refresh_refused=refresh_refused,
             ),
         )
         chatgpt_auth._save(stored)

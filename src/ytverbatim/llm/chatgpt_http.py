@@ -111,7 +111,7 @@ class BoundedResponse:
         # http.client closes the connection once the body is complete; urllib has already released the socket, so
         # that close is final and the socket must not be touched again.
         if self._response.isclosed():
-            return b""
+            return self._end()
         remaining = self._deadline - time.monotonic()
         if remaining <= 0 or self._expired.is_set():
             raise TimeoutError
@@ -129,7 +129,14 @@ class BoundedResponse:
         # The deadline's shutdown reads as a clean end of stream; it must not pass for one.
         if self._expired.is_set():
             raise TimeoutError
-        return chunk
+        return chunk or self._end()
+
+    def _end(self) -> bytes:
+        # http.client's read1 meets an early end of a Content-Length body with b"" and no error, leaving the bytes
+        # still owed in `length`; a chunked body raises IncompleteRead instead, and has no length.
+        if self._response.length:
+            raise ConnectionError("the response broke off before its Content-Length")
+        return b""
 
     def _expire(self) -> None:
         self._expired.set()

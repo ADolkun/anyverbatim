@@ -10,7 +10,17 @@ from email.message import Message
 from pathlib import Path
 
 import pytest
-from chatgpt_fakes import NOW, FakeOpener, FakeResponse, form, http_error, json_response, store_account, token_payload
+from chatgpt_fakes import (
+    NOW,
+    FakeOpener,
+    FakeResponse,
+    Route,
+    form,
+    http_error,
+    json_response,
+    store_account,
+    token_payload,
+)
 
 from ytverbatim.errors import ConfigError, LLMOutputError, LLMUnavailableError
 from ytverbatim.llm import chatgpt, chatgpt_auth, chatgpt_http
@@ -621,3 +631,113 @@ def test_without_reauth_a_lapsed_sign_in_raises(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(chatgpt_auth, "access_token", Tokens(lapsed()))
     with pytest.raises(LLMUnavailableError, match="invalid_grant"):
         reauth_client(FakeOpener(), None).complete(REQUEST)
+
+
+def responses(*routes: Route) -> FakeOpener:
+    queue = list(routes)
+    return FakeOpener({f"POST {RESPONSES_URL}": lambda request: queue.pop(0)(request)})
+
+
+def ok_stream(_request: urllib.request.Request) -> FakeResponse:
+    return FakeResponse(lines=sse(completed([message("ok")])))
+
+
+def test_a_401_signs_in_again_once_and_resends(monkeypatch: pytest.MonkeyPatch) -> None:
+    tokens = Tokens()
+    monkeypatch.setattr(chatgpt_auth, "access_token", tokens)
+    signed_in: list[str] = []
+    opener = responses(http_error(401, {"error": {"code": "invalid_token"}}), ok_stream)
+    assert reauth_client(opener, lambda: signed_in.append("browser")).complete(REQUEST).text == "ok"
+    assert signed_in == ["browser"] and len(opener.requests) == 2 and tokens.calls == 2
+
+
+def test_a_second_401_is_not_answered_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chatgpt_auth, "access_token", Tokens())
+    signed_in: list[str] = []
+    opener = responses(http_error(401), http_error(401))
+    with pytest.raises(LLMUnavailableError, match="ytverbatim login"):
+        reauth_client(opener, lambda: signed_in.append("browser")).complete(REQUEST)
+    assert signed_in == ["browser"] and len(opener.requests) == 2
+
+
+def test_a_401_without_reauth_keeps_the_login_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chatgpt_auth, "access_token", Tokens())
+    opener = responses(http_error(401))
+    with pytest.raises(LLMUnavailableError, match=r"HTTP 401.*ytverbatim login"):
+        reauth_client(opener, None).complete(REQUEST)
+    assert len(opener.requests) == 1
+
+
+def test_threads_sharing_a_client_sign_in_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    signed_in = threading.Event()
+    sign_ins: list[str] = []
+
+    def access_token(*, opener: object) -> str:
+        if not signed_in.is_set():
+            raise lapsed()
+        return "test-access-token"
+
+    def reauth() -> None:
+        sign_ins.append("browser")
+        time.sleep(0.2)
+        signed_in.set()
+
+    monkeypatch.setattr(chatgpt_auth, "access_token", access_token)
+    chat = reauth_client(FakeOpener({f"POST {RESPONSES_URL}": ok_stream}), reauth)
+    texts: list[str] = []
+    errors: list[BaseException] = []
+
+    def call() -> None:
+        try:
+            texts.append(chat.complete(REQUEST).text)
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=call) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+    assert errors == [] and texts == ["ok", "ok"]
+    assert sign_ins == ["browser"]
+
+
+def test_reauth_stays_wired_when_only_the_token_fetch_after_it_failed_transiently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = ChatGPTAuthError("could not reach OpenAI", code="network_error")
+    monkeypatch.setattr(chatgpt_auth, "access_token", Tokens(lapsed(), transient, lapsed()))
+    sign_ins: list[str] = []
+    chat = reauth_client(FakeOpener({f"POST {RESPONSES_URL}": ok_stream}), lambda: sign_ins.append("browser"))
+    with pytest.raises(LLMUnavailableError) as raised:
+        chat.complete(REQUEST)
+    assert raised.value.code == "network_error"
+    assert chat.complete(REQUEST).text == "ok"
+    assert sign_ins == ["browser", "browser"]
+
+
+def test_a_real_body_cut_short_of_its_content_length_is_unavailable(signed_in: list[str]) -> None:
+    def truncate(connection: socket.socket) -> None:
+        connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 500\r\n\r\ndata: {")
+        connection.shutdown(socket.SHUT_RDWR)
+
+    chat, done = real_client(truncate, 5.0)
+    try:
+        with pytest.raises(LLMUnavailableError, match="broke off before its Content-Length"):
+            chat.complete(REQUEST)
+    finally:
+        done.set()
+
+
+def test_a_real_body_of_exactly_its_content_length_completes(signed_in: list[str]) -> None:
+    body = b"".join(sse(completed([message("ok")])))
+
+    def reply(connection: socket.socket) -> None:
+        head = f"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {len(body)}\r\n\r\n"
+        connection.sendall(head.encode() + body)
+
+    chat, done = real_client(reply, 5.0)
+    try:
+        assert chat.complete(REQUEST).text == "ok"
+    finally:
+        done.set()

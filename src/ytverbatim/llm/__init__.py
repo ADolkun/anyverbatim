@@ -135,6 +135,7 @@ def _ready_chatgpt(*, interactive: bool) -> None:
 _NOT_READY_REASON = {
     "signed_out": "ChatGPT is not signed in",
     "no_plan": "the ChatGPT sign-in lacks plan permission",
+    "refused": "OpenAI refused to renew the ChatGPT sign-in",
 }
 
 

@@ -5,6 +5,7 @@ no automatic retries: a failure raises, and retry policy belongs to the caller.
 """
 
 import json
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -52,6 +53,8 @@ class ChatGPTClient:
         self._opener = opener
         self._clock = clock
         self._reauth = reauth
+        self._reauth_lock = threading.Lock()
+        self._sign_ins = 0
 
     @property
     def id(self) -> str:
@@ -78,18 +81,15 @@ class ChatGPTClient:
     def complete(self, request: LLMRequest) -> LLMResponse:
         started = self._clock()
         deadline = started + self._timeout_s
+        body = json.dumps(self.payload(request), ensure_ascii=False).encode()
+        seen = self._sign_ins
         token = self._access_token()
-        http_request = urllib.request.Request(
-            RESPONSES_URL,
-            data=json.dumps(self.payload(request), ensure_ascii=False).encode(),
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "text/event-stream",
-            },
-            method="POST",
-        )
-        response = self._open(http_request, deadline)
+        try:
+            response = self._open(_http_request(body, token), deadline, reauthorize=True)
+        except _Unauthorized as unauthorized:
+            # A 401 arrives before any generation, so signing in again and resending bills nothing twice.
+            token = self._sign_in_again(unauthorized.error, seen)
+            response = self._open(_http_request(body, token), deadline, reauthorize=False)
         try:
             text, usage = self._read(response, deadline)
         finally:
@@ -97,33 +97,61 @@ class ChatGPTClient:
         return LLMResponse(text=text, usage=usage, elapsed_s=self._clock() - started)
 
     def _access_token(self) -> str:
-        """Return a usable token, signing in again once through `reauth` when only that can help.
+        """Return a usable token, signing in again through `reauth` when only that can help.
 
         All of this happens before the request is sent, so nothing is billed twice.
         """
+        seen = self._sign_ins
         try:
             return chatgpt_auth.access_token(opener=self._opener)
         except ChatGPTAuthError as exc:
-            if self._reauth is None or not exc.needs_sign_in:
+            if not exc.needs_sign_in:
                 raise self._auth_error(exc) from None
-        reauth, self._reauth = self._reauth, None
+            return self._sign_in_again(self._auth_error(exc), seen)
+
+    def _sign_in_again(self, failure: LLMUnavailableError, seen: int) -> str:
+        """Sign in again through `reauth` and return the new token, or raise `failure` when that is not possible.
+
+        Threads sharing this client sign in once: whoever finds that a sign-in happened since it last looked (`seen`)
+        only fetches the new token.
+        """
+        with self._reauth_lock:
+            if self._sign_ins == seen:
+                reauth = self._reauth
+                if reauth is None:
+                    raise failure
+                # Left unwired while it runs, and after a failed sign-in, so a batch does not reopen the browser on
+                # every later call.
+                self._reauth = None
+                try:
+                    reauth()
+                except ChatGPTAuthError as exc:
+                    raise self._auth_error(exc) from None
+                self._sign_ins += 1
+                try:
+                    token = chatgpt_auth.access_token(opener=self._opener)
+                except ChatGPTAuthError as exc:
+                    if not exc.needs_sign_in:
+                        self._reauth = reauth
+                    raise self._auth_error(exc) from None
+                self._reauth = reauth
+                return token
         try:
-            reauth()
-            token = chatgpt_auth.access_token(opener=self._opener)
+            return chatgpt_auth.access_token(opener=self._opener)
         except ChatGPTAuthError as exc:
-            # Left unwired after a failed sign-in, so later calls in the batch do not reopen the browser each time.
             raise self._auth_error(exc) from None
-        self._reauth = reauth
-        return token
 
     def _auth_error(self, exc: ChatGPTAuthError) -> LLMUnavailableError:
         return LLMUnavailableError(f"{self.id}: {exc}; usage unknown", code=exc.code)
 
-    def _open(self, request: urllib.request.Request, deadline: float) -> Response:
+    def _open(self, request: urllib.request.Request, deadline: float, *, reauthorize: bool) -> Response:
         try:
             return self._opener(request, self._remaining(deadline))
         except urllib.error.HTTPError as exc:
-            raise self._http_error(exc) from None
+            error = self._http_error(exc)
+            if exc.code == _UNAUTHORIZED and reauthorize and self._reauth is not None:
+                raise _Unauthorized(error) from None
+            raise error from None
         except TimeoutError:
             raise self._timeout() from None
         except (urllib.error.URLError, OSError) as exc:
@@ -287,3 +315,20 @@ def _usage(body: Mapping[str, object]) -> Usage | None:
 
 def _list(value: object) -> list[object]:
     return list(value) if isinstance(value, list) else []
+
+
+class _Unauthorized(Exception):  # noqa: N818
+    """A 401 the client may answer with one new sign-in; `error` is what to raise when it cannot."""
+
+    def __init__(self, error: LLMUnavailableError) -> None:
+        super().__init__(str(error))
+        self.error = error
+
+
+def _http_request(body: bytes, token: str) -> urllib.request.Request:
+    return urllib.request.Request(
+        RESPONSES_URL,
+        data=body,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "text/event-stream"},
+        method="POST",
+    )
