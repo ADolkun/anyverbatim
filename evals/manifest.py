@@ -87,7 +87,8 @@ def eval_dir() -> Path:
 def load_manifest(directory: Path | None = None) -> Manifest:
     path = (directory or eval_dir()) / MANIFEST_NAME
     if not path.is_file():
-        raise ConfigError(f"no {MANIFEST_NAME} at {path}; set {EVAL_DIR_ENV} to the directory that holds it")
+        hint = f"; set {EVAL_DIR_ENV} to the directory that holds it" if directory is None else ""
+        raise ConfigError(f"no {MANIFEST_NAME} at {path}{hint}")
     manifest = Manifest.model_validate(json.loads(path.read_text(encoding="utf-8")))
     ids = [v.id for v in manifest.videos]
     if len(set(ids)) != len(ids):

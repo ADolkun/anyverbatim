@@ -65,6 +65,8 @@ from ytverbatim.errors import ConfigError, EngineError, YtverbatimError
 
 PRIMARY_CORPORA = ("ami", "alimeeting")
 CORPORA = (*PRIMARY_CORPORA, "ascend", OWNER)
+# The owner corpus runs only when named, so a missing owner index never stops the public run.
+DEFAULT_CORPORA = (*PRIMARY_CORPORA, "ascend")
 SCORE_FILE = "score.json"
 SUMMARY_FILE = "summary.json"
 PYANNOTE_ENV = {"PYANNOTE_METRICS_ENABLED": "0"}
@@ -541,7 +543,9 @@ def main() -> None:
 
 @main.command()
 @click.option("--diarizer", required=True, help="Registry id (d-nemotron-8bit, d-nemotron-bf16) or d-pyannote-*.")
-@click.option("--corpus", "corpora", multiple=True, type=click.Choice(CORPORA), default=CORPORA, show_default=True)
+@click.option(
+    "--corpus", "corpora", multiple=True, type=click.Choice(CORPORA), default=DEFAULT_CORPORA, show_default=True
+)
 @click.option("--recordings", help="Comma-separated recording ids (default: every one in the corpus).")
 @click.option("--external-command", help="For d-pyannote-*: command taking WAV and OUT.rttm arguments.")
 def run(diarizer: str, corpora: tuple[str, ...], recordings: str | None, external_command: str | None) -> None:

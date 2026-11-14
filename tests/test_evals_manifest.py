@@ -127,3 +127,10 @@ def test_eval_dir_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch, tm
     assert eval_dir() == Path.home() / "elsewhere"
     monkeypatch.setenv(EVAL_DIR_ENV, str(tmp_path))
     assert [v.id for v in load_manifest().videos] == ["vid00000001"]
+
+
+def test_an_explicit_directory_is_not_told_to_set_the_variable(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError) as raised:
+        load_manifest(tmp_path / "empty")
+    assert EVAL_DIR_ENV not in str(raised.value)
+    assert str(tmp_path / "empty") in str(raised.value)
