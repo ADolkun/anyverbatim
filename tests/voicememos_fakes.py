@@ -33,7 +33,9 @@ class Row:
     audio: bytes | None = b"audio"
 
 
-def make_library(root: Path, rows: Sequence[Row], *, drop: Sequence[str] = (), wal: bool = False) -> Path:
+def make_library(
+    root: Path, rows: Sequence[Row], *, drop: Sequence[str] = (), wal: bool = False, close: bool = True
+) -> Path:
     folder = root / "Recordings"
     folder.mkdir(parents=True)
     columns = [c for c in ALL_COLUMNS if c not in drop]
@@ -59,7 +61,7 @@ def make_library(root: Path, rows: Sequence[Row], *, drop: Sequence[str] = (), w
         if row.path and row.audio is not None:
             (folder / row.path).write_bytes(row.audio)
     connection.commit()
-    if wal:
+    if wal and not close:
         # Kept open, so the rows stay in the -wal file instead of being checkpointed into the database.
         wal_connections.append(connection)
         assert (folder / f"{voicememos.DATABASE}-wal").stat().st_size > 0

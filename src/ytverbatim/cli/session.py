@@ -197,7 +197,8 @@ _MEMOS_STATE = {
 def _memos_row(probe: voicememos.Probe) -> _Row:
     match probe.state:
         case "ok":
-            return _Row("Voice Memos", "-", f"ok · {probe.memos} memo{'' if probe.memos == 1 else 's'}")
+            ok = f"ok · {probe.memos} memo{'' if probe.memos == 1 else 's'}"
+            return _Row("Voice Memos", "-", ok, [f"! {probe.detail}"] if probe.detail else [])
         case "unreadable":
             return _Row("Voice Memos", "-", f"unreadable: {probe.detail}")
         case state:

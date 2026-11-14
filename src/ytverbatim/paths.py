@@ -77,8 +77,9 @@ def locks_dir() -> Path:
     return _private(state_dir() / "locks")
 
 
-def voicememos_cache_file() -> Path:
-    return state_dir() / "voicememos.json"
+def voicememos_cache_file(*, create_parents: bool = False) -> Path:
+    """Never created here, so listing memos leaves no trace; a write passes `create_parents`."""
+    return (state_dir() if create_parents else _state_root()) / "voicememos.json"
 
 
 def cache_dir() -> Path:

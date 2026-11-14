@@ -1,4 +1,5 @@
 import json
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -86,24 +87,45 @@ def test_the_newest_twenty_are_shown_unless_all(tmp_path: Path, monkeypatch: pyt
     assert len(short) == 21 and short[-1] == "5 older memos not shown; --all lists every memo"
     assert short[0].endswith("id24")
     assert len(CliRunner().invoke(main, ["memos", "--all"]).output.splitlines()) == 25
+    assert len(json.loads(CliRunner().invoke(main, ["memos", "--json"]).output)) == 25
 
 
-def test_a_composition_memo_says_it_is_unsupported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    folder = library(tmp_path, monkeypatch, [Row("A", path="a.composition", audio=None)])
-    (folder / "a.composition").mkdir()
-    output = CliRunner().invoke(main, ["memos"]).output
-    assert " unsupported " in output and "cannot read yet" in output
+def display_column(line: str, needle: str) -> int:
+    before = line[: line.index(needle)]
+    return sum(2 if unicodedata.east_asian_width(c) in {"W", "F"} else 1 for c in before)
 
 
-def test_no_memos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    library(tmp_path, monkeypatch, [])
-    assert CliRunner().invoke(main, ["memos"]).output == "no memos\n"
+def test_wide_characters_keep_the_columns_aligned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    library(
+        tmp_path,
+        monkeypatch,
+        [Row("A", title="周会纪要", unix=1_760_000_001, path="a.m4a"), Row("B", title="abcdefgh", path="b.m4a")],
+    )
+    first, second = CliRunner().invoke(main, ["memos"]).output.splitlines()
+    assert display_column(first, "new") == display_column(second, "new")
 
 
-def test_a_missing_library_prints_the_sync_fix_and_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(voicememos, "default_recordings_dir", lambda: tmp_path / "missing")
+def test_a_long_wide_title_is_cut_to_the_column_width(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    library(tmp_path, monkeypatch, [Row("A", title="会" * 30, path="a.m4a")])
+    line = CliRunner().invoke(main, ["memos"]).output.splitlines()[0]
+    assert "会" * 19 + "…" in line and "会" * 20 not in line
+
+
+def test_the_eviction_warning_goes_to_stderr_and_the_listing_still_works(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    folder = make_library(tmp_path / "container", [Row("A", path="a.m4a")], drop=("ZEVICTIONDATE",))
+    monkeypatch.setattr(voicememos, "default_recordings_dir", lambda: folder)
     result = CliRunner().invoke(main, ["memos"])
-    assert result.exit_code == 1
-    assert result.output.startswith("error: no Voice Memos library found at ~/Library/Group Containers/")
-    assert "Fix: Voice Memos is not syncing to this Mac" in result.output
-    assert str(tmp_path) not in result.output
+    assert result.exit_code == 0
+    assert "warning: the Voice Memos database has no ZEVICTIONDATE" in result.stderr
+
+
+def test_listing_forgets_cached_memos_that_are_gone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    folder = library(tmp_path, monkeypatch, [Row("A", path="a.m4a")])
+    (memo,) = voicememos.list_memos(folder)
+    entry = {"id": "rec-aaaaaaaaaaaaaaaa", "size": memo.size, "mtime_ns": memo.mtime_ns}
+    cache_file = paths.voicememos_cache_file(create_parents=True)
+    cache_file.write_text(json.dumps({"A": entry, "GONE": entry}))
+    CliRunner().invoke(main, ["memos"])
+    assert list(json.loads(cache_file.read_text())) == ["A"]

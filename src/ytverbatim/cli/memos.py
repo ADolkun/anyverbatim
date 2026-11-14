@@ -1,15 +1,17 @@
 import json
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 import click
 
 from ytverbatim import paths
-from ytverbatim.acquire.voicememos import Availability, Memo, MemoCache, list_memos
+from ytverbatim.acquire.voicememos import Availability, Memo, MemoCache, read_library
+from ytverbatim.cli.fetch import EXIT_FAILED
 from ytverbatim.errors import ConfigError
 from ytverbatim.pipeline import CONTEXT_JSON
+from ytverbatim.ytdlp.runner import redact
 
-EXIT_FAILED = 1
 DEFAULT_LIMIT = 20
 _TITLE_WIDTH = 40
 _AVAILABILITY_LABEL: dict[Availability, str] = {
@@ -36,19 +38,24 @@ class _Entry:
 def memos_command(*, show_all: bool, as_json: bool, out: Path | None) -> None:
     """List the iPhone Voice Memos synced to this Mac, newest first: date, duration, title, status and id.
 
-    Reads the Voice Memos library read-only and hashes nothing. Status: transcribed (a document exists in the output
-    root), new, not downloaded (open the memo once in Voice Memos to download it), or unsupported.
+    Reads a copy of the Voice Memos library and hashes nothing. Status: transcribed (a document exists in the output
+    root), new, not downloaded (open the memo once in Voice Memos to download it), or unsupported. --json always
+    lists every memo.
     """
     try:
-        memos = list_memos()
+        listing = read_library()
     except ConfigError as exc:
-        click.echo(f"error: {exc}", err=True)
+        click.echo(f"error: {redact(str(exc))}", err=True)
         if exc.fix:
             click.echo(f"  Fix: {exc.fix}", err=True)
         raise SystemExit(EXIT_FAILED) from None
+    for warning in listing.warnings:
+        click.echo(f"warning: {warning}", err=True)
+    memos = listing.memos
     cache = MemoCache()
+    cache.prune({memo.unique_id for memo in memos})
     root = out if out is not None else paths.recordings_root()
-    shown = memos if show_all else memos[:DEFAULT_LIMIT]
+    shown = memos if show_all or as_json else memos[:DEFAULT_LIMIT]
     entries = [_entry(memo, cache, root) for memo in shown]
     if as_json:
         click.echo(json.dumps([_json(entry) for entry in entries], ensure_ascii=False))
@@ -89,22 +96,44 @@ def _duration(seconds: float | None) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
+def _width(text: str) -> int:
+    return sum(
+        0
+        if unicodedata.combining(c) or unicodedata.category(c) in {"Mn", "Me", "Cf"}
+        else 2
+        if unicodedata.east_asian_width(c) in {"W", "F"}
+        else 1
+        for c in text
+    )
+
+
+def _pad(text: str, width: int) -> str:
+    return text + " " * (width - _width(text))
+
+
 def _title(memo: Memo) -> str:
-    title = " ".join((memo.title or "-").split())
-    return title if len(title) <= _TITLE_WIDTH else title[: _TITLE_WIDTH - 1] + "…"
+    title = memo.title or "-"
+    if _width(title) <= _TITLE_WIDTH:
+        return title
+    kept = ""
+    for char in title:
+        if _width(kept + char) > _TITLE_WIDTH - 1:
+            break
+        kept += char
+    return kept + "…"
 
 
 def _print(entries: list[_Entry], *, hidden: int) -> None:
     if not entries:
         click.echo("no memos")
         return
-    title_width = max(len(_title(e.memo)) for e in entries)
+    title_width = max(_width(_title(e.memo)) for e in entries)
     status_width = max(len(e.status) for e in entries)
     for entry in entries:
         memo = entry.memo
         when = memo.recorded_at.astimezone().strftime("%Y-%m-%d %H:%M") if memo.recorded_at else "-" * 16
         click.echo(
-            f"{when}  {_duration(memo.duration_s):>7}  {_title(memo):<{title_width}}  "
+            f"{when}  {_duration(memo.duration_s):>7}  {_pad(_title(memo), title_width)}  "
             f"{entry.status:<{status_width}}  {short_id(memo)}"
         )
     if hidden:
@@ -113,4 +142,6 @@ def _print(entries: list[_Entry], *, hidden: int) -> None:
     if "not downloaded" in statuses:
         click.echo("Not downloaded: open the memo once in Voice Memos to download it")
     if "unsupported" in statuses:
-        click.echo("Unsupported: this memo is a .composition folder, which ytverbatim cannot read yet")
+        click.echo(
+            "Unsupported: ytverbatim cannot read this memo (a .composition folder, or a file outside the library)"
+        )

@@ -1,6 +1,8 @@
 import json
 import os
+import shutil
 import sqlite3
+import tempfile
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -101,7 +103,7 @@ def test_a_composition_folder_is_unsupported(tmp_path: Path) -> None:
 
 
 def test_rows_still_in_the_wal_are_read(tmp_path: Path) -> None:
-    folder = make_library(tmp_path, [Row("A", path="a.m4a")], wal=True)
+    folder = make_library(tmp_path, [Row("A", path="a.m4a")], wal=True, close=False)
     assert [m.unique_id for m in voicememos.list_memos(folder)] == ["A"]
     assert (folder / f"{voicememos.DATABASE}-wal").stat().st_size > 0
 
@@ -128,26 +130,27 @@ def test_a_folder_without_the_database_gives_the_sync_fix(tmp_path: Path) -> Non
         voicememos.list_memos(tmp_path / "Recordings")
 
 
-@pytest.mark.parametrize("denied", ["folder", "database"])
+@pytest.mark.parametrize("denied", ["folder", "database", "wal"])
 def test_permission_denied_gives_the_full_disk_access_fix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, denied: str
 ) -> None:
-    folder = make_library(tmp_path, [Row("A", path="a.m4a")])
+    folder = make_library(tmp_path, [Row("A", path="a.m4a")], wal=True, close=False)
     monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
-    real_stat, real_open = os.stat, Path.open
+    real_stat, real_copy = os.stat, shutil.copyfile
 
     def stat(path: object, *args: object, **kwargs: object) -> os.stat_result:
         if denied == "folder" and Path(str(path)) == folder:
             raise PermissionError(1, "Operation not permitted")
         return real_stat(path, *args, **kwargs)  # type: ignore[arg-type]
 
-    def open_(self: Path, *args: object, **kwargs: object):
-        if denied == "database" and self.name == voicememos.DATABASE:
+    def copyfile(src: str | Path, dst: str | Path, **kwargs: object) -> object:
+        name = Path(src).name
+        if (denied, name) in {("database", voicememos.DATABASE), ("wal", f"{voicememos.DATABASE}-wal")}:
             raise PermissionError(13, "Permission denied")
-        return real_open(self, *args, **kwargs)  # type: ignore[arg-type]
+        return real_copy(src, dst, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(os, "stat", stat)
-    monkeypatch.setattr(Path, "open", open_)
+    monkeypatch.setattr(shutil, "copyfile", copyfile)
     with pytest.raises(MemosAccessError) as caught:
         voicememos.list_memos(folder)
     fix = caught.value.fix
@@ -243,3 +246,130 @@ def test_an_unreadable_cache_is_an_empty_one(tmp_path: Path, content: str) -> No
     path = tmp_path / "voicememos.json"
     path.write_text(content)
     assert MemoCache(path).lookup(memo) is None
+
+
+def test_reading_a_closed_wal_database_leaves_the_container_untouched(tmp_path: Path) -> None:
+    folder = make_library(tmp_path, [Row("A", path="a.m4a")], wal=True)
+    before = {p.name: p.stat().st_mtime_ns for p in folder.iterdir()}
+    assert voicememos.DATABASE in before and f"{voicememos.DATABASE}-wal" not in before
+    assert [m.unique_id for m in voicememos.list_memos(folder)] == ["A"]
+    assert {p.name: p.stat().st_mtime_ns for p in folder.iterdir()} == before
+
+
+def test_the_private_copy_is_removed_afterwards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    folder = make_library(tmp_path, [Row("A", path="a.m4a")], wal=True, close=False)
+    voicememos.list_memos(folder)
+    assert list(scratch.iterdir()) == []
+
+
+def test_a_torn_copy_is_retried_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    folder = make_library(tmp_path, [Row("A", path="a.m4a")])
+    real, calls = sqlite3.connect, []
+
+    def flaky(*args: object, **kwargs: object) -> sqlite3.Connection:
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.DatabaseError("database disk image is malformed")
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sqlite3, "connect", flaky)
+    assert [m.unique_id for m in voicememos.list_memos(folder)] == ["A"]
+    assert len(calls) == 2
+
+
+def test_a_second_read_error_fails_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    folder = make_library(tmp_path, [Row("A", path="a.m4a")])
+    (folder / voicememos.DATABASE).write_bytes(b"not a database" * 100)
+    with pytest.raises(ConfigError, match="cannot read the Voice Memos database"):
+        voicememos.list_memos(folder)
+
+
+def test_out_of_range_values_do_not_crash_the_listing_or_probe(tmp_path: Path) -> None:
+    folder = make_library(
+        tmp_path,
+        [
+            Row("A", unix=1e300, path="a.m4a"),
+            Row("B", unix=float("inf"), duration=float("inf"), path="b.m4a"),
+            Row("C", unix=-1e300, duration=float("nan"), path="c.m4a"),
+        ],
+    )
+    assert voicememos.probe(folder) == voicememos.Probe("ok", memos=3)
+    by_id = {m.unique_id: m for m in voicememos.list_memos(folder)}
+    assert all(m.recorded_at is None for m in by_id.values())
+    assert (by_id["A"].duration_s, by_id["B"].duration_s, by_id["C"].duration_s) == (61.5, None, None)
+
+
+def test_other_os_errors_become_config_errors(tmp_path: Path) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    with pytest.raises(ConfigError) as caught:
+        voicememos.list_memos(blocker / "Recordings")
+    assert not isinstance(caught.value, MemosNotSyncingError | MemosAccessError)
+    assert voicememos.probe(blocker / "Recordings").state == "unreadable"
+    folder = make_library(tmp_path / "lib", [Row("A", path="a.m4a" + "x" * 5000, audio=None)])
+    with pytest.raises(ConfigError):
+        voicememos.list_memos(folder)
+
+
+def test_titles_lose_control_characters(tmp_path: Path) -> None:
+    folder = make_library(
+        tmp_path, [Row("A", title="\x1b[31mred\x1b[0m\nline\ttwo\u2028x", path="a.m4a"), Row("B", title="\x07")]
+    )
+    titles = {m.unique_id: m.title for m in voicememos.list_memos(folder)}
+    assert titles == {"A": "[31mred [0m line two x", "B": None}
+
+
+@pytest.mark.parametrize("zpath", ["/etc/hosts", "../outside.m4a", "a/../../outside.m4a"])
+def test_a_path_outside_the_library_is_unsupported(tmp_path: Path, zpath: str) -> None:
+    (tmp_path / "outside.m4a").write_bytes(b"audio")
+    folder = make_library(tmp_path / "lib", [Row("A", path=zpath, audio=None)])
+    (memo,) = voicememos.list_memos(folder)
+    assert (memo.availability, memo.audio) == ("unsupported", None)
+
+
+def test_a_missing_eviction_column_is_a_warning_not_silence(tmp_path: Path) -> None:
+    folder = make_library(tmp_path, [Row("A", path="a.m4a")], drop=("ZEVICTIONDATE",))
+    listing = voicememos.read_library(folder)
+    assert "ZEVICTIONDATE" in listing.warnings[0] and "Recently Deleted" in listing.warnings[0]
+    assert voicememos.probe(folder).detail == listing.warnings[0]
+    assert voicememos.read_library(make_library(tmp_path / "ok", [Row("A")])).warnings == ()
+
+
+def test_concurrent_runs_keep_each_others_cache_entries(tmp_path: Path) -> None:
+    folder = make_library(tmp_path, [Row("A", path="a.m4a"), Row("B", path="b.m4a")])
+    a, b = sorted(voicememos.list_memos(folder), key=lambda m: m.unique_id)
+    path = tmp_path / "voicememos.json"
+    first, second = MemoCache(path), MemoCache(path)
+    first.resolve(a, lambda _p: "rec-aaaaaaaaaaaaaaaa")
+    second.resolve(b, lambda _p: "rec-bbbbbbbbbbbbbbbb")
+    fresh = MemoCache(path)
+    assert (fresh.lookup(a), fresh.lookup(b)) == ("rec-aaaaaaaaaaaaaaaa", "rec-bbbbbbbbbbbbbbbb")
+
+
+def test_prune_forgets_memos_that_left_the_database(tmp_path: Path) -> None:
+    folder = make_library(tmp_path, [Row("A", path="a.m4a"), Row("B", path="b.m4a")])
+    a, b = sorted(voicememos.list_memos(folder), key=lambda m: m.unique_id)
+    path = tmp_path / "voicememos.json"
+    cache = MemoCache(path)
+    cache.resolve(a, lambda _p: "rec-aaaaaaaaaaaaaaaa")
+    cache.resolve(b, lambda _p: "rec-bbbbbbbbbbbbbbbb")
+    cache.prune({"A"})
+    assert list(json.loads(path.read_text())) == ["A"]
+    mtime = path.stat().st_mtime_ns
+    cache.prune({"A"})
+    assert path.stat().st_mtime_ns == mtime
+
+
+def test_the_default_cache_is_created_only_when_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    folder = make_library(tmp_path / "lib", [Row("A", path="a.m4a")])
+    (memo,) = voicememos.list_memos(folder)
+    cache = MemoCache()
+    assert cache.lookup(memo) is None
+    cache.prune({"A"})
+    assert not (tmp_path / "state").exists()
+    cache.resolve(memo, lambda _p: "rec-aaaaaaaaaaaaaaaa")
+    assert MemoCache().lookup(memo) == "rec-aaaaaaaaaaaaaaaa"
