@@ -476,7 +476,8 @@ def test_one_stays_part_of_the_number_elsewhere(text: str, value: str) -> None:
         ("十二点三十五", [("十二点", "12点"), ("三十五", "35")]),
         ("下午四点四十分", [("四点", "4点"), ("四十", "40")]),
         ("二十四点五十九", [("二十四点", "24点"), ("五十九", "59")]),
-        ("一点十分", [("一点", "1点")]),
+        ("一点十分", [("一点", "1点"), ("十", "10")]),
+        ("三点廿", [("三点", "3点"), ("廿", "20")]),
         ("一点五万", [("一点五万", "15000")]),
         ("三点一四", [("三点一四", "3.14")]),
         ("三点零五", [("三点零五", "3.05")]),
@@ -575,6 +576,43 @@ def test_ji_and_shu_make_a_rough_figure(text: str, expected: list[tuple[str, str
     quantities = _quantities(text)
     assert [(q.token.surface, q.token.value_itn) for q in quantities] == expected
     assert all(q.value is None for q in quantities)
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("指数十月份", "指数10月份"),
+        ("指数10月份", "指数10月份"),
+        ("人数十号", "人数10号"),
+        ("次数十点钟", "次数10点钟"),
+    ],
+)
+def test_a_date_or_time_after_shu_is_never_rough(text: str, value: str) -> None:
+    assert itn(text) == value
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("三到五个", [("三", "3"), ("五个", "5个")]),
+        ("三至五年", [("三", "3"), ("五年", "5年")]),
+        ("两、三家", [("两", "2"), ("三家", "3家")]),
+        ("三到五到七个", [("三", "3"), ("五", "5"), ("七个", "7个")]),
+        ("五个到八", [("五个", "5个"), ("八", "8")]),
+        ("十~二十个", [("十", "10"), ("二十个", "20个")]),
+        ("3到五个", [("3", "3"), ("五个", "5个")]),
+        ("三到5个", [("三", "3"), ("5个", "5个")]),
+    ],
+)
+def test_a_lone_numeral_linked_to_a_figure_is_the_other_end_of_its_range(
+    text: str, expected: list[tuple[str, str]]
+) -> None:
+    assert [(t.surface, t.value_itn) for t in quantity_tokens(text)] == expected
+
+
+@pytest.mark.parametrize("text", ["第三到五", "几到五个", "星期一到五", "三到几个", "三块五", "说到三"])
+def test_a_lone_numeral_without_a_figure_to_anchor_it_is_no_quantity(text: str) -> None:
+    assert all(len(t.surface) > 1 for t in quantity_tokens(text))
 
 
 def test_a_rough_figure_never_shares_a_value_with_an_exact_one() -> None:
