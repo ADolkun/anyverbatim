@@ -19,7 +19,7 @@ from collections.abc import Callable, Generator, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rapidfuzz.distance import Levenshtein
@@ -107,13 +107,15 @@ class Candidate:
     """A correction model.
 
     By default a Claude CLI model id. With ``revision``, a Hugging Face repo served locally. With ``effort``, a model
-    labelled ``model`` that an external client factory serves at that reasoning effort.
+    labelled ``model`` that an external client factory serves at that reasoning effort, or, with ``provider`` too, a
+    model that provider of ytverbatim's own serves at that effort.
     """
 
     id: str
     model: str
     revision: str | None = None
     effort: str | None = None
+    provider: Literal["chatgpt"] | None = None
 
     @property
     def local(self) -> bool:
@@ -121,15 +123,17 @@ class Candidate:
 
     @property
     def external(self) -> bool:
-        return self.effort is not None
+        return self.effort is not None and self.provider is None
 
     @property
     def client_id(self) -> str:
         """The id checkpoints and `Edit.llm` carry.
 
         A local model's names its weights, not the server's host; an external one's names the model and the effort,
-        so another effort never resumes or reuses this run.
+        so another effort never resumes or reuses this run. A native one's is its client's own id.
         """
+        if self.provider is not None:
+            return f"{self.provider}:{self.model}@{self.effort}"
         if self.effort is not None:
             return f"external:{self.model}@{self.effort}"
         if self.revision is None:
@@ -139,7 +143,7 @@ class Candidate:
     @property
     def weights(self) -> disk.Weights:
         if self.revision is None:
-            raise ConfigError(f"{self.id} has no local weights; it runs through the Claude CLI or an external factory")
+            raise ConfigError(f"{self.id} has no local weights; it runs through a provider or an external factory")
         return disk.Weights(self.model, self.revision)
 
 
@@ -152,6 +156,7 @@ CANDIDATES: dict[str, Candidate] = {
         Candidate("l-qwen3-8b", "mlx-community/Qwen3-8B-8bit", "48a0b75b1ae72503e21e1558d040bc227510ff06"),
         Candidate("x-gpt61-medium", "gpt-6.1-sol", effort="medium"),
         Candidate("x-gpt61-high", "gpt-6.1-sol", effort="high"),
+        Candidate("o-gpt61-medium", "gpt-6.1-sol", effort="medium", provider="chatgpt"),
     )
 }
 

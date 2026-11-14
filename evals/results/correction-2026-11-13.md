@@ -153,3 +153,13 @@ candidates.
 gpt-6.1-sol at medium effort, run through an external client, scored higher than every candidate on a built-in provider.
 High effort added nothing measurable and took 1.7 times as long. Two follow-ups would let the checker pass these runs on
 its own: splitting figures fused to tickers, and having the correction guard record a merged ticker-like word.
+
+### Update, 2026-11-14
+
+**gpt-6.1-sol at medium effort is now the native default LLM** (`chatgpt:gpt-6.1-sol@medium`), served by ytverbatim's
+own `chatgpt` provider through the user's ChatGPT plan after one `ytverbatim llm login`. It led every candidate in the
+screen above: 57.58 net errors removed per hour against c-sonnet's 42.71, at fix precision 0.929. High effort is not the
+default because it added nothing measurable and took 1.7 times as long. `claude-cli:claude-sonnet-5-5` remains the
+recommended alternative for users with a claude.ai subscription instead of a ChatGPT plan. The native provider sends the
+same request the external client sent for `x-gpt61-medium`; its eval candidate is `o-gpt61-medium`, a run separate from
+the stored external runs.

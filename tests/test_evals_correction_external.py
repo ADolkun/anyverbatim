@@ -2,11 +2,13 @@ import importlib
 import json
 import sys
 import textwrap
+import time
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
 import pytest
+from chatgpt_fakes import store_account
 from click.testing import CliRunner
 from evals_fixture import EN, ZH, make_eval, whole_file_rows
 
@@ -17,7 +19,7 @@ from evals.manifest import Manifest
 from evals.run_correction import CLIENT_FACTORY_ENV, external_client
 from evals.store import Layout, write_rows
 from ytverbatim.errors import ConfigError
-from ytverbatim.llm import ClaudeCLIClient
+from ytverbatim.llm import ChatGPTClient, ClaudeCLIClient
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 
 HYPOTHESIS = "w-prod"
@@ -236,3 +238,50 @@ def test_existing_candidates_keep_their_run_identity() -> None:
         "punctuate": correction.punctuate_module.PROMPT_VERSION,
         "correct": correction.correct_module.PROMPT_VERSION,
     }
+
+
+NATIVE = CANDIDATES["o-gpt61-medium"]
+
+
+def test_the_native_candidate_runs_on_the_chatgpt_provider_under_its_own_identity() -> None:
+    assert (NATIVE.model, NATIVE.effort, NATIVE.provider) == ("gpt-6.1-sol", "medium", "chatgpt")
+    assert not NATIVE.external and not NATIVE.local
+    assert NATIVE.client_id == "chatgpt:gpt-6.1-sol@medium" == ChatGPTClient(model="gpt-6.1-sol", effort="medium").id
+    assert NATIVE.client_id != MEDIUM.client_id
+    with pytest.raises(ConfigError, match="no local weights"):
+        _ = NATIVE.weights
+
+
+def test_the_native_candidate_needs_a_chatgpt_sign_in_and_no_factory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout, _ = eval_with_base(tmp_path, monkeypatch)
+    monkeypatch.setattr(run_correction, "ClaudeCLIClient", lambda **_: pytest.fail("fell back to the Claude CLI"))
+    result = CliRunner().invoke(run_correction.main, ["correct", "--candidate", "o-gpt61-medium"])
+    assert isinstance(result.exception, ConfigError)
+    assert "ytverbatim llm login" in str(result.exception)
+    assert CLIENT_FACTORY_ENV not in str(result.exception)
+    assert not (correction.run_dir(layout, NATIVE) / "calls.jsonl").exists()
+
+
+def test_a_native_run_records_the_chatgpt_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    layout, _ = eval_with_base(tmp_path, monkeypatch)
+    store_account(expires_at=time.time() + 3600)
+    sent: list[str] = []
+
+    def complete(self: ChatGPTClient, request: LLMRequest) -> LLMResponse:
+        sent.append(self.id)
+        items, _ = json.JSONDecoder().raw_decode(request.user.split("SEGMENTS:\n", 1)[1])
+        if "proofreader" in request.system:
+            return LLMResponse(text=json.dumps({"fixed": []}), usage=Usage(10, 5), elapsed_s=0.1)
+        reply = {"items": [{"i": i["i"], "text": i["text"] + "."} for i in items]}
+        return LLMResponse(text=json.dumps(reply), usage=Usage(10, 5), elapsed_s=0.1)
+
+    monkeypatch.setattr(ChatGPTClient, "complete", complete)
+    result = CliRunner().invoke(run_correction.main, ["correct", "--candidate", "o-gpt61-medium"])
+    assert result.exit_code == 0, result.output
+    done = load_candidate_file(layout, NATIVE, ZH)
+    assert done is not None
+    assert done.client == "chatgpt:gpt-6.1-sol@medium"
+    assert set(sent) == {"chatgpt:gpt-6.1-sol@medium"}
+    assert correction.run_dir(layout, NATIVE) != correction.run_dir(layout, MEDIUM)
