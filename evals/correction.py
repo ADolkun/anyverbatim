@@ -60,7 +60,7 @@ from ytverbatim.llm import OpenAICompatClient, openai_compat
 from ytverbatim.llm.protocol import LLMClient, LLMRequest, LLMResponse, Readiness, Usage
 from ytverbatim.stages import Stretch
 from ytverbatim.store import digest
-from ytverbatim.text import clean
+from ytverbatim.text import clean, guards, numbers
 from ytverbatim.text import correct as correct_module
 from ytverbatim.text import punctuate as punctuate_module
 from ytverbatim.text.correct import Rejection, correct_segments
@@ -282,7 +282,12 @@ def base_versions() -> dict[str, str]:
 
 
 def candidate_versions() -> dict[str, str]:
-    return {**base_versions(), "correct": correct_module.PROMPT_VERSION}
+    return {
+        **base_versions(),
+        "correct": correct_module.PROMPT_VERSION,
+        "numbers": numbers.VERSION,
+        "guards": guards.VERSION,
+    }
 
 
 def _metadata(store: Layout, video: Video) -> tuple[dict[str, object], VideoMetadata]:

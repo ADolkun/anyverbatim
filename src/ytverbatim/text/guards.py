@@ -19,6 +19,9 @@ from typing import Literal
 
 from ytverbatim.text.numbers import quantity_tokens
 
+# Part of the stage key of every stage that applies these guards: bump it on any change to what they accept.
+VERSION = "guards-v1"
+
 GuardName = Literal[
     "empty",
     "shrink",

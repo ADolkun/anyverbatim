@@ -63,7 +63,7 @@ from ytverbatim.render import render_markdown
 from ytverbatim.stages import Stretch, Transcribed, build_document, stretch_flag, with_results
 from ytverbatim.store import StageStore, input_hash
 from ytverbatim.store import lock as video_lock
-from ytverbatim.text import clean, numeric
+from ytverbatim.text import clean, guards, numbers, numeric
 from ytverbatim.text import correct as correct_module
 from ytverbatim.text import punctuate as punctuate_module
 from ytverbatim.text.correct import CorrectionContext, correct_segments
@@ -77,9 +77,11 @@ CONTEXT_JSON = "context.json"
 CONTEXT_MD = "context.md"
 
 # The pipeline's own part of each stage's version: bump it when this module changes what a stage outputs for the same
-# input. The text modules' versions are folded in by `stage_versions`, so a prompt, guard or rule change there redoes
-# that stage, everything after it, and the context record. Worker folders are keyed by the decode request alone, so an
-# `asr` or `second_opinion` bump re-reads the decoded rows they keep instead of decoding the audio again.
+# input. The text modules' versions are folded in by `stage_versions`, so a prompt, tokenizer, guard or rule change
+# there redoes that stage, everything after it, and the context record. LLM checkpoints are keyed by the request alone
+# (`PROMPT_VERSION`, client, prompt), so a `numbers` or `guards` bump re-applies the new rules to the stored replies
+# without asking again. Worker folders are keyed by the decode request alone, so an `asr` or `second_opinion` bump
+# re-reads the decoded rows they keep instead of decoding the audio again.
 _PIPELINE_VERSIONS: dict[str, int] = {
     "asr": 2,
     "captions": 1,
@@ -98,11 +100,11 @@ def stage_versions() -> dict[str, str]:
     modules = {
         "asr": [stages.VERSION],
         "captions": [stages.VERSION],
-        "second_opinion": [numeric.PROMPT_VERSION],
+        "second_opinion": [numeric.PROMPT_VERSION, numbers.VERSION],
         "normalize": [clean.VERSION, stages.VERSION],
         "punctuate": [punctuate_module.PROMPT_VERSION, stages.VERSION],
-        "correct": [correct_module.PROMPT_VERSION, stages.VERSION],
-        "numeric": [numeric.PROMPT_VERSION, stages.VERSION],
+        "correct": [correct_module.PROMPT_VERSION, stages.VERSION, numbers.VERSION, guards.VERSION],
+        "numeric": [numeric.PROMPT_VERSION, stages.VERSION, numbers.VERSION, guards.VERSION],
         "context": [stages.VERSION],
     }
     return {stage: "+".join([str(version), *modules[stage]]) for stage, version in _PIPELINE_VERSIONS.items()}

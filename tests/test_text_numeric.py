@@ -114,6 +114,17 @@ def test_readings_that_differ_only_in_surface_form_agree(asr: str, caption: str,
     assert client.requests == []
 
 
+def test_a_per_unit_one_after_a_figure_in_wan_agrees_with_its_digit_form(tmp_path: Path) -> None:
+    client = FakeClient()
+    segments = [TimedText("他的工资是三万一个月，还不错", 0.0, 3.0)]
+    result = run(
+        segments, Evidence(PRIMARY, captions=(manual((0.0, 3.0, "他的工资是3万一个月还不错")),)), client, tmp_path
+    )
+    assert result.flags == ((),)
+    assert result.stats == NumericStats(agreed=2)
+    assert client.requests == []
+
+
 def test_without_an_llm_a_dispute_is_flagged_with_its_readings_and_nothing_changes(tmp_path: Path) -> None:
     result = verify_numbers(
         DISPUTED,
@@ -289,8 +300,8 @@ def test_an_unalignable_span_becomes_single_source(tmp_path: Path) -> None:
 
 
 def test_numeral_words_are_never_spans(tmp_path: Path) -> None:
-    segments = [TimedText("我们一直觉得两家公司一样好", 0.0, 3.0)]
-    captions = manual((0.0, 3.0, "我们一致觉得两家公司依样好"))
+    segments = [TimedText("我们一直觉得这家公司一样好", 0.0, 3.0)]
+    captions = manual((0.0, 3.0, "我们一致觉得这家公司依样好"))
     client = FakeClient()
     result = run(segments, Evidence(PRIMARY, captions=(captions,)), client, tmp_path)
     assert result.flags == ((),)

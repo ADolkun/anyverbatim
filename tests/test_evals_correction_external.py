@@ -237,6 +237,8 @@ def test_existing_candidates_keep_their_run_identity() -> None:
         "clean": correction.clean.VERSION,
         "punctuate": correction.punctuate_module.PROMPT_VERSION,
         "correct": correction.correct_module.PROMPT_VERSION,
+        "numbers": correction.numbers.VERSION,
+        "guards": correction.guards.VERSION,
     }
 
 

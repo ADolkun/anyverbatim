@@ -13,6 +13,9 @@ from typing import Literal
 
 import cn2an
 
+# Part of the stage key of every stage that reads quantities: bump it on any change to what is a token or its value.
+VERSION = "numbers-v1"
+
 QKind = Literal["number", "currency", "percent", "ticker", "cjk_quantity"]
 
 _NUMERALS = "〇零一二两兩三四五六七八九十百千万萬亿億廿卅"
@@ -44,27 +47,68 @@ _CURRENCY_WORDS = (
     "块",
     "塊",
 )
-_MEASURE_WORDS = (
-    *_CURRENCY_WORDS,
-    "个百分点",
+# Units that state a value rather than count things: 三个百分点 is a change of three points, not three objects.
+_VALUE_UNITS = ("个百分点", "个基点", "基点", "倍", "成")
+_CALENDAR_UNITS = ("月", "日", "号", "点钟", "点")
+_QUARTER_NAMES = ("季度", "季")
+# 分 (十分 "very", scores), 部 (三部曲), 手 (二手), 线 (二线城市), 方 (六方会谈), 届, 大 and 国 are left out on purpose:
+# after a numeral they are more often part of a word or a name than a count.
+_COUNT_CLASSIFIERS = (
     "个月",
     "个",
     "股",
     "年",
-    "月",
-    "日",
-    "号",
-    "点钟",
-    "点",
-    "倍",
-    "成",
     "期",
     "次",
     "天",
     "周",
-    "季度",
-    "季",
+    "家",
+    "种",
+    "类",
+    "条",
+    "只",
+    "支",
+    "位",
+    "名",
+    "人",
+    "本",
+    "项",
+    "台",
+    "张",
+    "份",
+    "句",
+    "件",
+    "套",
+    "篇",
+    "颗",
+    "笔",
+    "单",
+    "批",
+    "轮",
+    "场",
+    "遍",
+    "页",
+    "集",
+    "步",
+    "小时",
+    "分钟",
+    "秒钟",
+    "秒",
+    "周岁",
+    "岁",
+    "周年",
+    "世纪",
+    "平方米",
+    "米",
+    "公里",
+    "吨",
+    "公斤",
+    "斤",
+    "克",
+    "升",
+    "度",
 )
+_MEASURE_WORDS = (*_CURRENCY_WORDS, *_VALUE_UNITS, *_CALENDAR_UNITS, *_QUARTER_NAMES, *_COUNT_CLASSIFIERS)
 
 
 # Words whose numeral characters do not state a quantity. They are matched before numeral runs, so a
@@ -121,6 +165,9 @@ _IDIOMS = (
     "一心一意",
     "三三两两",
     "七七八八",
+    "十万八千里",
+    "进一步",
+    "一步一步",
 )
 _IDIOM_PATTERNS = (
     # "By all means": 千万不要, 千万别, 千万记住. 千万 before a measure word (千万元) stays a number.
@@ -129,6 +176,8 @@ _IDIOM_PATTERNS = (
     r"一点(?![〇零一二两兩三四五六七八九十钟半])",
     # Weekdays, not 周1; 每周一次 is "once a week".
     r"(?:周|星期|礼拜)[一二三四五六日天](?![次回遍趟])",
+    # Fractions (三分之一, 千分之五) are not one quantity; 百分之 on its own is a percent.
+    rf"(?!百分之)[{_NUMERALS}]+分之[{_NUMERALS}]+",
 )
 
 
@@ -200,7 +249,8 @@ _TOKEN = re.compile(
     "|".join(
         (
             rf"(?P<idiom>{'|'.join(_IDIOM_PATTERNS)}|{_alternation(_IDIOMS)})",
-            rf"(?P<cjk>(?P<pct>百分之)?(?P<ord>第)?(?P<run>[{_NUMERALS}]+(?:点[{_NUMERALS}]+)?)"
+            # A 点 followed by tens or hundreds is a clock unit (三点四十分), not a decimal point.
+            rf"(?P<cjk>(?P<pct>百分之)?(?P<ord>第)?(?P<run>[{_NUMERALS}]+(?:点(?![{_NUMERALS}]*[十百千廿卅])[{_NUMERALS}]+)?)"
             rf"(?P<unit>{_alternation((*_MEASURE_WORDS, '%'))})?)",
             rf"(?P<cashtag>\$[A-Z]{{1,6}}(?:\.[A-Z]{{1,2}})?{_NO_ALNUM_AFTER})",
             rf"(?P<exchange>(?i:\b(?:NYSE|NASDAQ|AMEX|NYSEARCA|NYSEAMERICAN|BATS|OTC|OTCQX|OTCQB))\s*:\s*"
@@ -239,6 +289,13 @@ _ZEROS = frozenset("〇零")
 _ADJACENT_DIGITS = re.compile("[一二两三四五六七八九]{2}")
 # One digit after 亿 or 万亿 is the next lower unit, as 五 in 一万五: 一亿五 is 1.5亿.
 _YI_SHORTHAND = re.compile("(?P<head>.*?(?P<unit>万?亿))(?P<digit>[一二三四五六七八九])")
+# Speech marks a skipped place with 零 (一亿零五千三百 is 100,005,300), so a 千 or 百 group straight after 亿 is
+# the 万 group: 一亿五千三 is 1.53亿. After 万亿 it is the 亿 group.
+_YI_GROUP = re.compile("(?P<head>.*?(?P<unit>万?亿))(?P<group>(?![零〇])[^万亿]*[百千][^万亿]*)")
+# A shorthand digit (一万五, 一千五) already stands for the next lower place, so a decimal after it is not one number.
+_SHORTHAND_END = re.compile("[百千万亿][一二两三四五六七八九]$")
+_PLACE_START = frozenset("十百千万亿萬億")
+_SHORTHAND_AFTER_UNIT = re.compile("[万亿][一二三四五六七八九]$")
 _FRACTION = re.compile(rf"([{''.join(_DIGIT_VALUE)}]+)([万亿]*)")
 
 
@@ -296,15 +353,19 @@ def _integer_value(integer: str) -> str | None:
     if not any(ch in _PLACE_WORDS for ch in integer):
         # Digit by digit, keeping leading zeros as the digit path keeps 0700: 零零后 is 00后.
         return "".join(_COUNTING_DIGITS[ch] for ch in integer)
-    shorthand = _YI_SHORTHAND.fullmatch(integer)
-    if shorthand is None:
-        value = _cn2an_value(integer)
-    else:
+    value: Decimal | None
+    if shorthand := _YI_SHORTHAND.fullmatch(integer):
         # cn2an's speaking mode has no unit below 亿, so the trailing digit of 一亿五 is placed here: 千万, or 千亿
         # after 万亿.
         head = _cn2an_value(shorthand["head"])
         lower_unit = Decimal(10) ** (_magnitude_exponent(shorthand["unit"]) - 1)
         value = None if head is None else head + int(_DIGIT_VALUE[shorthand["digit"]]) * lower_unit
+    elif group := _YI_GROUP.fullmatch(integer):
+        head, part = _cn2an_value(group["head"]), _integer_value(group["group"])
+        place = Decimal(10) ** (_magnitude_exponent(group["unit"]) - _MAGNITUDE["万"])
+        value = None if head is None or part is None or Decimal(part) >= place else head + Decimal(part) * place
+    else:
+        value = _cn2an_value(integer)
     return None if value is None else _plain(value)
 
 
@@ -312,8 +373,7 @@ def _cjk_value(integer: str, fraction: str) -> str | None:
     whole = _integer_value(integer)
     if whole is None or not fraction:
         return whole
-    # 一亿五点五 mixes shorthand with a decimal and is not one number.
-    if _YI_SHORTHAND.fullmatch(integer):
+    if _SHORTHAND_END.search(integer) or _YI_GROUP.fullmatch(integer):
         return None
     # The magnitude after a decimal scales the whole number: 一点五万亿 is 1.5 × 10^12.
     parts = _FRACTION.fullmatch(fraction)
@@ -324,34 +384,98 @@ def _cjk_value(integer: str, fraction: str) -> str | None:
     return _plain(Decimal(f"{whole}.{decimals}") * Decimal(10) ** scale)
 
 
-def _cjk_token(match: re.Match[str]) -> QToken | None:
-    run, unit = match.group("run"), match.group("unit") or ""
-    numeral_count = sum(1 for ch in run if ch != "点")
-    percent, ordinal = match.group("pct"), match.group("ord")
-    if not (percent or ordinal or unit or numeral_count >= _MIN_BARE_RUN):
+def _top_magnitude(numerals: str) -> str:
+    return next((unit for unit in ("万亿", "亿", "万") if unit in numerals), "")
+
+
+@dataclass(frozen=True, slots=True)
+class _Quantity:
+    """A token with the parts of it that a numeral rewrite needs.
+
+    ``prefix`` is 百分之 or 第, ``run`` the span of the numeral or digit run (a digit token's magnitude included),
+    ``unit`` the measure word or %, ``value`` the run's inverse text normalization without prefix or unit (None for a
+    ticker, a spelled-out number or a run that is not one number; a code read digit by digit keeps its leading zeros)
+    and ``magnitude`` the largest of 万亿, 亿 and 万 the run is spoken or written in.
+    """
+
+    token: QToken
+    prefix: str
+    run: tuple[int, int]
+    unit: str
+    value: str | None
+    magnitude: str
+
+
+def _cjk_quantity(text: str, start: int, prefix: str, run: tuple[int, int], unit: str) -> _Quantity | None:
+    surface_run = text[run[0] : run[1]]
+    numeral_count = sum(1 for ch in surface_run if ch != "点")
+    if not (prefix or unit or numeral_count >= _MIN_BARE_RUN):
         return None
-    numerals = run.translate(_VARIANT_NUMERALS).replace("廿", "二十").replace("卅", "三十")
+    numerals = surface_run.translate(_VARIANT_NUMERALS).replace("廿", "二十").replace("卅", "三十")
     integer, _, fraction = numerals.partition("点")
-    if not _is_quantity(integer, unit):
+    if not _is_quantity(integer, unit) or _is_approximation(text, prefix, run, numerals):
         return None
+    end = run[1] + len(unit)
+    surface = text[start:end]
     value = _cjk_value(integer, fraction)
+    ordinal = "第" if prefix == "第" else ""
     if value is None:
-        itn = match.group(0)
-    elif percent:
+        itn = surface
+    elif prefix == "百分之":
         itn = f"{value}%{unit}"
     elif unit in _USD_WORDS:
-        itn = f"{'第' if ordinal else ''}${value}"
+        itn = f"{ordinal}${value}"
     else:
-        itn = f"{'第' if ordinal else ''}{value}{unit}"
-    kind: QKind = "percent" if percent else "currency" if unit in _CURRENCY_WORDS else "cjk_quantity"
-    return QToken(match.start(), match.end(), match.group(0), itn, kind)
+        itn = f"{ordinal}{value}{unit}"
+    kind: QKind = "percent" if prefix == "百分之" else "currency" if unit in _CURRENCY_WORDS else "cjk_quantity"
+    return _Quantity(QToken(start, end, surface, itn, kind), prefix, run, unit, value, _top_magnitude(numerals))
 
 
-def _number_token(match: re.Match[str]) -> QToken:
+def _is_approximation(text: str, prefix: str, run: tuple[int, int], numerals: str) -> bool:
+    """几 or 数 next to a run makes it a rough figure: 二十几岁, 几十个, 数十亿, 一百几十.
+
+    Approximate 数 is followed by a place word, so the 数 that ends a word (指数两千八百点) is not one.
+    """
+    if not prefix and text[run[0] - 1 : run[0]] in ("几", "数") and numerals[0] in _PLACE_START:
+        return True
+    return text[run[1] : run[1] + 1] == "几" and text[run[1] : run[1] + 2] != "几乎"
+
+
+def _per_unit_split(text: str, match: re.Match[str]) -> int | None:
+    """Where 一 starts a "per unit" phrase after a figure in 万 or 亿: 三万一个月 is 30000 a month, not 31000 months.
+
+    The 一 is split off only when the rest ends in 万 or 亿, or in the shorthand digit after one (三万一一个月).
+    After 百 or 千 the shorthand reading stays: 一百一 is 110.
+    """
+    unit = match.group("unit") or ""
+    if match.group("pct") or match.group("ord") or unit not in _COUNT_CLASSIFIERS:
+        return None
+    start, end = match.span("run")
+    rest = text[start : end - 1].translate(_VARIANT_NUMERALS)
+    if text[end - 1] != "一" or not (rest.endswith(("万", "亿")) or _SHORTHAND_AFTER_UNIT.search(rest)):
+        return None
+    return end - 1
+
+
+def _cjk_quantities(text: str, match: re.Match[str]) -> list[_Quantity]:
+    prefix = match.group("pct") or match.group("ord") or ""
+    unit = match.group("unit") or ""
+    run = match.span("run")
+    split = _per_unit_split(text, match)
+    if split is not None:
+        head = _cjk_quantity(text, run[0], "", (run[0], split), "")
+        if head is not None and head.value is not None:
+            tail = _cjk_quantity(text, split, "", (split, run[1]), unit)
+            return [head] if tail is None else [head, tail]
+    quantity = _cjk_quantity(text, match.start(), prefix, run, unit)
+    return [] if quantity is None else [quantity]
+
+
+def _number_quantity(match: re.Match[str]) -> _Quantity:
     digits = _ascii_digits(match.group("digits"))
-    magnitude, percent = match.group("magnitude"), match.group("percent")
+    magnitude, percent = match.group("magnitude") or "", match.group("percent")
     en_magnitude = (match.group("en_magnitude") or "").strip().casefold()
-    exponent = sum(_MAGNITUDE[ch] for ch in magnitude or "") + _EN_MAGNITUDE.get(en_magnitude, 0)
+    exponent = _magnitude_exponent(magnitude) + _EN_MAGNITUDE.get(en_magnitude, 0)
     if exponent:
         digits = _plain(Decimal(digits) * Decimal(10) ** exponent)
     sign = (match.group("sign") or match.group("sign2") or "").replace("−", "-")
@@ -362,7 +486,15 @@ def _number_token(match: re.Match[str]) -> QToken:
         measure = "" if measure in _USD_WORDS else measure
     itn = f"{sign}{symbol}{digits}{'%' if percent else ''}{measure}"
     kind: QKind = "percent" if percent else "currency" if symbol or measure in _CURRENCY_WORDS else "number"
-    return QToken(match.start(), match.end(), match.group(0), itn, kind)
+    run_end = match.end("magnitude") if magnitude else match.end("digits")
+    return _Quantity(
+        QToken(match.start(), match.end(), match.group(0), itn, kind),
+        "",
+        (match.start("digits"), run_end),
+        match.group("measure") or ("%" if percent else ""),
+        f"{sign}{digits}",
+        _top_magnitude(magnitude.translate(_VARIANT_NUMERALS)),
+    )
 
 
 def _spelled_tokens(match: re.Match[str]) -> list[QToken]:
@@ -462,32 +594,39 @@ def quantity_tokens(text: str) -> list[QToken]:
     """Return the quantity tokens of ``text`` in order, with offsets into ``text`` itself.
 
     A Chinese numeral run is a quantity only when it has two or more numeral characters, is
-    attached to a measure word, or follows ``第``, and is neither an idiom nor a range of bare
-    digits. ``value_itn`` is the inverse text normalization of the token: ``一百五十期`` becomes
-    ``150期``, ``3.5亿`` becomes ``350000000`` and ``2万亿`` becomes ``2000000000000``. English
-    magnitudes scale the same way (``$1.5 billion`` and ``$1.5B`` become ``$1500000000``), a
-    dollar amount is ``$`` however it is written (``15 dollars``, ``15美元``), ``15 percent`` is
-    ``15%``, and spelled-out numbers convert (``twenty-five`` is ``25``).
+    attached to a measure word, or follows ``第``, and is neither an idiom, a fraction, a range of
+    bare digits nor a rough figure with ``几`` or ``数``. ``value_itn`` is the inverse text
+    normalization of the token: ``一百五十期`` becomes ``150期``, ``3.5亿`` becomes ``350000000``
+    and ``2万亿`` becomes ``2000000000000``. English magnitudes scale the same way (``$1.5
+    billion`` and ``$1.5B`` become ``$1500000000``), a dollar amount is ``$`` however it is written
+    (``15 dollars``, ``15美元``), ``15 percent`` is ``15%``, and spelled-out numbers convert
+    (``twenty-five`` is ``25``).
     """
-    tokens: list[QToken] = []
+    return [quantity.token for quantity in _quantities(text)]
+
+
+def _quantities(text: str) -> list[_Quantity]:
+    found: list[_Quantity] = []
     for match in _TOKEN.finditer(text):
         if match.group("idiom") is not None:
             continue
         if match.group("cjk") is not None:
-            token = _cjk_token(match)
-            if token is not None:
-                tokens.append(token)
+            found.extend(_cjk_quantities(text, match))
         elif match.group("number") is not None:
-            tokens.append(_number_token(match))
+            found.append(_number_quantity(match))
             fused = _fused_symbol(text, match.end())
             if fused is not None:
-                tokens.append(fused)
+                found.append(_bare(fused))
         elif match.group("spelled") is not None:
-            tokens.extend(_spelled_tokens(match))
+            found.extend(_bare(token) for token in _spelled_tokens(match))
         else:
             surface = match.group(0)
-            tokens.append(QToken(match.start(), match.end(), surface, surface, "ticker"))
-    return tokens
+            found.append(_bare(QToken(match.start(), match.end(), surface, surface, "ticker")))
+    return found
+
+
+def _bare(token: QToken) -> _Quantity:
+    return _Quantity(token, "", (token.char_start, token.char_end), "", None, "")
 
 
 def _fused_symbol(text: str, end: int) -> QToken | None:

@@ -27,7 +27,9 @@ from ytverbatim.text.guards import GuardName, check_fix, symbol_changes
 
 _log = logging.getLogger(__name__)
 
-# Part of every checkpoint and stage key: bump it on any prompt, guard or logic change so stored results are redone.
+# Part of every checkpoint and stage key: bump it only when the request changes, which asks the LLM again. A tokenizer
+# or guard change bumps `numbers.VERSION` or `guards.VERSION` instead, which the stage key folds in, so the stored
+# replies are checked again for free.
 PROMPT_VERSION = "correction-v6"
 BATCH_CHARS = 1800
 # Mean per-word probability below which a sentence gets the second, low-confidence pass.
