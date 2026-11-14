@@ -1,6 +1,6 @@
 """Disputes to the owner's grouped multiple-choice questions, within the privacy limit on what an agent may read.
 
-``uv run python -m evals.questions build DISPUTES.jsonl --out DIR [--names-file FILE]``. Claude agents read
+``uv run python -m evals.questions build DISPUTES.jsonl --out DIR (--names-file FILE | --no-names)``. Claude agents read
 ``questions.jsonl`` only, so each item carries at most two sentences of context, generic labels and no names. The
 option-to-hypothesis key goes to a separate ``questions.key.jsonl`` that the orchestrator does not open.
 """
@@ -22,6 +22,7 @@ from ytverbatim.errors import ConfigError, YtverbatimError
 
 MAX_SENTENCES = 2
 MAX_ANCHOR_CHARS = 80
+MAX_OPTION_CHARS = 120
 MIN_ANCHOR_CHARS = 12
 MAX_EXAMPLES = 3
 MAX_ATTRIBUTION_OPTIONS = 2
@@ -30,7 +31,8 @@ OTHER = "someone else"
 UNCLEAR = "can't tell"
 NO_PREFERENCE = "none of these"
 
-_SENTENCE_END = re.compile(r"[.!?]+(?=\s|$)|[。！？…]+")
+_CLOSERS = re.escape("\"'”’)）]」』")
+_SENTENCE_END = re.compile(rf"[.!?]+[{_CLOSERS}]*(?=\s|$)|[。！？…]+[{_CLOSERS}]*")
 _WHITESPACE = re.compile(r"\s+")
 
 
@@ -175,9 +177,19 @@ def clock(seconds: float) -> str:
     return f"{whole // 60}:{whole % 60:02d}"
 
 
-def anchor_text(text: str) -> str:
-    sentence = (split_sentences(text) or [""])[0]
-    return sentence if len(sentence) <= MAX_ANCHOR_CHARS else sentence[:MAX_ANCHOR_CHARS].rstrip() + "…"
+def _shorten(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+def anchor_text(text: str, names: Iterable[str] = ()) -> str:
+    """First sentence of a line, redacted before it is cut so a name is never left half showing."""
+    sentence = (split_sentences(redact(text, names)) or [""])[0]
+    return _shorten(sentence, MAX_ANCHOR_CHARS)
+
+
+def option_text(text: str, names: Iterable[str] = ()) -> str:
+    """Redact a candidate's text, then hold it to the same sentence and character limits as the context."""
+    return _shorten(limit_sentences(redact(text, names)), MAX_OPTION_CHARS)
 
 
 def pick_anchors(
@@ -186,6 +198,7 @@ def pick_anchors(
     start: float,
     end: float,
     candidates: Sequence[str],
+    names: Iterable[str] = (),
 ) -> dict[str, AttributionLine]:
     """For each speaker label, the line every candidate attributes to that speaker that is nearest the dispute.
 
@@ -201,10 +214,10 @@ def pick_anchors(
             for line in lines
             if (line.end <= start or line.start >= end)
             and all(line.speakers.get(c) == label for c in candidates)
-            and len(anchor_text(line.text).rstrip("…")) >= MIN_ANCHOR_CHARS
+            and len(anchor_text(line.text, names).rstrip("…")) >= MIN_ANCHOR_CHARS
         ]
         for line in sorted(options, key=lambda line: abs((line.start + line.end) / 2 - middle)):
-            text = anchor_text(line.text)
+            text = anchor_text(line.text, names)
             if text not in used:
                 chosen[label] = line
                 used.add(text)
@@ -218,12 +231,12 @@ _Item = tuple[Example, tuple[tuple[str, ...], ...]]
 def _attribution(item: AttributionDispute, names: Sequence[str]) -> _Item | str:
     candidates = list(item.speakers)
     labels = [label for label, _ in Counter(item.speakers.values()).most_common()]
-    anchors = pick_anchors(item.lines, labels, item.start, item.end, candidates)
+    anchors = pick_anchors(item.lines, labels, item.start, item.end, candidates, names)
     usable = [label for label in labels if label in anchors][:MAX_ATTRIBUTION_OPTIONS]
     if len(usable) < MAX_ATTRIBUTION_OPTIONS:
         return "fewer than two speakers have an anchor line every candidate agrees on"
     options = tuple(
-        f"the person who says '{redact(anchor_text(anchors[label].text), names)}' at {clock(anchors[label].start)}"
+        f"the person who says '{anchor_text(anchors[label].text, names)}' at {clock(anchors[label].start)}"
         for label in usable
     )
     example = Example(excerpt="", start=item.start, end=item.end, clip=item.clip, options=(*options, OTHER, UNCLEAR))
@@ -233,7 +246,7 @@ def _attribution(item: AttributionDispute, names: Sequence[str]) -> _Item | str:
 def _text(item: TextDispute, names: Sequence[str], rng: random.Random) -> _Item:
     by_text: dict[str, list[str]] = defaultdict(list)
     for hypothesis, text in item.candidates.items():
-        by_text[text.strip()].append(hypothesis)
+        by_text[option_text(text, names)].append(hypothesis)
     texts = sorted(by_text)
     rng.shuffle(texts)
     example = Example(
@@ -241,7 +254,7 @@ def _text(item: TextDispute, names: Sequence[str], rng: random.Random) -> _Item:
         start=item.start,
         end=item.end,
         clip=item.clip,
-        options=(*(redact(text, names) or "(nothing)" for text in texts), NO_PREFERENCE, UNCLEAR),
+        options=(*(text or "(nothing)" for text in texts), NO_PREFERENCE, UNCLEAR),
     )
     return example, (*(tuple(sorted(by_text[t])) for t in texts), (), ())
 
@@ -343,10 +356,20 @@ def main() -> None:
 @main.command()
 @click.argument("disputes", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path))
-@click.option("--names-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
+@click.option(
+    "--names-file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Participant names to redact, one per line.",
+)
+@click.option(
+    "--no-names", is_flag=True, help="Assert that there are no names to redact (the alternative to --names-file)."
+)
 @click.option("--seed", default=0, show_default=True)
-def build(disputes: Path, out_dir: Path, names_file: Path | None, seed: int) -> None:
+def build(disputes: Path, out_dir: Path, names_file: Path | None, no_names: bool, seed: int) -> None:
     """Write questions.jsonl (agent-readable) and questions.key.jsonl (private) under OUT."""
+    if (names_file is not None) == no_names:
+        raise click.UsageError("pass exactly one of --names-file and --no-names, so an unredacted run is deliberate")
     built = build_questions(load_disputes(disputes), _names(names_file), seed)
     questions, key = write_questions(built, out_dir)
     click.echo(f"{len(built.questions)} questions -> {questions}; key -> {key}")

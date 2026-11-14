@@ -1,8 +1,10 @@
+import urllib.error
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from evals import recordings_data
 from evals.diarization import Turn, read_rttm
 from evals.recordings_data import (
     SAMPLE_RATE,
@@ -186,3 +188,23 @@ def test_check_free_disk_enforces_the_floor(tmp_path: Path):
     assert check_free_disk(tmp_path, free=lambda _: 11 * 10**9) == 11 * 10**9
     with pytest.raises(ConfigError, match="at least 10 GB"):
         check_free_disk(tmp_path, free=lambda _: 9 * 10**9)
+
+
+def test_tier_names_with_spaces_become_valid_rttm_labels_and_an_empty_grid_is_refused():
+    grid = TEXTGRID.replace('name = "N_SPK1"', 'name = "SPK 1"')
+    assert tier_utterances(grid)[0].speaker == "SPK_1"
+    with pytest.raises(ConfigError, match="no non-empty intervals"):
+        tier_utterances(TEXTGRID.replace('text = "嗯 okay"', 'text = ""').replace("你好，我是小王。", ""))
+
+
+def test_offsets_that_touch_within_a_millisecond_are_not_an_overlap():
+    check_ascend_offsets([ascend(1, 3, 1, 0.0, 1.0004, id="a"), ascend(1, 3, 2, 1.0, 1.0, id="b")])
+
+
+def test_a_failed_download_is_a_clear_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def refuse(*_: object, **__: object) -> None:
+        raise urllib.error.HTTPError("https://example.invalid/x", 503, "unavailable", None, None)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(recordings_data.urllib.request, "urlopen", refuse)
+    with pytest.raises(ConfigError, match="could not download"):
+        recordings_data.download("https://example.invalid/x", tmp_path / "x", free=lambda _: 11 * 10**9)

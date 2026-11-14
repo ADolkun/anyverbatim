@@ -89,6 +89,19 @@ def test_context_goes_only_to_context_engines(tmp_path: Path, monkeypatch: pytes
     assert whole.chunks is None
 
 
+def test_language_id_hypotheses_get_the_allowed_set_and_no_uploader_language(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layout, manifest = make_eval(tmp_path / "eval", monkeypatch)
+    plan = run_asr.require_plan(layout, ZH)
+    for hypothesis in ("w-vad-lid", "w-runs-lid"):
+        job = run_asr.file_job(layout, manifest.videos[0], registry.get(hypothesis), plan)
+        assert (job.language, job.languages) == (None, ("zh", "en"))
+    for hypothesis in ("w-prod", "w-vad"):
+        job = run_asr.file_job(layout, manifest.videos[0], registry.get(hypothesis), plan)
+        assert (job.language, job.languages) == ("zh", ())
+
+
 def test_asr_cli_with_a_fake_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     layout, _ = make_eval(tmp_path / "eval", monkeypatch)
     seen: list[WorkerRequest] = []
@@ -299,14 +312,14 @@ def test_check_weights_gates_any_repo_not_just_an_engine(tmp_path: Path) -> None
         disk.check_weights([disk.Weights("org/unlisted", "c" * 40)], tmp_path, "c-test", free=lambda _: 100 * GB)
 
 
-def test_a_finished_file_with_fewer_rows_than_chunks_is_complete(
+def test_only_a_runs_hypothesis_is_complete_with_fewer_rows_than_chunks_once_finished(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A runs hypothesis writes one row per same-language run, so fewer rows than plan chunks is a full output.
     layout, manifest = make_eval(tmp_path / "eval", monkeypatch)
-    definition = registry.get("f-aed")
     video = manifest.videos[0]
-    write_rows(layout, "f-aed", chunk_rows("f-aed", video.id, ["one"]))
-    assert video.id in incomplete_files(layout, manifest, definition)
-    (layout.file_run_dir("f-aed", video.id) / "metrics.json").write_text("{}", encoding="utf-8")
-    assert video.id not in incomplete_files(layout, manifest, definition)
+    for hypothesis, complete_when_finished in (("w-runs-lid", True), ("w-vad-lid", False)):
+        definition = registry.get(hypothesis)
+        write_rows(layout, hypothesis, chunk_rows(hypothesis, video.id, ["one"]))
+        assert video.id in incomplete_files(layout, manifest, definition)
+        (layout.file_run_dir(hypothesis, video.id) / "metrics.json").write_text("{}", encoding="utf-8")
+        assert (video.id not in incomplete_files(layout, manifest, definition)) is complete_when_finished

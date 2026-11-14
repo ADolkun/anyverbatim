@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import bisect
 import itertools
+import random
 import re
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
@@ -17,6 +18,7 @@ from typing import Any, cast
 from pyannote.core import Annotation, Segment, Timeline
 from pyannote.metrics.diarization import DiarizationErrorRate
 
+from evals.metrics import percentile_index
 from ytverbatim import atomic
 from ytverbatim.contract.models import Word
 from ytverbatim.errors import ConfigError
@@ -66,6 +68,11 @@ def read_rttm(path: Path) -> dict[str, list[Turn]]:
 
 
 def format_rttm(uri: str, turns: Iterable[Turn]) -> str:
+    """Render ``SPEAKER`` lines; a label or id with whitespace would split into extra fields, so it is refused."""
+    turns = list(turns)
+    for label in {uri, *(t.speaker for t in turns)}:
+        if not label or _SPEAKER_RE.search(label):
+            raise ConfigError(f"RTTM label {label!r} is empty or contains whitespace")
     return "".join(
         f"SPEAKER {uri} 1 {t.start:.3f} {t.duration:.3f} <NA> <NA> {t.speaker} <NA> <NA>\n"
         for t in sorted(turns, key=lambda t: (t.start, t.end, t.speaker))
@@ -88,9 +95,11 @@ def speaker_count_error(reference: Sequence[Turn], hypothesis: Sequence[Turn]) -
 
 def _annotation(turns: Iterable[Turn]) -> Annotation:
     annotation = Annotation()
-    for turn in turns:
+    # The index keeps two speakers with identical boundaries apart; keyed by segment alone, the second would replace
+    # the first.
+    for index, turn in enumerate(turns):
         if turn.duration > 0:
-            annotation[Segment(turn.start, turn.end)] = turn.speaker
+            annotation[Segment(turn.start, turn.end), index] = turn.speaker
     return annotation
 
 
@@ -148,6 +157,39 @@ def pooled_rate(scores: Sequence[DerScore]) -> float:
 
 
 @dataclass(frozen=True, slots=True)
+class MacroBootstrap:
+    """Mean per-recording rate difference (a minus b) with its percentile interval."""
+
+    difference: float
+    low: float
+    high: float
+
+    @property
+    def excludes_zero(self) -> bool:
+        return self.low > 0 or self.high < 0
+
+
+def paired_macro_bootstrap(
+    a: Sequence[float], b: Sequence[float], seed: int, resamples: int = 2000, confidence: float = 0.95
+) -> MacroBootstrap:
+    """Resample recordings as pairs and average their rate differences, so every recording counts once.
+
+    The pooled bootstrap in ``evals.metrics`` weighs recordings by length, which is not the macro average E1 uses.
+    """
+    if len(a) != len(b) or not a:
+        raise ValueError("paired samples must be non-empty and equally long")
+    gaps = [x - y for x, y in zip(a, b, strict=True)]
+    rng = random.Random(seed)
+    means = sorted(sum(rng.choices(gaps, k=len(gaps))) / len(gaps) for _ in range(resamples))
+    tail = (1 - confidence) / 2
+    return MacroBootstrap(
+        sum(gaps) / len(gaps),
+        means[percentile_index(tail, resamples)],
+        means[percentile_index(1 - tail, resamples)],
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class WderScore:
     errors: int
     eligible: int
@@ -202,11 +244,12 @@ def single_speaker_words(reference: Sequence[Turn], words: Sequence[Word]) -> di
     return eligible
 
 
-def wder(reference: Sequence[Turn], words: Sequence[Word], assigned: Sequence[str]) -> WderScore:
+def wder(reference: Sequence[Turn], words: Sequence[Word], assigned: Sequence[str | None]) -> WderScore:
     """Fraction of eligible words whose assigned speaker differs from the reference after the best one-to-one mapping.
 
-    ``assigned[i]`` is the speaker of ``words[i]``. The mapping maximises the eligible word time the two labellings
-    share. A hypothesis speaker left without a partner counts as wrong, so extra speakers cost accuracy.
+    ``assigned[i]`` is the speaker of ``words[i]``, or None when no speaker was given; a None is always wrong and
+    takes no part in the mapping. The mapping maximises the eligible word time the two labellings share. A
+    hypothesis speaker left without a partner counts as wrong, so extra speakers cost accuracy.
     """
     if len(words) != len(assigned):
         raise ValueError(f"{len(words)} words but {len(assigned)} assigned speakers")
@@ -216,12 +259,18 @@ def wder(reference: Sequence[Turn], words: Sequence[Word], assigned: Sequence[st
     truth = Annotation()
     guess = Annotation()
     for index, speaker in eligible.items():
+        label = assigned[index]
+        if label is None:
+            continue
         word = words[index]
         segment = Segment(word.start, word.start + max(word.end - word.start, _MIN_SPAN_S))
         truth[segment, index] = speaker
-        guess[segment, index] = assigned[index]
+        guess[segment, index] = label
     mapping = cast(Mapping[str, str], cast(Any, DiarizationErrorRate()).optimal_mapping(truth, guess))
-    errors = sum(mapping.get(assigned[index]) != speaker for index, speaker in eligible.items())
+    errors = sum(
+        assigned[index] is None or mapping.get(cast(str, assigned[index])) != speaker
+        for index, speaker in eligible.items()
+    )
     return WderScore(errors, len(eligible), len(words))
 
 

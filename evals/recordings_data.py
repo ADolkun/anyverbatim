@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import urllib.error
 import urllib.request
 import wave
 from collections import defaultdict
@@ -62,6 +63,8 @@ HF_URL = "https://huggingface.co/datasets/{repo}/resolve/main/{name}"
 # Below this the transcript and the diarization turns are on different clocks or are different meetings, not noisy.
 MIN_ALIGNED_FRACTION = 0.9
 DURATION_TOLERANCE_S = 0.02
+# File names round offsets and durations to four decimals, and speakers' neighbouring utterances can touch.
+OFFSET_TOLERANCE_S = 1e-3
 _UNK = re.compile(r"\s*\[UNK\]\s*")
 _BLANKS = re.compile(r"\s+")
 
@@ -130,10 +133,13 @@ def download(url: str, destination: Path, *, free: Callable[[Path], int] = disk.
     part = destination.with_name(destination.name + ".part")
     have = part.stat().st_size if part.exists() else 0
     request = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
-    with urllib.request.urlopen(request) as response:
-        resumed = have > 0 and response.status == 206  # noqa: PLR2004
-        with part.open("ab" if resumed else "wb") as handle:
-            shutil.copyfileobj(response, handle, 1 << 20)
+    try:
+        with urllib.request.urlopen(request) as response:
+            resumed = have > 0 and response.status == 206  # noqa: PLR2004
+            with part.open("ab" if resumed else "wb") as handle:
+                shutil.copyfileobj(response, handle, 1 << 20)
+    except urllib.error.URLError as exc:
+        raise ConfigError(f"could not download {url}: {exc}") from exc
     part.replace(destination)
     return destination
 
@@ -323,7 +329,7 @@ def check_ascend_offsets(utterances: Sequence[AscendUtterance]) -> None:
         if [u.line for u in in_time] != sorted(u.line for u in items):
             raise ConfigError(f"session {session} speaker {speaker}: offsets do not follow the line order")
         for earlier, later in itertools.pairwise(in_time):
-            if later.start < earlier.end - 1e-6:
+            if later.start < earlier.end - OFFSET_TOLERANCE_S:
                 raise ConfigError(f"session {session} speaker {speaker}: {earlier.id} and {later.id} overlap")
 
 
@@ -426,7 +432,7 @@ _INTERVAL = re.compile(r"^intervals \[\d+\]:")
 
 
 def tier_utterances(textgrid: str) -> list[RefUtterance]:
-    """Read the non-empty intervals of a long-format Praat TextGrid; every tier is one speaker."""
+    """Read the non-empty intervals of a long-format Praat TextGrid; every tier is one speaker. Raise if none."""
     utterances: list[RefUtterance] = []
     tier = ""
     start = end = 0.0
@@ -434,7 +440,8 @@ def tier_utterances(textgrid: str) -> list[RefUtterance]:
     for raw in textgrid.splitlines():
         line = raw.strip()
         if line.startswith("name ="):
-            tier, inside = line.split("=", 1)[1].strip().strip('"'), False
+            # A label with a space would split an RTTM line into extra fields.
+            tier, inside = _BLANKS.sub("_", line.split("=", 1)[1].strip().strip('"')), False
         elif _INTERVAL.match(line):
             inside = True
         elif inside and line.startswith("xmin ="):
@@ -446,6 +453,8 @@ def tier_utterances(textgrid: str) -> list[RefUtterance]:
             text = text[1:-1].replace('""', '"') if len(text) > 1 and text[0] == text[-1] == '"' else text
             if text.strip():
                 utterances.append(RefUtterance(start, end, tier, text.strip()))
+    if not utterances:
+        raise ConfigError("the TextGrid has no non-empty intervals")
     return utterances
 
 

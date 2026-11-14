@@ -180,9 +180,10 @@ def file_complete(
 ) -> bool:
     """Whether the rows cover the file.
 
-    ``finished`` (see ``Layout.file_finished``) accepts fewer rows than plan chunks: a runs hypothesis writes one row
-    per same-language run, so its row count is not the chunk count. Its row indices are run indices, which stay
-    inside the plan's chunk range, so the out-of-plan check still holds.
+    ``finished`` (see ``Layout.file_finished``) accepts fewer rows than plan chunks for a runs hypothesis only: it
+    writes one row per same-language run, so its row count is not the chunk count. Its row indices are run indices,
+    which stay inside the plan's chunk range, so the out-of-plan check still holds. Every other engine must have all
+    its chunks.
     """
     expected = expected_chunks(definition, plan)
     done = {row.chunk for row in rows}
@@ -191,7 +192,7 @@ def file_complete(
             f"{definition.spec.id} output for {plan.file} has chunks outside the current plan; it was decoded with a "
             "different plan, so move its run directory aside"
         )
-    return len(done) == expected or finished
+    return len(done) == expected or (finished and definition.decodes_runs())
 
 
 def incomplete_files(layout: Layout, manifest: Manifest, definition: EngineDef) -> list[str]:
