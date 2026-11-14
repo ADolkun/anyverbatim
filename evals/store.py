@@ -20,7 +20,7 @@ from evals.manifest import Manifest, Video
 from evals.normalize import Language, View, to_units
 from ytverbatim import atomic
 from ytverbatim.asr.chunks import Chunk
-from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, RunMetrics
+from ytverbatim.asr.models import HYPOTHESES_FILE, METRICS_FILE, ChunkHypothesis, RunMetrics
 from ytverbatim.asr.protocol import EngineDef
 from ytverbatim.errors import ConfigError
 
@@ -106,6 +106,10 @@ class Layout:
     def rows_path(self, hypothesis: str, file_id: str) -> Path:
         return self.file_run_dir(hypothesis, file_id) / HYPOTHESES_FILE
 
+    def file_finished(self, hypothesis: str, file_id: str) -> bool:
+        """Whether a worker ran this file's request to the end: it writes its metrics last, on a clean exit."""
+        return (self.file_run_dir(hypothesis, file_id) / METRICS_FILE).is_file()
+
     def session_dir(self, name: str) -> Path:
         return self.ab / name
 
@@ -171,7 +175,15 @@ def expected_chunks(definition: EngineDef, plan: Plan) -> int:
     return 1 if definition.spec.max_chunk_s is None else len(plan.chunks)
 
 
-def file_complete(definition: EngineDef, plan: Plan, rows: Sequence[ChunkHypothesis]) -> bool:
+def file_complete(
+    definition: EngineDef, plan: Plan, rows: Sequence[ChunkHypothesis], *, finished: bool = False
+) -> bool:
+    """Whether the rows cover the file.
+
+    ``finished`` (see ``Layout.file_finished``) accepts fewer rows than plan chunks: a runs hypothesis writes one row
+    per same-language run, so its row count is not the chunk count. Its row indices are run indices, which stay
+    inside the plan's chunk range, so the out-of-plan check still holds.
+    """
     expected = expected_chunks(definition, plan)
     done = {row.chunk for row in rows}
     if done - set(range(expected)):
@@ -179,7 +191,7 @@ def file_complete(definition: EngineDef, plan: Plan, rows: Sequence[ChunkHypothe
             f"{definition.spec.id} output for {plan.file} has chunks outside the current plan; it was decoded with a "
             "different plan, so move its run directory aside"
         )
-    return len(done) == expected
+    return len(done) == expected or finished
 
 
 def incomplete_files(layout: Layout, manifest: Manifest, definition: EngineDef) -> list[str]:
@@ -188,7 +200,9 @@ def incomplete_files(layout: Layout, manifest: Manifest, definition: EngineDef) 
     missing = []
     for video in manifest.videos:
         plan = load_plan(layout, video.id)
-        if plan is None or not file_complete(definition, plan, rows.get(video.id, [])):
+        if plan is None or not file_complete(
+            definition, plan, rows.get(video.id, []), finished=layout.file_finished(definition.spec.id, video.id)
+        ):
             missing.append(video.id)
     return missing
 

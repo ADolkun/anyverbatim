@@ -64,6 +64,10 @@ from ytverbatim.contract.models import Word
 from ytverbatim.errors import ConfigError, YtverbatimError
 from ytverbatim.llm import ClaudeCLIClient
 
+# E2/E3: the per-chunk language-ID hypotheses choose within this set and must not be handed the uploader language,
+# which would override detection.
+ALLOWED_LANGUAGES: tuple[str, ...] = ("zh", "en")
+LANGUAGE_ID_HYPOTHESES = frozenset({"w-vad-lid", "w-runs-lid"})
 RESULTS_DIR = Path(__file__).parent / "results"
 DISPUTES_FILE = "disputes.jsonl"
 
@@ -110,16 +114,20 @@ def file_job(store: Layout, video: Video, definition: EngineDef, plan: Plan) -> 
     """Build the worker job exactly as production would from the video's metadata.
 
     ``language`` is the uploader-declared metadata language (``None`` when absent); the registry's per-engine
-    language policy, not this runner, decides what each engine does with it.
+    language policy, not this runner, decides what each engine does with it. The language-ID hypotheses get no
+    language and the allowed set instead.
     """
     metadata = trim_info(json.loads((store.root / video.meta).read_text(encoding="utf-8")))
-    return FileJob(
+    detects = definition.spec.id in LANGUAGE_ID_HYPOTHESES
+    job = FileJob(
         id=video.id,
         wav=str(store.wav(video)),
-        language=metadata.language,
+        language=None if detects else metadata.language,
         context=context_from_metadata(metadata) if definition.spec.supports_context else None,
         chunks=None if definition.spec.max_chunk_s is None else plan.chunks,
     )
+    # `languages` exists once U5a is merged; until then no hypothesis reaches this branch.
+    return job.model_copy(update={"languages": ALLOWED_LANGUAGES}) if detects else job
 
 
 @dataclass(frozen=True)
@@ -148,7 +156,7 @@ def run_hypothesis(
     skipped: list[str] = []
     for video in videos(manifest, files):
         plan = require_plan(store, video.id)
-        if file_complete(definition, plan, done.get(video.id, [])):
+        if file_complete(definition, plan, done.get(video.id, []), finished=store.file_finished(hypothesis, video.id)):
             skipped.append(video.id)
         else:
             pending.append(video)

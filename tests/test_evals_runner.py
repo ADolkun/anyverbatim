@@ -7,7 +7,15 @@ from click.testing import CliRunner
 from evals_fixture import CHUNKS, EN, SECONDS, ZH, chunk_rows, make_eval
 
 from evals import disk, run_asr
-from evals.store import CAPTION_HYPOTHESIS, REFERENCE, Layout, read_history, rows_by_file, write_rows
+from evals.store import (
+    CAPTION_HYPOTHESIS,
+    REFERENCE,
+    Layout,
+    incomplete_files,
+    read_history,
+    rows_by_file,
+    write_rows,
+)
 from ytverbatim.asr import registry
 from ytverbatim.asr.chunks import Region
 from ytverbatim.asr.models import RunMetrics, WorkerRequest
@@ -289,3 +297,16 @@ def test_check_weights_gates_any_repo_not_just_an_engine(tmp_path: Path) -> None
     assert disk.check_weights([fallback], tmp_path, "c-test", free=lambda _: 100 * GB) == 8_720_000_000
     with pytest.raises(ConfigError, match=r"no size on record for org/unlisted; add it to evals/disk.py REPO_BYTES"):
         disk.check_weights([disk.Weights("org/unlisted", "c" * 40)], tmp_path, "c-test", free=lambda _: 100 * GB)
+
+
+def test_a_finished_file_with_fewer_rows_than_chunks_is_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A runs hypothesis writes one row per same-language run, so fewer rows than plan chunks is a full output.
+    layout, manifest = make_eval(tmp_path / "eval", monkeypatch)
+    definition = registry.get("f-aed")
+    video = manifest.videos[0]
+    write_rows(layout, "f-aed", chunk_rows("f-aed", video.id, ["one"]))
+    assert video.id in incomplete_files(layout, manifest, definition)
+    (layout.file_run_dir("f-aed", video.id) / "metrics.json").write_text("{}", encoding="utf-8")
+    assert video.id not in incomplete_files(layout, manifest, definition)
