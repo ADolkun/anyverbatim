@@ -234,8 +234,13 @@ def test_stacked_magnitudes_are_one_multiplier(text: str, value: str) -> None:
         ("二十五万三", "253000"),
         ("一点五亿", "150000000"),
         ("十点五万亿", "10500000000000"),
-        # cn2an reads a decimal after its own 万 shorthand; deferred to a later numerals unit with a stage bump.
-        ("一万五点五", "15000.5"),
+        ("一万五千点五", "15000.5"),
+        ("一亿五千三", "153000000"),
+        ("一亿五千", "150000000"),
+        ("三亿五百", "305000000"),
+        ("十一亿二千三百", "1123000000"),
+        ("一万亿五千", "1500000000000"),
+        ("一億五千三", "153000000"),
     ],
 )
 def test_chinese_shorthand_and_compound_numerals(text: str, value: str) -> None:
@@ -259,6 +264,10 @@ def test_chinese_shorthand_and_compound_numerals(text: str, value: str) -> None:
         "一亿五点五",
         "一亿五点五万",
         "一亿五点五亿",
+        "一万五点五",
+        "一千五点五",
+        "一百五点五",
+        "一亿五千点五",
     ],
 )
 def test_runs_that_are_not_one_number_keep_their_surface(text: str) -> None:
@@ -284,7 +293,7 @@ def test_digit_after_yi_takes_the_next_lower_unit(head: str, unit: str, exponent
         assert token.value_itn == str(int(whole.value_itn) + digit * 10 ** (exponent - 1))
 
 
-_NUMERAL_ALPHABET = "零一二两三四五六七八九十百千万亿点"
+_NUMERAL_ALPHABET = (*"零一二两三四五六七八九十百千万亿点几数", "分之", "个", "家", "年", "个月", "分钟")
 
 
 def test_quantity_tokens_never_raise_on_numeral_runs() -> None:
@@ -426,3 +435,124 @@ def test_spelled_out_english_numbers(text: str, values: list[str]) -> None:
 @pytest.mark.parametrize("text", ["no one knows", "one of them", "someone", "the tenant", "a million reasons"])
 def test_english_words_that_are_not_quantities(text: str) -> None:
     assert quantity_tokens(text) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("三万一个月", [("三万", "30000"), ("一个月", "1个月")]),
+        ("三万一一个月", [("三万一", "31000"), ("一个月", "1个月")]),
+        ("五百亿一个", [("五百亿", "50000000000"), ("一个", "1个")]),
+        ("三点五万一年", [("三点五万", "35000"), ("一年", "1年")]),
+        ("一亿五一股", [("一亿五", "150000000"), ("一股", "1股")]),
+        ("三萬一年", [("三萬", "30000"), ("一年", "1年")]),
+    ],
+)
+def test_one_after_a_figure_in_wan_or_yi_starts_a_per_unit_phrase(text: str, expected: list[tuple[str, str]]) -> None:
+    assert [(t.surface, t.value_itn) for t in quantity_tokens(text)] == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("十一个", "11个"),
+        ("一百一个", "110个"),
+        ("两千一个月", "2100个月"),
+        ("三万一", "31000"),
+        ("五百亿一", "50010000000"),
+        ("三万一块", "31000块"),
+        ("第三万一个", "第31000个"),
+    ],
+)
+def test_one_stays_part_of_the_number_elsewhere(text: str, value: str) -> None:
+    (token,) = quantity_tokens(text)
+    assert (token.surface, token.value_itn) == (text, value)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("三点四十分", [("三点", "3点"), ("四十", "40")]),
+        ("十二点三十五", [("十二点", "12点"), ("三十五", "35")]),
+        ("下午四点四十分", [("四点", "4点"), ("四十", "40")]),
+        ("一点十分", [("一点", "1点")]),
+        ("一点五万", [("一点五万", "15000")]),
+        ("三点一四", [("三点一四", "3.14")]),
+        ("三点零五", [("三点零五", "3.05")]),
+    ],
+)
+def test_tens_after_dian_make_it_a_clock_unit(text: str, expected: list[tuple[str, str]]) -> None:
+    assert [(t.surface, t.value_itn) for t in quantity_tokens(text)] == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "value", "kind"),
+    [
+        ("三家公司", "3家", "cjk_quantity"),
+        ("两只股票", "2只", "cjk_quantity"),
+        ("五分钟", "5分钟", "cjk_quantity"),
+        ("两个小时", "2个", "cjk_quantity"),
+        ("三小时", "3小时", "cjk_quantity"),
+        ("七十六岁", "76岁", "cjk_quantity"),
+        ("一百二十周年", "120周年", "cjk_quantity"),
+        ("二十世纪", "20世纪", "cjk_quantity"),
+        ("五十个基点", "50个基点", "cjk_quantity"),
+        ("二十五基点", "25基点", "cjk_quantity"),
+        ("一百平方米", "100平方米", "cjk_quantity"),
+        ("一千米", "1000米", "cjk_quantity"),
+        ("3家", "3家", "number"),
+        ("5分钟", "5分钟", "number"),
+    ],
+)
+def test_count_classifiers_and_units_make_a_quantity(text: str, value: str, kind: str) -> None:
+    (token,) = quantity_tokens(text)
+    assert (token.value_itn, token.kind) == (value, kind)
+
+
+@pytest.mark.parametrize(
+    "text", ["十分重要", "三部曲", "二手房", "二线城市", "六方会谈", "三大银行", "进一步", "一步一步"]
+)
+def test_words_after_a_numeral_that_are_not_counts(text: str) -> None:
+    assert quantity_tokens(text) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "三分之一",
+        "二十分之一",
+        "千分之十五",
+        "千分之五",
+        "万分之一",
+        "几万分之一",
+        "一百分之一",
+        "十万八千里",
+        "相差十万八千里",
+    ],
+)
+def test_fractions_and_the_idiom_of_distance_are_not_quantities(text: str) -> None:
+    assert quantity_tokens(text) == []
+    assert itn(text) == text
+
+
+def test_baifenzhi_on_its_own_is_still_a_percent() -> None:
+    assert itn("涨了百分之二十，三分之一") == "涨了20%，三分之一"
+
+
+@pytest.mark.parametrize("text", ["二十几岁", "数十个", "几十个", "数十亿", "几千", "一百几十", "三千几百块", "十几个"])
+def test_ji_and_shu_make_a_rough_figure_not_a_quantity(text: str) -> None:
+    assert quantity_tokens(text) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "value"), [("指数两千八百点", "指数2800点"), ("人数两万", "人数20000"), ("二十几乎", "20几乎")]
+)
+def test_a_word_ending_in_shu_or_a_word_starting_with_ji_does_not_make_a_rough_figure(text: str, value: str) -> None:
+    assert itn(text) == value
+
+
+def test_tokens_from_one_run_tile_it_in_order() -> None:
+    text = "收入三万一个月，三点四十分开会"
+    for token in quantity_tokens(text):
+        assert text[token.char_start : token.char_end] == token.surface
+    assert surfaces(text) == ["三万", "一个月", "三点", "四十"]

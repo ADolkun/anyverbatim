@@ -42,6 +42,8 @@ def test_tokens_carry_offsets_surface_value_and_kind() -> None:
         ("3.35SMH", [(0, 4, "3.35", "3.35", "number"), (4, 7, "SMH", "SMH", "ticker")]),
         ("twenty-five", [(0, 11, "twenty-five", "25", "number")]),
         ("10BN", [(0, 4, "10BN", "10000000000", "number")]),
+        ("三万一个月", [(0, 2, "三万", "30000", "cjk_quantity"), (2, 5, "一个月", "1个月", "cjk_quantity")]),
+        ("三家公司", [(0, 2, "三家", "3家", "cjk_quantity")]),
     ],
 )
 def test_pinned_token_examples(text: str, tokens: list[tuple[int, int, str, str, str]]) -> None:

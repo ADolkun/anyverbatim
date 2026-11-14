@@ -23,7 +23,7 @@ from ytverbatim.errors import ConfigError, DependencyError, EngineError, LLMUnav
 from ytverbatim.llm import claude_cli
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from ytverbatim.pipeline import ProgressEvent, VideoResult, process_many
-from ytverbatim.text import numeric
+from ytverbatim.text import guards, numbers, numeric
 from ytverbatim.text import punctuate as punctuate_module
 
 ZH = "zhVideo0001"
@@ -738,6 +738,29 @@ def test_a_module_version_bump_redoes_its_stage_and_the_document(session_kit, wo
         "correct": True,
         "numeric": True,
     }
+
+
+@pytest.mark.parametrize("module", [numbers, guards])
+def test_a_tokenizer_or_guard_bump_rechecks_the_stored_replies_without_asking_again(
+    session_kit, worker, monkeypatch, module
+) -> None:
+    yt = zh_yt(session_kit)
+    llm = FakeLLM()
+    run(session_kit, yt, llm=llm)
+    asked = len(llm.requests)
+    assert set(llm.stages()) == {"punctuate", "correct", "numeric"}
+    monkeypatch.setattr(module, "VERSION", module.VERSION + "-bumped")
+    _, results, events = run(session_kit, yt, llm=llm)
+    assert "skip" not in [e.stage for e in events]
+    assert stored(results[0]) == {
+        "asr": True,
+        "normalize": True,
+        "punctuate": True,
+        "correct": False,
+        "numeric": False,
+    }
+    assert len(llm.requests) == asked, "correct and numeric re-apply their rules to the checkpointed replies"
+    assert only_document(results).quality.flags_by_kind == {"numeric_fixed": 1, "timing_interpolated": 1}
 
 
 def test_correction_reruns_when_its_glossary_changes(session_kit, worker) -> None:
