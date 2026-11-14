@@ -14,7 +14,7 @@ from typing import Literal
 import cn2an
 
 # Part of the stage key of every stage that reads quantities: bump it on any change to what is a token or its value.
-VERSION = "numbers-v1"
+VERSION = "numbers-v2"
 
 QKind = Literal["number", "currency", "percent", "ticker", "cjk_quantity"]
 
@@ -305,6 +305,9 @@ _ROUND_DIGITS_BEFORE_MAGNITUDE = frozenset({"10", "100", "1000"})
 # Marks the value of a rough figure, so 二十几 and 20几 agree with each other but not with 二十.
 _ROUGH = "~"
 _SHORTHAND_AFTER_UNIT = re.compile("[万亿][一二三四五六七八九]$")
+# A lone numeral joined to a figure by one of these is that range's other end: the 三 of 三到五个.
+_RANGE_LINKS = frozenset("到至～~-—、")
+_LINKABLE = frozenset("一二两三四五六七八九十")
 _FRACTION = re.compile(rf"([{''.join(_DIGIT_VALUE)}]+)([万亿]*)")
 
 
@@ -422,10 +425,13 @@ def _normalized(numerals: str) -> str:
     return numerals.translate(_VARIANT_NUMERALS).replace("廿", "二十").replace("卅", "三十")
 
 
-def _cjk_quantity(text: str, start: int, prefix: str, run: tuple[int, int], unit: str) -> _Quantity | None:
+def _cjk_quantity(
+    text: str, start: int, prefix: str, run: tuple[int, int], unit: str, *, lone: bool = False
+) -> _Quantity | None:
+    """Read one Chinese numeral token; `lone` admits a single bare numeral (a clock's minutes, a range's end)."""
     surface_run = text[run[0] : run[1]]
     numeral_count = sum(1 for ch in surface_run if ch != "点")
-    if not (prefix or unit or numeral_count >= _MIN_BARE_RUN):
+    if not (prefix or unit or lone or numeral_count >= _MIN_BARE_RUN):
         return None
     numerals = _normalized(surface_run)
     integer, _, fraction = numerals.partition("点")
@@ -433,7 +439,7 @@ def _cjk_quantity(text: str, start: int, prefix: str, run: tuple[int, int], unit
         return None
     end = run[1] + len(unit)
     surface = text[start:end]
-    rough = _is_approximation(text, prefix, run, numerals)
+    rough = _is_approximation(text, prefix, run, numerals, unit)
     value = _cjk_value(_with_leading_one(integer) if rough else integer, fraction)
     ordinal = "第" if prefix == "第" else ""
     if value is None:
@@ -451,13 +457,14 @@ def _cjk_quantity(text: str, start: int, prefix: str, run: tuple[int, int], unit
     return _Quantity(token, prefix, run, unit, None if rough else value, _top_magnitude(numerals))
 
 
-def _is_approximation(text: str, prefix: str, run: tuple[int, int], numerals: str) -> bool:
+def _is_approximation(text: str, prefix: str, run: tuple[int, int], numerals: str, unit: str) -> bool:
     """几 or 数 next to a run makes it a rough figure: 二十几岁, 几十个, 数十亿, 一百几十.
 
     A run of place words alone after 数 may be rough (数十亿) or exact after a noun ending in 数 (人数十万), so it
-    is read as rough either way, as the digit form 人数10万 is; a digit in the run makes it exact (人数十五万).
+    is read as rough either way, as the digit form 人数10万 is; a digit in the run makes it exact (人数十五万). A date
+    or time is never rough: the 十月 of 指数十月份 is October.
     """
-    if not prefix and _ji_or_shu_before(text, run[0]) and set(numerals) <= _PLACE_WORDS:
+    if not prefix and _ji_or_shu_before(text, run[0]) and set(numerals) <= _PLACE_WORDS and unit not in _CALENDAR_UNITS:
         return True
     return _ji_after(text, run[1])
 
@@ -539,7 +546,7 @@ def _cjk_quantities(text: str, match: re.Match[str]) -> list[_Quantity]:
     if dot is not None:
         pieces = (
             _cjk_quantity(text, run[0], "", (run[0], dot), "点"),
-            _cjk_quantity(text, dot + 1, "", (dot + 1, run[1]), ""),
+            _cjk_quantity(text, dot + 1, "", (dot + 1, run[1]), "", lone=True),
         )
         return [piece for piece in pieces if piece is not None]
     quantity = _cjk_quantity(text, match.start(), prefix, run, unit)
@@ -556,17 +563,20 @@ def _number_quantity(match: re.Match[str]) -> _Quantity:
     sign = (match.group("sign") or match.group("sign2") or "").replace("−", "-")
     symbol = match.group("currency") or ""
     measure = match.group("measure") or ""
+    shown = measure
     if match.group("dollars") or measure in _USD_WORDS:
         symbol = symbol or "$"
-        measure = "" if measure in _USD_WORDS else measure
-    itn = f"{sign}{symbol}{digits}{'%' if percent else ''}{measure}"
+        shown = "" if measure in _USD_WORDS else measure
+    itn = f"{sign}{symbol}{digits}{'%' if percent else ''}{shown}"
     text = match.string
     written = _ascii_digits(match.group("digits"))
     round_figure = written == _ROUND_DIGITS or (bool(magnitude) and written in _ROUND_DIGITS_BEFORE_MAGNITUDE)
-    rough = (_ji_or_shu_before(text, match.start()) and not sign and round_figure) or _ji_after(text, match.end())
+    rough = (
+        _ji_or_shu_before(text, match.start()) and not sign and round_figure and measure not in _CALENDAR_UNITS
+    ) or _ji_after(text, match.end())
     if rough:
         itn = _ROUGH + itn
-    kind: QKind = "percent" if percent else "currency" if symbol or measure in _CURRENCY_WORDS else "number"
+    kind: QKind = "percent" if percent else "currency" if symbol or shown in _CURRENCY_WORDS else "number"
     run_end = match.end("magnitude") if magnitude else match.end("digits")
     return _Quantity(
         QToken(match.start(), match.end(), match.group(0), itn, kind),
@@ -690,13 +700,17 @@ def quantity_tokens(text: str) -> list[QToken]:
 
 def _quantities(text: str) -> list[_Quantity]:
     found: list[_Quantity] = []
+    lone: list[tuple[int, int]] = []
     for match in _TOKEN.finditer(text):
         if match.group("idiom") is not None:
             continue
         if match.group("fraction") is not None or match.group("digit_fraction") is not None:
             found.append(_fraction(match))
         elif match.group("cjk") is not None:
-            found.extend(_cjk_quantities(text, match))
+            quantities = _cjk_quantities(text, match)
+            found.extend(quantities)
+            if not quantities and match.group(0) in _LINKABLE:
+                lone.append(match.span())
         elif match.group("number") is not None:
             found.append(_number_quantity(match))
             fused = _fused_symbol(text, match.end())
@@ -707,7 +721,35 @@ def _quantities(text: str) -> list[_Quantity]:
         else:
             surface = match.group(0)
             found.append(_bare(QToken(match.start(), match.end(), surface, surface, "ticker")))
-    return found
+    return _with_range_ends(text, found, lone) if lone else found
+
+
+def _with_range_ends(text: str, found: list[_Quantity], lone: list[tuple[int, int]]) -> list[_Quantity]:
+    """Add each lone numeral that a range link joins to a figure: 三到五个 is 3 to 5个, and 三到五到七个 chains.
+
+    Only a figure with a value anchors a range, so 第三到五 (an ordinal) and 几到五 stay as they are.
+    """
+    anchors = {
+        edge
+        for quantity in found
+        if quantity.value is not None and quantity.prefix != "第"
+        for edge in (("end", quantity.token.char_end), ("start", quantity.token.char_start))
+    }
+    added = True
+    while added:
+        added = False
+        for start, end in list(lone):
+            linked = (text[start - 1 : start] in _RANGE_LINKS and ("end", start - 1) in anchors) or (
+                text[end : end + 1] in _RANGE_LINKS and ("start", end + 1) in anchors
+            )
+            quantity = _cjk_quantity(text, start, "", (start, end), "", lone=True) if linked else None
+            if quantity is None or quantity.value is None:
+                continue
+            found.append(quantity)
+            anchors |= {("end", end), ("start", start)}
+            lone.remove((start, end))
+            added = True
+    return sorted(found, key=lambda quantity: quantity.token.char_start)
 
 
 def _bare(token: QToken) -> _Quantity:
