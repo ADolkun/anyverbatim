@@ -1,0 +1,416 @@
+import base64
+import hashlib
+import http.client
+import json
+import os
+import stat
+import threading
+import urllib.parse
+from collections.abc import Callable
+from pathlib import Path
+
+import pytest
+from chatgpt_fakes import (
+    CLIENT_ID,
+    EMAIL,
+    NOW,
+    PLAN_SCOPES,
+    FakeOpener,
+    FakeResponse,
+    Route,
+    form,
+    http_error,
+    id_token,
+    json_response,
+    store_account,
+    stored_state,
+    token_payload,
+)
+
+from ytverbatim import paths
+from ytverbatim.llm import chatgpt_auth
+from ytverbatim.llm.chatgpt_auth import (
+    DISCOVERY_URL,
+    TOKEN_URL,
+    ChatGPTAuthError,
+    id_token_claims,
+)
+
+REVOKE_URL = "https://auth.openai.com/oauth/revoke"
+DISCOVERY = {"issuer": "https://auth.openai.com", "revocation_endpoint": REVOKE_URL}
+
+
+@pytest.fixture(autouse=True)
+def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    return tmp_path / "state" / "ytverbatim" / "llm" / "chatgpt"
+
+
+Callbacks = Callable[[dict[str, str]], list[dict[str, str]]]
+
+
+class Browser:
+    """Stands in for the user's browser: records the authorization URL and calls back to the loopback server."""
+
+    def __init__(self, callbacks: Callbacks) -> None:
+        self.callbacks = callbacks
+        self.query: dict[str, str] = {}
+        self.statuses: list[int] = []
+
+    def __call__(self, url: str) -> bool:
+        parts = urllib.parse.urlsplit(url)
+        assert f"{parts.scheme}://{parts.netloc}{parts.path}" == chatgpt_auth.AUTHORIZE_URL
+        self.query = {key: values[0] for key, values in urllib.parse.parse_qs(parts.query).items()}
+        redirect = urllib.parse.urlsplit(self.query["redirect_uri"])
+
+        def visit() -> None:
+            for params in self.callbacks(self.query):
+                connection = http.client.HTTPConnection(redirect.hostname or "", redirect.port, timeout=5)
+                connection.request("GET", f"{redirect.path}?{urllib.parse.urlencode(params)}")
+                self.statuses.append(connection.getresponse().status)
+                connection.close()
+
+        threading.Thread(target=visit, daemon=True).start()
+        return True
+
+
+def approve(query: dict[str, str]) -> list[dict[str, str]]:
+    return [{"code": "auth-code", "state": query["state"], "client_id": CLIENT_ID}]
+
+
+def token_endpoint(browser: Browser, **claims: object) -> FakeOpener:
+    def route(_request: object) -> FakeResponse:
+        token = id_token(**{"nonce": browser.query["nonce"], **claims})
+        return FakeResponse(body=json.dumps(token_payload(id_token=token)).encode())
+
+    return FakeOpener({f"POST {TOKEN_URL}": route})
+
+
+def login(browser: Browser, opener: FakeOpener, *, timeout_s: float = 10.0) -> chatgpt_auth.LoginResult:
+    return chatgpt_auth.login(open_url=browser, opener=opener, timeout_s=timeout_s, clock=lambda: NOW)
+
+
+def test_login_registers_this_host_exchanges_the_code_and_stores_the_account(state_dir: Path) -> None:
+    browser = Browser(approve)
+    opener = token_endpoint(browser)
+    result = login(browser, opener)
+
+    assert result == chatgpt_auth.LoginResult(EMAIL, plan=True)
+    query = browser.query
+    redirect = urllib.parse.urlsplit(query["redirect_uri"])
+    assert (redirect.scheme, redirect.hostname, redirect.path) == ("http", "127.0.0.1", "/auth/callback")
+    assert redirect.port is not None and redirect.port > 0
+    assert query["client_id"] == "dynamic_agent_client"
+    assert query["agent_name_hint"] == "ytverbatim"
+    assert query["ext_agent_host_id"].startswith("urn:uuid:")
+    assert query["response_type"] == "code"
+    assert query["resource"] == "https://api.openai.com/v1"
+    assert query["scope"] == "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
+    assert query["code_challenge_method"] == "S256"
+    assert query["state"] and query["nonce"] and query["state"] != query["nonce"]
+    assert "prompt" not in query
+    assert browser.statuses == [200]
+
+    (exchange,) = opener.requests
+    sent = form(exchange)
+    verifier = sent.pop("code_verifier")
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    assert query["code_challenge"] == challenge
+    assert sent == {
+        "grant_type": "authorization_code",
+        "client_id": CLIENT_ID,
+        "code": "auth-code",
+        "redirect_uri": query["redirect_uri"],
+        "resource": "https://api.openai.com/v1",
+    }
+
+    state = stored_state()
+    assert state.host_id == query["ext_agent_host_id"]
+    assert state.client_id == CLIENT_ID
+    assert state.account is not None and state.account.access_token == "access-1"
+    assert state.account.expires_at == NOW + 3600
+    assert chatgpt_auth.status(clock=lambda: NOW) == "ready"
+    assert stat.S_IMODE(state_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(paths.chatgpt_credentials_file().stat().st_mode) == 0o600
+    assert json.loads(paths.chatgpt_credentials_file().read_text())["schema_version"] == 1
+
+
+def test_signing_in_again_reuses_the_registration_and_host_id() -> None:
+    first = Browser(approve)
+    login(first, token_endpoint(first))
+    again = Browser(lambda query: [{"code": "auth-code-2", "state": query["state"]}])
+    opener = token_endpoint(again)
+    login(again, opener)
+
+    assert again.query["client_id"] == CLIENT_ID
+    assert "agent_name_hint" not in again.query
+    assert again.query["ext_agent_host_id"] == first.query["ext_agent_host_id"]
+    assert form(opener.requests[0])["client_id"] == CLIENT_ID
+
+
+def test_an_account_without_plan_permission_is_asked_for_consent_again() -> None:
+    store_account(scopes=("openid", "offline_access"))
+    browser = Browser(approve)
+    login(browser, token_endpoint(browser))
+    assert browser.query["prompt"] == "consent"
+    assert chatgpt_auth.status(clock=lambda: NOW) == "ready"
+
+
+def test_a_callback_with_the_wrong_state_is_refused_and_the_right_one_still_completes() -> None:
+    browser = Browser(
+        lambda query: [
+            {"code": "forged", "state": "not-the-state", "client_id": CLIENT_ID},
+            {"code": "auth-code", "state": query["state"], "client_id": CLIENT_ID},
+        ]
+    )
+    opener = token_endpoint(browser)
+    login(browser, opener)
+    assert browser.statuses == [400, 200]
+    assert form(opener.requests[0])["code"] == "auth-code"
+
+
+def test_only_wrong_state_callbacks_time_out_without_an_exchange() -> None:
+    browser = Browser(lambda _query: [{"code": "forged", "state": "not-the-state"}])
+    opener = FakeOpener()
+    with pytest.raises(ChatGPTAuthError) as raised:
+        login(browser, opener, timeout_s=1.0)
+    assert raised.value.code == "timeout"
+    assert opener.requests == []
+    assert stored_state().account is None
+
+
+def test_a_denied_sign_in_keeps_the_stored_account() -> None:
+    store_account()
+    browser = Browser(lambda query: [{"error": "access_denied", "state": query["state"]}])
+    with pytest.raises(ChatGPTAuthError) as raised:
+        login(browser, FakeOpener())
+    assert raised.value.code == "access_denied"
+    account = stored_state().account
+    assert account is not None and account.access_token == "access-1"
+
+
+def test_a_first_sign_in_without_an_assigned_client_id_is_refused() -> None:
+    browser = Browser(lambda query: [{"code": "auth-code", "state": query["state"]}])
+    with pytest.raises(ChatGPTAuthError) as raised:
+        login(browser, FakeOpener())
+    assert raised.value.code == "invalid_client"
+
+
+@pytest.mark.parametrize(
+    ("claims", "failed"),
+    [
+        ({"iss": "https://issuer.example.com"}, "iss"),
+        ({"aud": "someone-else"}, "aud"),
+        ({"aud": [CLIENT_ID, "other"]}, "azp"),
+        ({"azp": "someone-else"}, "azp"),
+        ({"exp": NOW - 31}, "exp"),
+        ({"sub": ""}, "sub"),
+        ({"nonce": "replayed-nonce"}, "nonce"),
+    ],
+)
+def test_an_id_token_failing_a_claim_check_stores_nothing(claims: dict[str, object], failed: str) -> None:
+    browser = Browser(approve)
+    with pytest.raises(ChatGPTAuthError, match=f"failed its {failed} check") as raised:
+        login(browser, token_endpoint(browser, **claims))
+    assert raised.value.code == "invalid_identity"
+    assert stored_state().account is None
+
+
+def test_id_token_claims_allow_thirty_seconds_of_clock_skew_and_several_audiences_with_azp() -> None:
+    assert id_token_claims(id_token(exp=NOW - 29), CLIENT_ID, NOW)["sub"]
+    assert id_token_claims(id_token(aud=[CLIENT_ID, "other"], azp=CLIENT_ID), CLIENT_ID, NOW)
+    with pytest.raises(ChatGPTAuthError, match="format"):
+        id_token_claims("not-a-jwt", CLIENT_ID, NOW)
+
+
+def test_a_browser_that_cannot_open_points_at_no_browser() -> None:
+    with pytest.raises(ChatGPTAuthError, match="--no-browser"):
+        chatgpt_auth.login(open_url=lambda _url: False, opener=FakeOpener(), timeout_s=1.0)
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o640, 0o604])
+def test_a_store_readable_by_others_is_refused(mode: int) -> None:
+    store_account()
+    paths.chatgpt_credentials_file().chmod(mode)
+    with pytest.raises(ChatGPTAuthError) as raised:
+        chatgpt_auth.status()
+    assert raised.value.code == "unsafe_store"
+
+
+def test_a_symlinked_credentials_file_is_refused(tmp_path: Path) -> None:
+    store_account()
+    elsewhere = tmp_path / "elsewhere.json"
+    paths.chatgpt_credentials_file().rename(elsewhere)
+    paths.chatgpt_credentials_file().symlink_to(elsewhere)
+    with pytest.raises(ChatGPTAuthError) as raised:
+        chatgpt_auth.status()
+    assert raised.value.code == "unsafe_store"
+    with pytest.raises(ChatGPTAuthError, match="symlink"):
+        chatgpt_auth.access_token(opener=FakeOpener())
+
+
+def test_a_symlinked_or_loose_store_directory_is_refused(tmp_path: Path, state_dir: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    state_dir.parent.mkdir(parents=True)
+    state_dir.symlink_to(target)
+    with pytest.raises(ChatGPTAuthError, match="not a symlink"):
+        chatgpt_auth.status()
+    state_dir.unlink()
+    state_dir.mkdir(mode=0o700)
+    state_dir.chmod(0o755)
+    with pytest.raises(ChatGPTAuthError, match="owner-only"):
+        chatgpt_auth.status()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{not json",
+        json.dumps({"schema_version": 2, "host_id": "urn:uuid:00000000-0000-4000-8000-000000000000"}),
+        json.dumps({"schema_version": 1, "host_id": "not-a-urn"}),
+    ],
+)
+def test_an_invalid_store_fails_loud(content: str) -> None:
+    store_account()
+    path = paths.chatgpt_credentials_file()
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(ChatGPTAuthError) as raised:
+        chatgpt_auth.status()
+    assert raised.value.code == "invalid_store"
+    assert "ytverbatim llm login" in str(raised.value)
+
+
+def test_status_reports_every_state_without_a_request() -> None:
+    assert chatgpt_auth.status() == "signed_out"
+    store_account(scopes=("openid",))
+    assert chatgpt_auth.status(clock=lambda: NOW) == "no_plan"
+    store_account(expires_at=NOW + 30)
+    assert chatgpt_auth.status(clock=lambda: NOW) == "refreshable"
+    store_account(expires_at=NOW - 1, refresh="")
+    assert chatgpt_auth.status(clock=lambda: NOW) == "expired"
+    assert chatgpt_auth.readiness(clock=lambda: NOW).ready is False
+
+
+def test_a_current_token_is_returned_without_a_request() -> None:
+    store_account(expires_at=NOW + 61)
+    opener = FakeOpener()
+    assert chatgpt_auth.access_token(opener=opener, clock=lambda: NOW) == "access-1"
+    assert opener.requests == []
+
+
+def test_a_token_expiring_within_a_minute_is_refreshed_and_the_refresh_token_rotates() -> None:
+    store_account(expires_at=NOW + 59)
+    opener = FakeOpener({f"POST {TOKEN_URL}": json_response(token_payload(access="access-2", refresh="refresh-2"))})
+    assert chatgpt_auth.access_token(opener=opener, clock=lambda: NOW) == "access-2"
+    (request,) = opener.requests
+    assert form(request) == {
+        "grant_type": "refresh_token",
+        "client_id": CLIENT_ID,
+        "refresh_token": "refresh-1",
+        "resource": "https://api.openai.com/v1",
+    }
+    account = stored_state().account
+    assert account is not None
+    assert (account.access_token, account.refresh_token) == ("access-2", "refresh-2")
+    assert account.expires_at == NOW + 3600
+
+
+def test_a_refresh_without_a_new_refresh_token_is_refused_and_keeps_the_old_one() -> None:
+    store_account(expires_at=NOW)
+    opener = FakeOpener({f"POST {TOKEN_URL}": json_response(token_payload(access="access-2", refresh=None))})
+    with pytest.raises(ChatGPTAuthError) as raised:
+        chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
+    assert raised.value.code == "invalid_credentials"
+    account = stored_state().account
+    assert account is not None and account.refresh_token == "refresh-1"
+
+
+@pytest.mark.parametrize("code", ["invalid_grant", "refresh_token_reused", "refresh_token_expired"])
+def test_a_terminal_refresh_error_clears_the_tokens(code: str) -> None:
+    store_account(expires_at=NOW)
+    opener = FakeOpener({f"POST {TOKEN_URL}": http_error(400, {"error": code, "error_description": "secret detail"})})
+    with pytest.raises(ChatGPTAuthError, match="ytverbatim llm login") as raised:
+        chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
+    assert raised.value.code == code
+    assert "secret detail" not in str(raised.value)
+    state = stored_state()
+    assert state.account is not None and state.account.access_token == state.account.refresh_token == ""
+    assert state.client_id == CLIENT_ID
+    assert chatgpt_auth.status(clock=lambda: NOW) == "signed_out"
+
+
+def test_a_transient_refresh_failure_keeps_the_tokens() -> None:
+    store_account(expires_at=NOW)
+    opener = FakeOpener({f"POST {TOKEN_URL}": http_error(503)})
+    with pytest.raises(ChatGPTAuthError) as raised:
+        chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
+    assert raised.value.code == "request_failed"
+    account = stored_state().account
+    assert account is not None and account.refresh_token == "refresh-1"
+
+
+def test_earliest_refresh_at_holds_off_a_refresh_while_the_token_still_works() -> None:
+    store_account(expires_at=NOW + 30, earliest_refresh_at=NOW + 100)
+    opener = FakeOpener()
+    assert chatgpt_auth.access_token(opener=opener, clock=lambda: NOW) == "access-1"
+    assert opener.requests == []
+    with pytest.raises(ChatGPTAuthError) as raised:
+        chatgpt_auth.access_token(opener=opener, clock=lambda: NOW + 50)
+    assert raised.value.code == "refresh_not_yet"
+    assert opener.requests == []
+
+
+def test_no_account_or_no_plan_refuses_a_token() -> None:
+    with pytest.raises(ChatGPTAuthError, match="ytverbatim llm login") as raised:
+        chatgpt_auth.access_token(opener=FakeOpener())
+    assert raised.value.code == "not_signed_in"
+    store_account(scopes=("openid",))
+    with pytest.raises(ChatGPTAuthError) as raised:
+        chatgpt_auth.access_token(opener=FakeOpener(), clock=lambda: NOW)
+    assert raised.value.code == "plan_disabled"
+
+
+def test_logout_revokes_at_the_discovered_endpoint_and_clears_the_tokens() -> None:
+    store_account()
+    opener = FakeOpener(
+        {f"GET {DISCOVERY_URL}": json_response(DISCOVERY), f"POST {REVOKE_URL}": lambda _r: FakeResponse()}
+    )
+    assert chatgpt_auth.logout(opener=opener) is True
+    (revoke,) = opener.to(REVOKE_URL)
+    assert form(revoke) == {"token": "refresh-1", "token_type_hint": "refresh_token", "client_id": CLIENT_ID}
+    state = stored_state()
+    assert state.account is not None and state.account.access_token == ""
+    assert state.client_id == CLIENT_ID
+    assert chatgpt_auth.status() == "signed_out"
+
+
+@pytest.mark.parametrize(
+    "routes",
+    [
+        {f"GET {DISCOVERY_URL}": json_response(DISCOVERY), f"POST {REVOKE_URL}": http_error(500)},
+        {f"GET {DISCOVERY_URL}": json_response({**DISCOVERY, "revocation_endpoint": "https://revoke.example.com/"})},
+        {f"GET {DISCOVERY_URL}": json_response({**DISCOVERY, "issuer": "https://issuer.example.com"})},
+    ],
+)
+def test_an_unconfirmed_revocation_still_clears_the_tokens(routes: dict[str, Route]) -> None:
+    store_account()
+    opener = FakeOpener(routes)
+    assert chatgpt_auth.logout(opener=opener) is False
+    account = stored_state().account
+    assert account is not None and account.access_token == "" and account.refresh_token == ""
+
+
+def test_logout_without_an_account_contacts_nobody() -> None:
+    opener = FakeOpener()
+    assert chatgpt_auth.logout(opener=opener) is True
+    assert opener.requests == []
+
+
+def test_the_store_never_holds_more_than_one_account() -> None:
+    store_account()
+    raw = json.loads(paths.chatgpt_credentials_file().read_text())
+    assert set(raw) == {"schema_version", "host_id", "client_id", "account"}
+    assert raw["account"]["scopes"] == list(PLAN_SCOPES)
+    assert os.stat(paths.chatgpt_lock_file()).st_mode & 0o077 == 0

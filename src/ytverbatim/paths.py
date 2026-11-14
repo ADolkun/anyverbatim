@@ -50,6 +50,19 @@ def snapshots_dir() -> Path:
     return _private(auth_dir() / "snapshots")
 
 
+def chatgpt_auth_dir() -> Path:
+    """Home of the ChatGPT credentials. Not created here: the store creates it and refuses a symlink in its place."""
+    return _private(state_dir() / "llm") / "chatgpt"
+
+
+def chatgpt_credentials_file() -> Path:
+    return chatgpt_auth_dir() / "credentials.json"
+
+
+def chatgpt_lock_file() -> Path:
+    return chatgpt_auth_dir() / "credentials.lock"
+
+
 def locks_dir() -> Path:
     return _private(state_dir() / "locks")
 

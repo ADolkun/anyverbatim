@@ -240,6 +240,10 @@ def session_kit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_proc: Fake
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    # The pipeline under test runs without an LLM unless a test picks one; the default LLM needs a ChatGPT sign-in.
+    config_file = home / ".config" / "ytverbatim" / "config.toml"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text('[llm]\nprovider = "none"\n', encoding="utf-8")
     released = date.today() - timedelta(days=10)
     monkeypatch.setattr(version, "installed", lambda: version.YtDlpVersion("2099.01.01", released))
     monkeypatch.setattr(jsruntime, "detect", lambda: jsruntime.JsRuntime("deno", (), None))

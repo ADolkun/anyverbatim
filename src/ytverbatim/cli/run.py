@@ -39,7 +39,11 @@ from ytverbatim.ytdlp.runner import redact
     "--llm",
     "llm_spec",
     metavar="SPEC",
-    help="LLM for punctuation, correction and numeric verdicts: PROVIDER:MODEL (claude-cli:claude-sonnet-5-5) or none.",
+    help=(
+        "LLM for punctuation, correction and numeric verdicts: PROVIDER:MODEL, or none for no LLM. "
+        "Default: chatgpt:gpt-6.1-sol at medium effort (needs `ytverbatim llm login`); "
+        "alternatives: claude-cli:claude-sonnet-5-5, openai-compat:MODEL."
+    ),
 )
 @click.option("--captions/--no-captions", default=True, show_default=True, help="Download caption tracks.")
 @click.option(

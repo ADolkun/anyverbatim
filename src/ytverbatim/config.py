@@ -48,7 +48,9 @@ class TextOptions:
 
 @dataclass(frozen=True)
 class LLMOptions:
-    provider: Literal["none", "claude-cli", "openai-compat"] = "none"
+    provider: Literal["none", "chatgpt", "claude-cli", "openai-compat"] = "chatgpt"
+    # None means the provider's own default (chatgpt: gpt-6.1-sol at medium), so a config that switches provider
+    # never inherits another provider's model.
     model: str | None = None
     effort: str | None = None
     base_url: str | None = None

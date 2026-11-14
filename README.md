@@ -4,7 +4,7 @@ Turn YouTube URLs into verified, timestamped transcripts for LLM context.
 
 Language models need transcripts they can cite. `ytverbatim` aims to produce text where every line carries a timestamp, so a quote can be traced back to the exact moment in the video. It works with your own logged-in browser session, so Premium and members-only videos you can already watch are covered. Speech recognition runs locally on Apple Silicon (MLX), with a focus on Mandarin and English.
 
-**Status: pre-alpha.** `ytverbatim run` turns a video into a transcript with local Whisper and checks numbers against independent readings where there are any (the video's own captions, or an optional second engine). With an LLM you choose, it also restores missing punctuation and corrects misheard words. An engine evaluation kept mlx-whisper large-v3 as the default ([result](evals/results/asr-2026-11-13.md)).
+**Status: pre-alpha.** `ytverbatim run` turns a video into a transcript with local Whisper and checks numbers against independent readings where there are any (the video's own captions, or an optional second engine). With an LLM (ChatGPT's gpt-6.1-sol by default, or one you choose), it also restores missing punctuation and corrects misheard words. An engine evaluation kept mlx-whisper large-v3 as the default ([result](evals/results/asr-2026-11-13.md)).
 
 ## Usage
 
@@ -12,13 +12,14 @@ Language models need transcripts they can cite. `ytverbatim` aims to produce tex
 ytverbatim run URL... [--out DIR] [--auth SPEC] [--engine ID] [--source asr|captions] [--correct/--no-correct]
                       [--chapters auto|none] [--llm SPEC] [--captions/--no-captions] [--force] [--ignore-cooldown]
 ytverbatim render CONTEXT.json [--stdout]
+ytverbatim llm login [--no-browser] | logout | check [--probe]
 ```
 
 Each video (playlists and channels are expanded) gets a folder `<out>/<video id>/` holding `context.json` (the versioned contract), `context.md` (the same transcript as markdown with a timestamped link per paragraph and YouTube chapters as headings) and the downloaded audio (plus `video.mp4` when [video](#library) is on). Exit codes: 0 ok, 1 some videos failed, 2 auth error, 3 batch stopped. `ytverbatim fetch` downloads without transcribing; `ytverbatim auth` sets up your browser login (see [docs/auth.md](docs/auth.md)); `ytverbatim render` rewrites the markdown from a `context.json`.
 
 The stages run in this order: metadata, captions and audio; ASR (or, with `--source captions`, the manual caption track, falling back to ASR with a warning when there is none); normalize (Simplified Chinese by default, `[text] script = "keep"` to leave the script alone; fillers are kept unless `[text] fillers = "remove"`); punctuation, only where the transcript has too few sentence marks; correction, whenever the text stages have an LLM (`--no-correct` or `[text] correct = false` turns it off); numeric verification against captions in the transcript's language (without such captions or a second opinion the numbers rest on the transcript alone, and a warning says so); then sentences, paragraphs, chapters and the documents. Every stage is stored under `<video>/.stages/`, keyed by what it read: a rerun with other options recomputes only the stages those options reach, an interrupted run resumes, and a video whose `context.json` is current is skipped. `--force` discards the stored stages and recomputes every one, including the paid LLM calls. The 16 kHz WAV is deleted once the transcript is stored; the compressed audio stays.
 
-`--llm PROVIDER:MODEL` (for example `claude-cli:claude-sonnet-5-5`, or `openai-compat:MODEL` with `[llm] base_url` set) gives the text stages an LLM; `--llm none` turns it off. No LLM is configured by default, so nothing is called until you choose one. The recommended LLM is `claude-cli:claude-sonnet-5-5`: in the [correction evaluation](evals/results/correction-2026-11-13.md) it removed the most errors and over-corrected the least of the models run on a built-in provider (gpt-6.1-sol, run through an external client, did better still). A provider other than the configured one starts from its own defaults, so a configured `base_url` or `effort` does not get in the way. The LLM's effort and endpoint host are part of its identity, so changing them redoes the LLM stages. Without one, punctuation is left as transcribed, correction is skipped and disputed numbers stay flagged with every reading; punctuation and numbers are recorded in `quality.warnings` and printed as a notice. With an LLM, correction runs unless switched off; `--correct` (or `[text] correct = true`) without an LLM is an error. `llm_usage` is what the document cost in LLM tokens, per stage: batches reused from earlier runs count too, so a rerun that reuses everything reports the same totals. It is not what one run spent. As a library, `ytverbatim.process(url, options, llm=client)` takes any object that satisfies `ytverbatim.LLMClient`.
+`--llm PROVIDER:MODEL` picks the text stages' LLM for one run and `--llm none` runs without one (see [LLM](#llm)). A provider other than the configured one starts from its own defaults, so a configured `base_url` or `effort` does not get in the way. The LLM's effort and endpoint host are part of its identity, so changing them redoes the LLM stages. Without one, punctuation is left as transcribed, correction is skipped and disputed numbers stay flagged with every reading; punctuation and numbers are recorded in `quality.warnings` and printed as a notice. With an LLM, correction runs unless switched off; `--correct` (or `[text] correct = true`) without an LLM is an error. `llm_usage` is what the document cost in LLM tokens, per stage: batches reused from earlier runs count too, so a rerun that reuses everything reports the same totals. It is not what one run spent. As a library, `ytverbatim.process(url, options, llm=client)` takes any object that satisfies `ytverbatim.LLMClient`; without `llm` it uses the configured provider, ChatGPT by default, and `Options(llm=LLMOptions(provider="none"))` (from `ytverbatim.config`) runs without one.
 
 When YouTube answers with a bot check or a rate limit, the batch stops and a cooldown starts (1 hour, doubling on repeats up to 24 hours). Until it ends, `run` and `fetch` refuse to start; only a `run` whose targets are all single videos it has already finished goes ahead, because it requests nothing. `--ignore-cooldown` starts anyway, at the risk of your account being flagged; use it only when you know the block has lifted.
 
@@ -30,6 +31,28 @@ ASR runs in a separate worker process under a memory watch, so a runaway model c
 [asr]
 memory_cap_gib = 8
 ```
+
+## LLM
+
+Punctuation, correction and numeric verdicts use an LLM. The default is ChatGPT's gpt-6.1-sol at medium reasoning effort, which needs a ChatGPT plan and one sign-in:
+
+```
+ytverbatim llm login     # opens OpenAI's sign-in page and waits for it; --no-browser only prints the URL
+ytverbatim llm check     # signed in, missing plan permission or expired; contacts OpenAI only with --probe
+ytverbatim llm logout    # revokes the sign-in and removes its tokens from this machine
+```
+
+In the [correction evaluation](evals/results/correction-2026-11-13.md) gpt-6.1-sol at medium effort removed the most errors of every model run: 57.6 net errors per hour against 42.7 for Claude Sonnet, at a fix precision of 0.929. High effort added nothing measurable and took 1.7 times as long. The sign-in belongs to ytverbatim alone: its tokens stay in an owner-only file under `~/.local/state/ytverbatim/llm/chatgpt/`, are refreshed before each call and are never printed. Until you sign in, `run` stops before any download and says how to fix it.
+
+The alternatives are `--llm claude-cli:claude-sonnet-5-5`, which runs through the `claude` CLI on your claude.ai subscription, and `--llm openai-compat:MODEL` with `[llm] base_url` set, for any OpenAI-compatible endpoint such as a local `mlx_lm.server`. `--llm none` skips the LLM stages and keeps everything on your machine. To change the default for every run, set it in `~/.config/ytverbatim/config.toml`; `effort` takes low, medium, high, xhigh or max for chatgpt and claude-cli:
+
+```toml
+[llm]
+provider = "claude-cli"
+model = "claude-sonnet-5-5"
+```
+
+The LLM stages send transcript text, plus the video's tags and the uploader's pinned note when there is one, to the provider you chose. Your cookies never leave your machine.
 
 ## Library
 
@@ -65,7 +88,7 @@ document = ytverbatim.process(ids[0], llm=client)
 
 ## Responsible use
 
-Use `ytverbatim` only on content you can already access with your own account. It does not circumvent DRM. You are responsible for complying with YouTube's Terms of Service and with copyright law. Your cookies never leave your machine.
+Use `ytverbatim` only on content you can already access with your own account. It does not circumvent DRM. You are responsible for complying with YouTube's Terms of Service and with copyright law. Your cookies never leave your machine; transcript text reaches an LLM provider only through the LLM stages (see [LLM](#llm)).
 
 ## License
 

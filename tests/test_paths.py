@@ -26,6 +26,8 @@ def test_defaults_under_home(home: Path) -> None:
     assert paths.cache_dir() == home / "Library" / "Caches" / "ytverbatim"
     assert paths.pins_dir() == paths.cache_dir() / "pins"
     assert paths.llm_dir("claude") == paths.cache_dir() / "llm" / "claude"
+    assert paths.chatgpt_auth_dir() == paths.state_dir() / "llm" / "chatgpt"
+    assert paths.chatgpt_credentials_file() == paths.chatgpt_auth_dir() / "credentials.json"
     assert paths.home_dir() == home / ".local" / "share" / "ytverbatim"
     assert paths.default_output_root() == paths.home_dir() / "videos"
 
