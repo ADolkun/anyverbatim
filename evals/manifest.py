@@ -9,6 +9,7 @@ from evals.normalize import Language
 from ytverbatim.errors import ConfigError
 
 EVAL_DIR_ENV = "YTVERBATIM_EVAL_DIR"
+DEFAULT_EVAL_DIR = "~/.local/share/ytverbatim/eval"
 MANIFEST_NAME = "manifest.json"
 
 
@@ -79,14 +80,14 @@ class Manifest(_Frozen):
 
 
 def eval_dir() -> Path:
-    value = os.environ.get(EVAL_DIR_ENV)
-    if not value:
-        raise ConfigError(f"set {EVAL_DIR_ENV} to the directory that holds {MANIFEST_NAME} and the eval audio")
-    return Path(value).expanduser()
+    """Return ``$YTVERBATIM_EVAL_DIR``, else the default location AGENTS.md documents."""
+    return Path(os.environ.get(EVAL_DIR_ENV) or DEFAULT_EVAL_DIR).expanduser()
 
 
 def load_manifest(directory: Path | None = None) -> Manifest:
     path = (directory or eval_dir()) / MANIFEST_NAME
+    if not path.is_file():
+        raise ConfigError(f"no {MANIFEST_NAME} at {path}; set {EVAL_DIR_ENV} to the directory that holds it")
     manifest = Manifest.model_validate(json.loads(path.read_text(encoding="utf-8")))
     ids = [v.id for v in manifest.videos]
     if len(set(ids)) != len(ids):

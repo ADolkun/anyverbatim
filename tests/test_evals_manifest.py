@@ -102,16 +102,28 @@ def test_unknown_language_is_rejected(tmp_path: Path) -> None:
         load_manifest(tmp_path)
 
 
-def test_eval_dir_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_eval_dir_defaults_to_the_documented_location(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv(EVAL_DIR_ENV, raising=False)
-    with pytest.raises(ConfigError, match=EVAL_DIR_ENV):
-        eval_dir()
-    with pytest.raises(ConfigError, match=EVAL_DIR_ENV):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert eval_dir() == tmp_path / ".local" / "share" / "ytverbatim" / "eval"
+    monkeypatch.setenv(EVAL_DIR_ENV, "")
+    assert eval_dir() == tmp_path / ".local" / "share" / "ytverbatim" / "eval"
+
+
+def test_a_missing_manifest_names_the_directory_and_the_variable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(EVAL_DIR_ENV, str(tmp_path / "empty"))
+    with pytest.raises(ConfigError, match=EVAL_DIR_ENV) as raised:
         load_manifest()
+    assert str(tmp_path / "empty") in str(raised.value)
 
 
 def test_eval_dir_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     write_manifest(tmp_path, [video("vid00000001", "en")])
     monkeypatch.setenv(EVAL_DIR_ENV, str(tmp_path))
     assert eval_dir() == tmp_path
+    monkeypatch.setenv(EVAL_DIR_ENV, "~/elsewhere")
+    assert eval_dir() == Path.home() / "elsewhere"
+    monkeypatch.setenv(EVAL_DIR_ENV, str(tmp_path))
     assert [v.id for v in load_manifest().videos] == ["vid00000001"]
