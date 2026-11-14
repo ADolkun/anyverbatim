@@ -12,6 +12,7 @@ reported and not gated.
 """
 
 import random
+import re
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ from ytverbatim.contract.models import Flag
 from ytverbatim.errors import ConfigError
 from ytverbatim.text.numbers import QToken, quantity_tokens
 
+_UPPERCASE_RUN = re.compile(r"[A-Z]{2,}")
 OVER_CORRECTION_MAX = 0.15
 # With few labels the percentile bootstrap collapses (no "before" answer means it almost never reaches 0), so an
 # interval bound below 0 would be meaningless; this many decided spans are needed before the interval counts.
@@ -148,9 +150,11 @@ def breaks_numbers(before: str, after: str, flags: Sequence[Flag], language: Lan
     """Whether ``after`` changes a quantity, or changes a ticker that ``flags`` do not record as a correction.
 
     Each flag covers one changed ticker. A ticker respelled in place needs a flag with its before and after. One that
-    vanishes into a name (open AI→OpenAI) or appears out of one has no counterpart, so a flag naming it on its own side
-    covers it (``AI → OpenAI``), provided the flag's other side is really there: in the corrected text between the
-    unchanged tickers around the block for a vanish, in the original text there for an appearance.
+    merges into a name (open AI→OpenAI) or splits out of one has no counterpart of its own, so a flag naming it on its
+    own side covers it (``AI → OpenAI``). The correction stage only records such a flag with a word that holds an
+    uppercase run on the other side, so the flag must name one, and that word must stand where the edit inserted,
+    replaced or deleted characters (in the corrected text for a merge, the original for a split), one occurrence
+    per flag.
     """
     texts = [canonical(text, language) for text in (before, after)]
     found = [quantity_tokens(text) for text in texts]
@@ -175,8 +179,7 @@ def breaks_numbers(before: str, after: str, flags: Sequence[Flag], language: Lan
             unused[b, a] -= paired
             gone[b] -= paired
             came[a] -= paired
-        corrected = _between(new_tokens, texts[1], j1, j2)
-        original = _between(old_tokens, texts[0], i1, i2)
+        original, corrected = _edited(texts, _between(old_tokens, i1, i2), _between(new_tokens, j1, j2))
         if not all(_use(unused, before=b, within=corrected) for b in gone.elements()):
             return True
         if not all(_use(unused, after=a, within=original) for a in came.elements()):
@@ -184,32 +187,79 @@ def breaks_numbers(before: str, after: str, flags: Sequence[Flag], language: Lan
     return False
 
 
-def _between(tokens: Sequence[QToken], text: str, lo: int, hi: int) -> str:
-    """Return the text from the ticker before ``tokens[lo:hi]`` to the one after it, or to the text's end."""
-    return text[tokens[lo - 1].char_end if lo else 0 : tokens[hi].char_start if hi < len(tokens) else len(text)]
+def _between(tokens: Sequence[QToken], lo: int, hi: int) -> tuple[int | None, int | None]:
+    """Return the span from the end of the ticker before ``tokens[lo:hi]`` to the start of the one after it."""
+    return tokens[lo - 1].char_end if lo else None, tokens[hi].char_start if hi < len(tokens) else None
+
+
+@dataclass
+class _Edited:
+    """A changed block of one text: the runs the edit touched, and the occurrences already spent on a flag."""
+
+    text: str
+    start: int
+    runs: list[tuple[int, int]]
+    spent: set[int]
+
+    def find(self, name: str) -> int | None:
+        """Return an unspent occurrence of ``name`` that overlaps or touches an edited run."""
+        at = self.text.find(name, self.start)
+        while at >= 0:
+            if at not in self.spent and any(a <= at + len(name) and at <= b for a, b in self.runs):
+                return at
+            at = self.text.find(name, at + 1)
+        return None
+
+
+def _edited(
+    texts: Sequence[str], old_span: tuple[int | None, int | None], new_span: tuple[int | None, int | None]
+) -> tuple[_Edited, _Edited]:
+    """Diff the two blocks by character; each side keeps its block's text, so an untouched copy is not an edit."""
+    old_lo, new_lo = old_span[0] or 0, new_span[0] or 0
+    old_block = texts[0][old_lo : old_span[1] if old_span[1] is not None else len(texts[0])]
+    new_block = texts[1][new_lo : new_span[1] if new_span[1] is not None else len(texts[1])]
+    old_runs: list[tuple[int, int]] = []
+    new_runs: list[tuple[int, int]] = []
+    for tag, i1, i2, j1, j2 in SequenceMatcher(None, old_block, new_block, autojunk=False).get_opcodes():
+        if tag != "equal":
+            old_runs.append((old_lo + i1, old_lo + i2))
+            new_runs.append((new_lo + j1, new_lo + j2))
+    return (
+        _Edited(texts[0][: old_lo + len(old_block)], old_lo, old_runs, set()),
+        _Edited(texts[1][: new_lo + len(new_block)], new_lo, new_runs, set()),
+    )
 
 
 def _use(
-    unused: Counter[tuple[str, str]], *, before: str | None = None, after: str | None = None, within: str | None = None
+    unused: Counter[tuple[str, str]],
+    *,
+    before: str | None = None,
+    after: str | None = None,
+    within: _Edited | None = None,
 ) -> bool:
-    """Spend one unused flag with this ``before`` or ``after`` (None matches any) whose other side is in ``within``.
+    """Spend one unused flag for a changed ticker; False when no flag qualifies.
 
-    With ``before`` given the flag's ``after`` must be in ``within``, with ``after`` given its ``before`` must be.
-    A pair given whole (both set) is an exact match and ``within`` is not used. False when no flag qualifies.
+    With ``within``, either ``before`` (a merge) or ``after`` (a split) names the ticker and the flag's other side must
+    be a word with an uppercase run that has an unspent occurrence in ``within``. Without it, both are given and the
+    flag must match exactly.
     """
-
-    def qualifies(b: str, a: str) -> bool:
-        if before is not None and after is not None:
-            return (b, a) == (before, after)
-        if before is not None:
-            return b == before and (within is None or a in within)
-        return a == after and (within is None or b in within)
-
-    pair = next(((b, a) for (b, a), count in unused.items() if count > 0 and qualifies(b, a)), None)
-    if pair is None:
-        return False
-    unused[pair] -= 1
-    return True
+    for (b, a), count in unused.items():
+        if count <= 0:
+            continue
+        if within is None:
+            if (b, a) == (before, after):
+                unused[b, a] -= 1
+                return True
+            continue
+        ticker, name = (b, a) if before is not None else (a, b)
+        if ticker != (before if before is not None else after):
+            continue
+        place = within.find(name) if _UPPERCASE_RUN.search(name) else None
+        if place is not None:
+            within.spent.add(place)
+            unused[b, a] -= 1
+            return True
+    return False
 
 
 def number_violations(base: BaseFile, candidate: CandidateFile) -> int:
