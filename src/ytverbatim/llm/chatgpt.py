@@ -209,7 +209,7 @@ class ChatGPTClient:
             items = [done_items[index] for index in sorted(done_items)]
         else:
             raise LLMOutputError(f"{self.id}: the streamed output items are incomplete", responded=True, usage=usage)
-        if any(item.get("status", "completed") != "completed" for item in items):
+        if any(item.get("status") not in (None, "completed") for item in items):
             raise LLMOutputError(f"{self.id}: an output item did not complete", responded=True, usage=usage)
         text = "".join(
             str(part.get("text", ""))

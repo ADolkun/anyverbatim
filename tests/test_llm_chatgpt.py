@@ -471,9 +471,44 @@ def test_a_real_stream_completes_through_the_bounded_reader(signed_in: list[str]
         done.set()
 
 
-def test_a_response_without_a_reachable_socket_fails_loud() -> None:
+def test_a_response_without_a_reachable_socket_fails_loud_and_is_closed() -> None:
     class Stripped:
         fp = io.BytesIO(b"body")
+        closed = False
 
+        def close(self) -> None:
+            self.closed = True
+
+    stripped = Stripped()
     with pytest.raises(RuntimeError, match="deadline cannot be enforced"):
-        chatgpt_http.BoundedResponse(Stripped(), 1.0)  # type: ignore[arg-type]
+        chatgpt_http.BoundedResponse(stripped, 1.0)  # type: ignore[arg-type]
+    assert stripped.closed
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [ValueError("Read on closed or unwrapped SSL socket."), AttributeError("read"), b"data: {}\n"],
+)
+def test_whatever_a_read_the_deadline_interrupts_returns_is_the_timeout(outcome: Exception | bytes) -> None:
+    class Interrupted:
+        fp = None
+
+        def read1(self, _size: int) -> bytes:
+            bounded._expired.set()  # the deadline timer firing in the middle of this read
+            if isinstance(outcome, bytes):
+                return outcome
+            raise outcome
+
+        def close(self) -> None:
+            pass
+
+    bounded = chatgpt_http.BoundedResponse(Interrupted(), 5.0)  # type: ignore[arg-type]
+    with pytest.raises(TimeoutError):
+        bounded.readline()
+
+
+def test_reply_items_with_a_null_status_count_as_complete(signed_in: list[str]) -> None:
+    reasoning = {"type": "reasoning", "id": "rs_1", "status": None, "summary": []}
+    reply = {**message("ok"), "status": None}
+    response = client(stream(sse(completed([reasoning, reply])))).complete(REQUEST)
+    assert response.text == "ok"

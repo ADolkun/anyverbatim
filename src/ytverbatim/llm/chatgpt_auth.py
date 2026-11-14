@@ -163,8 +163,16 @@ def login(
         try:
             payload = _exchange(pending, callback, client_id, opener)
         except ChatGPTAuthError as exc:
-            # A first registration can refuse the code it was issued with; OpenAI then expects one fresh
-            # authorization under the issued client. This is the protocol's step, not a retry of a failure.
+            if exc.code == "invalid_client":
+                # The registration may have come from a forged callback, or OpenAI dropped it; the next sign-in
+                # registers the host afresh instead of failing the same way forever.
+                with _locked() as current:
+                    _save(_unregistered(current))
+                raise ChatGPTAuthError(
+                    f"OpenAI refused this registration, so it was reset; run `{LOGIN_COMMAND}` again", code=exc.code
+                ) from None
+            # OpenAI can refuse the code once and expect a fresh authorization under the client it issued; that is
+            # the protocol's step, not a retry, and a second refusal is final.
             if exc.code != "invalid_grant" or reauthorized:
                 raise
             reauthorized = True
@@ -206,6 +214,11 @@ def access_token(*, opener: Opener = https_open, clock: Callable[[], float] = ti
             )
             renewed = _credentials(payload, state.client_id, clock(), previous=account)
         except ChatGPTAuthError as exc:
+            if exc.code == "invalid_client":
+                _save(_unregistered(state))
+                raise ChatGPTAuthError(
+                    f"OpenAI no longer accepts this sign-in's registration; run `{LOGIN_COMMAND}`", code=exc.code
+                ) from None
             if exc.code not in _TERMINAL_REFRESH_ERRORS:
                 raise
             # A refused refresh token never works again; keeping it would only repeat the refusal.
@@ -232,21 +245,23 @@ def logout(*, opener: Opener = https_open) -> Revocation:
         if account is None or not account.access_token:
             return "not_signed_in"
         outcome: Revocation = "no_refresh_token"
-        if account.refresh_token and state.client_id is not None:
-            try:
-                _post_form(
-                    _endpoint(_discovery(opener), "revocation_endpoint"),
-                    {
-                        "token": account.refresh_token,
-                        "token_type_hint": "refresh_token",
-                        "client_id": state.client_id,
-                    },
-                    opener,
-                )
-                outcome = "confirmed"
-            except ChatGPTAuthError:
-                outcome = "unconfirmed"
-        _save(replace(state, account=account.signed_out()))
+        try:
+            if account.refresh_token and state.client_id is not None:
+                try:
+                    _post_form(
+                        _endpoint(_discovery(opener), "revocation_endpoint"),
+                        {
+                            "token": account.refresh_token,
+                            "token_type_hint": "refresh_token",
+                            "client_id": state.client_id,
+                        },
+                        opener,
+                    )
+                    outcome = "confirmed"
+                except ChatGPTAuthError:
+                    outcome = "unconfirmed"
+        finally:
+            _save(replace(state, account=account.signed_out()))
     return outcome
 
 
@@ -669,6 +684,10 @@ def _issued_client(pending: _Pending, callback: dict[str, str]) -> str:
     if client_id in ("", DYNAMIC_CLIENT) or (pending.client_id != DYNAMIC_CLIENT and client_id != pending.client_id):
         raise ChatGPTAuthError("the sign-in callback named an unexpected registration", code="invalid_client")
     return client_id
+
+
+def _unregistered(state: State) -> State:
+    return replace(state, client_id=None, account=None if state.account is None else state.account.signed_out())
 
 
 def _remember_client(client_id: str) -> None:
