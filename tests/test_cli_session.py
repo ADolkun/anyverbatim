@@ -62,7 +62,10 @@ def test_login_switch_signs_in_even_when_signed_in(monkeypatch: pytest.MonkeyPat
     assert login.calls == [True]
 
 
-@pytest.mark.parametrize("stored", [None, {"expires_at": 1.0, "refresh": ""}, {"scopes": ("openid",)}])
+@pytest.mark.parametrize(
+    "stored",
+    [None, {"expires_at": 1.0, "refresh": ""}, {"scopes": ("openid",)}, {"refresh_refused": True}],
+)
 def test_login_signs_in_when_the_session_needs_it(
     monkeypatch: pytest.MonkeyPatch, stored: dict[str, object] | None
 ) -> None:

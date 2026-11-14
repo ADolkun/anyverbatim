@@ -89,27 +89,33 @@ def test_status_human_output(kit, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "fakeLikedId" not in result.output
 
 
-def test_status_auth_problem_exits_2(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_auth_problem_needs_attention(kit, monkeypatch: pytest.MonkeyPatch) -> None:
     source.save_source(BrowserSource("chrome", "Default"))
     _use_runner(monkeypatch, kit.fail(Signal.LOGIN_REQUIRED))
     result = _status()
-    assert result.exit_code == 2
+    assert result.exit_code == 1
     assert result.output.startswith("YouTube  chrome:Default  logged_out: ")
     assert "Fix: chrome profile 'Default' is not signed in" in result.output
 
 
-def test_status_without_source(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_without_a_browser_login_is_fine_for_public_videos(kit, monkeypatch: pytest.MonkeyPatch) -> None:
     _use_runner(monkeypatch, kit.ok())
-    result = _status("--json")
-    assert result.exit_code == 2
-    assert json.loads(result.output)["youtube"]["state"] == "no_source"
+    store_account(expires_at=time.time() + 3600)
+    result = _status()
+    assert result.exit_code == 0, result.output
+    youtube = result.output.splitlines()[0]
+    assert youtube == f"YouTube  {'none':<{len(EMAIL)}}  public videos only (no browser login)"
+    assert "Fix:" not in result.output
+    payload = json.loads(_status("--json").output)
+    assert payload["youtube"]["state"] == "no_source"
 
 
-def test_status_with_broken_saved_source_exits_2(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_with_broken_saved_source_needs_attention(kit, monkeypatch: pytest.MonkeyPatch) -> None:
     paths.auth_source_file().write_text("{", encoding="utf-8")
     _use_runner(monkeypatch, kit.ok())
+    store_account(expires_at=time.time() + 3600)
     result = _status()
-    assert result.exit_code == 2
+    assert result.exit_code == 1
     assert "no_source" in result.output and str(kit.home) not in result.output
 
 
@@ -218,7 +224,7 @@ def test_status_during_a_cooldown_skips_the_probe_unless_ignored(kit, monkeypatc
     runner = kit.ok()
     _use_runner(monkeypatch, runner)
     result = _status("--refresh")
-    assert result.exit_code == 2 and runner.calls == []
+    assert result.exit_code == 1 and runner.calls == []
     assert result.output.startswith("YouTube  chrome:Default  bot_check: cooldown active until ")
     assert "Wait until " in result.output and "an hour has passed" not in result.output
     assert "--ignore-cooldown" in result.output
@@ -233,13 +239,13 @@ def test_status_probe_stop_signal_starts_a_cooldown(kit, monkeypatch: pytest.Mon
     source.save_source(BrowserSource("chrome", "Default"))
     _use_runner(monkeypatch, kit.fail(Signal.BOT_CHECK))
     result = _status("--refresh")
-    assert result.exit_code == 2
+    assert result.exit_code == 1
     assert result.output.startswith("YouTube  chrome:Default  bot_check: the :ytfav probe hit bot_check")
     cooldown = read_cooldown()
     assert cooldown is not None and cooldown.until > datetime.now(UTC) + timedelta(minutes=59)
     runner = kit.ok()
     _use_runner(monkeypatch, runner)
-    assert _status("--refresh").exit_code == 2 and runner.calls == []
+    assert _status("--refresh").exit_code == 1 and runner.calls == []
 
 
 def test_doctor_during_a_cooldown_skips_the_probe_unless_ignored(kit, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -292,6 +298,11 @@ def test_status_signed_in_to_chatgpt(kit, monkeypatch: pytest.MonkeyPatch) -> No
         ({"expires_at": time.time() + 30}, "ok, plan permission, refreshes automatically on the next call", 0),
         ({"expires_at": time.time() - 1, "refresh": ""}, "needs re-sign-in", 1),
         ({"scopes": ("openid",)}, "signed in without ChatGPT plan permission", 1),
+        (
+            {"refresh_refused": True},
+            "needs re-sign-in: OpenAI refused to renew it, so it works only until its token expires",
+            1,
+        ),
     ],
 )
 def test_status_shows_when_chatgpt_renews_on_its_own_or_needs_a_sign_in(
