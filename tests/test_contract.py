@@ -431,6 +431,18 @@ def _speaker_without_a_list(raw: Raw) -> None:
     raw["segments"][0]["speaker"] = "S1"
 
 
+def _paragraph_speaker_without_a_list(raw: Raw) -> None:
+    raw["paragraphs"][0]["speaker"] = "S1"
+
+
+def _language_not_listed(raw: Raw) -> None:
+    raw["transcript"]["languages"] = ["en"]
+
+
+def _no_languages_with_segments(raw: Raw) -> None:
+    raw["transcript"]["languages"] = []
+
+
 def _naive_timestamp(raw: Raw) -> None:
     raw["created_at"] = "2026-01-02T03:04:05"
 
@@ -478,9 +490,37 @@ def _speakers_out_of_appearance_order(raw: Raw) -> None:
     raw["speakers"].reverse()
 
 
-def _speaker_ids_skip(raw: Raw) -> None:
-    raw["speakers"][1]["id"] = "S3"
-    raw["segments"][1]["speaker"] = raw["paragraphs"][1]["speaker"] = "S3"
+def _renumber(raw: Raw, old: str, new: str) -> None:
+    for item in (*raw["speakers"], *raw["segments"], *raw["paragraphs"]):
+        for key in ("id", "speaker"):
+            if item.get(key) == old:
+                item[key] = new
+
+
+def _speaker_ids_decrease(raw: Raw) -> None:
+    _renumber(raw, "S1", "S5")
+
+
+def _speaker_id_zero(raw: Raw) -> None:
+    _renumber(raw, "S1", "S0")
+
+
+def _speaker_id_shape(raw: Raw) -> None:
+    _renumber(raw, "S2", "B2")
+
+
+def _blank_speaker_name(raw: Raw) -> None:
+    raw["speakers"][0]["name"] = "  "
+
+
+def _name_of_another_default(raw: Raw) -> None:
+    raw["speakers"][0]["name"] = "Speaker 2"
+
+
+def _diarized_without_speakers(raw: Raw) -> None:
+    raw["speakers"] = []
+    for item in (*raw["segments"], *raw["paragraphs"]):
+        item["speaker"] = None
 
 
 def _speakers_without_diarization(raw: Raw) -> None:
@@ -540,21 +580,32 @@ REJECTED: dict[str, tuple[Callable[[Raw], None], str]] = {
     "access at the root": (_access_at_the_root, "access"),
     "language listed twice": (_language_listed_twice, "twice"),
     "speaker without a list": (_speaker_without_a_list, "unknown speaker 'S1'"),
+    "paragraph speaker without a list": (
+        _paragraph_speaker_without_a_list,
+        "names a speaker but the document lists no",
+    ),
+    "language not listed": (_language_not_listed, "not in transcript.languages"),
+    "no languages with segments": (_no_languages_with_segments, "languages is empty"),
 }
 
 REJECTED_RECORDINGS: dict[str, tuple[Callable[[Raw], None], str]] = {
     "unknown speaker": (_unknown_speaker, "unknown speaker 'S9'"),
     "listed speaker without segments": (_listed_speaker_without_segments, "'S3' is listed but has no segment"),
     "paragraph spans speakers": (_paragraph_spans_speakers, "never spans speakers"),
-    "slash in file name": (_slash_in_file_name, "basename"),
-    "empty file name": (_empty_file_name, "basename"),
+    "slash in file name": (_slash_in_file_name, "file_name\n  String should match pattern"),
+    "empty file name": (_empty_file_name, "file_name\n  String should match pattern"),
     "segment without speaker": (_segment_without_speaker, "segment 1 has no speaker"),
     "paragraph without speaker": (_paragraph_without_speaker, "paragraph 1 has no speaker"),
     "speakers out of appearance order": (_speakers_out_of_appearance_order, "order of first appearance"),
-    "speaker ids skip": (_speaker_ids_skip, "order of first appearance"),
+    "speaker ids decrease": (_speaker_ids_decrease, "increase in order of first appearance"),
+    "speaker id zero": (_speaker_id_zero, "id\n  String should match pattern"),
+    "speaker id shape": (_speaker_id_shape, "id\n  String should match pattern"),
+    "blank speaker name": (_blank_speaker_name, "blank name"),
+    "name of another default label": (_name_of_another_default, "the default label of S2"),
+    "diarized without speakers": (_diarized_without_speakers, "lists no speakers"),
     "speakers without diarization": (_speakers_without_diarization, "diarization is None"),
     "id not from the hash": (_id_not_from_the_hash, "first 16 hex digits"),
-    "uppercase hash": (_uppercase_hash, "lowercase hex"),
+    "uppercase hash": (_uppercase_hash, "audio_sha256\n  String should match pattern"),
     "naive recorded_at": (_naive_recorded_at, "recorded_at"),
     "recording with access": (_recording_with_access, "access"),
 }
@@ -576,6 +627,19 @@ def test_recording_validator_rejects(name: str) -> None:
     mutate(raw)
     with pytest.raises(ValidationError, match=expected):
         ContextDocument.model_validate(raw)
+
+
+def test_speaker_ids_may_skip_numbers() -> None:
+    raw = make_recording()
+    _renumber(raw, "S2", "S3")
+    doc = ContextDocument.model_validate(raw)
+    assert [s.id for s in doc.speakers] == ["S1", "S3"]
+
+
+def test_a_speaker_may_carry_its_own_default_label() -> None:
+    raw = make_recording()
+    raw["speakers"][0]["name"] = "Speaker 1"
+    assert ContextDocument.model_validate(raw).speakers[0].label == "Speaker 1"
 
 
 def test_two_ids_may_share_a_name() -> None:
@@ -614,8 +678,10 @@ def test_url_paths_are_not_mistaken_for_home_paths() -> None:
 def test_unknown_major_is_refused(version: str) -> None:
     raw = make_raw()
     raw["schema_version"] = version
-    with pytest.raises(ContractError, match="unsupported"):
+    with pytest.raises(ContractError, match="unsupported") as caught:
         load_document(json.dumps(raw))
+    expected = "upgrade ytverbatim" if version in ("3.0", "10.0") else "produce the document again"
+    assert expected in caught.value.fix
 
 
 @pytest.mark.parametrize("version", [None, 1, "1", "1.x", "v1.0", "1.0.1", ""])
@@ -701,6 +767,18 @@ def test_a_1_x_document_cannot_carry_2_0_fields() -> None:
     raw = json.loads(V1_1_FIXTURE.read_text(encoding="utf-8"))
     raw["segments"][0]["speaker"] = "S1"
     with pytest.raises(ContractError, match="unknown speaker"):
+        load_document(json.dumps(raw))
+
+
+@pytest.mark.parametrize(
+    ("place", "field"),
+    [(None, "speakers"), (None, "source"), ("transcript", "languages"), ("transcript", "diarization")],
+)
+def test_a_1_x_document_carrying_a_2_0_field_is_refused_not_overwritten(place: str | None, field: str) -> None:
+    raw = json.loads(V1_1_FIXTURE.read_text(encoding="utf-8"))
+    (raw[place] if place else raw)[field] = []
+    name = f"{place}.{field}" if place else field
+    with pytest.raises(ContractError, match=f"cannot carry the 2.0 fields {name}"):
         load_document(json.dumps(raw))
 
 

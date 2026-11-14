@@ -28,12 +28,19 @@ EVENTS = {
     MIXED: ["fetch", "asr", "second_opinion", "normalize", "punctuate", "correct", "numeric", "numerals", "write"],
     CAPTIONED: ["fetch", "captions", "normalize", "punctuate", "correct", "numeric", "write"],
 }
-# The 1.1 document and context record a run made of MIXED before contract 2.0 (context record version 3).
-V1_1_DOCUMENT = Path(__file__).parent / "fixtures" / "contract" / "context_v1_1.json"
-V1_1_RECORD = {
-    "stage_version": "3+stages-v1",
-    "input_hash": "76045c8589d2b6bdb50e20d59a628218db155d059ac2d99f797c686ad723746d",
-    "output": {"sha256": "458004b895f1cca1b9f4eb14a010a8e2155a227ffbc1fa6c44d408900710421a"},
+# The 1.1 document and context record each video's run left before contract 2.0 (context record version 3).
+CONTRACT_FIXTURES = Path(__file__).parent / "fixtures" / "contract"
+V1_1_RUNS = {
+    MIXED: (
+        CONTRACT_FIXTURES / "context_v1_1.json",
+        "76045c8589d2b6bdb50e20d59a628218db155d059ac2d99f797c686ad723746d",
+        "458004b895f1cca1b9f4eb14a010a8e2155a227ffbc1fa6c44d408900710421a",
+    ),
+    CAPTIONED: (
+        CONTRACT_FIXTURES / "context_v1_1_captions.json",
+        "b17497e337488d7a31d79d617b1e74580a6c51854796baa59453a8f508ca3b1b",
+        "a22445c2740b65b33814c26cf22af89ce9892a6ec7bdf5c2eb776c0eea414f00",
+    ),
 }
 STAGES = {
     MIXED: {"asr", "second_opinion", "normalize", "punctuate", "correct", "numeric", "numerals"},
@@ -107,19 +114,22 @@ def test_regenerating_computes_every_stage_into_the_committed_keys_and_bytes(tmp
         assert files(regen / video_id) == files(FIXTURE_ROOT / video_id)
 
 
-def test_a_1_1_run_is_upgraded_by_rebuilding_only_the_context_record(out: Path) -> None:
-    vdir = out / MIXED
-    old = V1_1_DOCUMENT.read_bytes()
-    assert hashlib.sha256(old).hexdigest() == V1_1_RECORD["output"]["sha256"]
+@pytest.mark.parametrize("video_id", [MIXED, CAPTIONED])
+def test_a_1_1_run_is_upgraded_by_rebuilding_only_the_context_record(out: Path, video_id: str) -> None:
+    vdir = out / video_id
+    document, old_key, sha = V1_1_RUNS[video_id]
+    old = document.read_bytes()
+    assert hashlib.sha256(old).hexdigest() == sha
     (vdir / "context.json").write_bytes(old)
-    (vdir / STAGES_DIR / "context.json").write_text(json.dumps(V1_1_RECORD), encoding="utf-8")
+    record = {"stage_version": "3+stages-v1", "input_hash": old_key, "output": {"sha256": sha}}
+    (vdir / STAGES_DIR / "context.json").write_text(json.dumps(record), encoding="utf-8")
     before = {name: key for name, key in stage_keys(vdir).items() if name != "context"}
     llm = FakeLLM()
-    result = run(MIXED, out, llm, RefusingYtDlp())
+    result = run(video_id, out, llm, RefusingYtDlp())
     assert result.document is not None and result.document.schema_version == "2.0"
     assert result.outcome.reused != ("context",)
     timings = {t.stage: t.reused for t in result.timings if t.stage not in ("fetch", "write")}
-    assert timings == dict.fromkeys(STAGES[MIXED], True)
+    assert timings == dict.fromkeys(STAGES[video_id], True)
     assert llm.requests == []
     assert {name: key for name, key in stage_keys(vdir).items() if name != "context"} == before
-    assert files(vdir) == files(FIXTURE_ROOT / MIXED)
+    assert files(vdir) == files(FIXTURE_ROOT / video_id)
