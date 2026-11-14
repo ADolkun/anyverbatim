@@ -17,7 +17,6 @@ from __future__ import annotations
 import io
 import itertools
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -29,14 +28,15 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import click
 import numpy as np
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from evals import disk
 from evals.diarization import Turn, write_rttm
-from evals.manifest import EVAL_DIR_ENV
+from evals.manifest import eval_dir
 from ytverbatim import atomic
 from ytverbatim.errors import ConfigError, YtverbatimError
 
@@ -49,6 +49,9 @@ AUDIO = "audio.wav"
 REFERENCE_RTTM = "reference.rttm"
 REFERENCE_TEXT = "reference.txt"
 REFERENCE_JSONL = "reference.jsonl"
+WORDS_FILE = "words.json"
+CLIPS = "clips"
+OWNER = "owner"
 
 AMI_REPO = "diarizers-community/ami"
 AMI_TEXT_REPO = "edinburghcstr/ami"
@@ -65,6 +68,7 @@ MIN_ALIGNED_FRACTION = 0.9
 DURATION_TOLERANCE_S = 0.02
 # File names round offsets and durations to four decimals, and speakers' neighbouring utterances can touch.
 OFFSET_TOLERANCE_S = 1e-3
+_OWNER_ID = re.compile(r"^rec-\d{2,}$")
 _UNK = re.compile(r"\s*\[UNK\]\s*")
 _BLANKS = re.compile(r"\s+")
 
@@ -90,6 +94,34 @@ class CorpusIndex(_Frozen):
     recordings: tuple[RecordingEntry, ...]
 
 
+class OwnerEntry(_Frozen):
+    """One of the owner's own recordings: a generic label, no reference, and the speaker count only if they know it."""
+
+    id: str
+    # 16 kHz mono 16-bit WAV, relative to the owner folder or absolute; made with ffmpeg from the original.
+    audio: str
+    language: Literal["zh", "en", "zh+en"] = "zh+en"
+    speakers: int | None = None
+
+    @field_validator("id")
+    @classmethod
+    def _generic(cls, value: str) -> str:
+        if not _OWNER_ID.match(value):
+            raise ValueError(f"owner recording ids are generic labels such as rec-01, got {value!r}")
+        return value
+
+
+class OwnerIndex(_Frozen):
+    recordings: tuple[OwnerEntry, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerRecording:
+    entry: OwnerEntry
+    wav: Path
+    duration_s: float
+
+
 @dataclass(frozen=True, slots=True)
 class RefUtterance:
     start: float
@@ -98,13 +130,12 @@ class RefUtterance:
     text: str
 
 
-def eval_root() -> Path:
-    value = os.environ.get(EVAL_DIR_ENV)
-    return Path(value).expanduser() if value else Path.home() / ".local" / "share" / "ytverbatim" / "eval"
-
-
 def recordings_dir() -> Path:
-    return eval_root() / RECORDINGS
+    return eval_dir() / RECORDINGS
+
+
+def clips_dir() -> Path:
+    return recordings_dir() / CLIPS
 
 
 def load_index(corpus_dir: Path) -> CorpusIndex:
@@ -112,6 +143,40 @@ def load_index(corpus_dir: Path) -> CorpusIndex:
     if not path.is_file():
         raise ConfigError(f"no prepared data at {path}; run `python -m evals.recordings_data` for that corpus first")
     return CorpusIndex.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def load_owner(owner_dir: Path) -> list[OwnerRecording]:
+    """Read the private owner index and check each listed file is the 16 kHz mono 16-bit WAV the evals decode."""
+    path = owner_dir / INDEX
+    if not path.is_file():
+        raise ConfigError(f"no owner index at {path}; list the owner's WAV files there (see OwnerIndex)")
+    index = OwnerIndex.model_validate_json(path.read_text(encoding="utf-8"))
+    ids = [e.id for e in index.recordings]
+    if len(set(ids)) != len(ids):
+        raise ConfigError(f"{path} lists a recording id more than once")
+    found: list[OwnerRecording] = []
+    for entry in index.recordings:
+        wav = owner_dir / entry.audio
+        if not wav.is_file():
+            raise ConfigError(f"{entry.id}: {wav} does not exist")
+        found.append(OwnerRecording(entry, wav, wav_seconds(wav)))
+    return found
+
+
+def wav_seconds(path: Path) -> float:
+    """Duration of a 16 kHz mono 16-bit WAV file; any other format is refused with the conversion to run."""
+    try:
+        with wave.open(str(path), "rb") as handle:
+            shape = (handle.getframerate(), handle.getnchannels(), handle.getsampwidth())
+            frames = handle.getnframes()
+    except (wave.Error, EOFError) as exc:
+        raise ConfigError(f"{path.name} is not a readable WAV file: {exc}") from exc
+    if shape != (SAMPLE_RATE, 1, 2):
+        raise ConfigError(
+            f"{path.name} must be 16 kHz mono 16-bit; convert it with "
+            "`ffmpeg -i IN -ac 1 -ar 16000 -c:a pcm_s16le OUT.wav`"
+        )
+    return frames / SAMPLE_RATE
 
 
 def check_free_disk(path: Path, *, minimum: int = MIN_FREE_BYTES, free: Callable[[Path], int] = disk.free_bytes) -> int:
@@ -577,6 +642,8 @@ def status() -> None:
     """Show what is prepared and the free disk."""
     root = recordings_dir()
     click.echo(f"{root}: {disk.free_bytes(root) / 1e9:.1f} GB free")
+    owner = root / OWNER / INDEX
+    click.echo(f"{OWNER}: {len(load_owner(owner.parent)) if owner.is_file() else 'not prepared'} recordings")
     for corpus in ("ami", "alimeeting", "ascend"):
         if (root / corpus / INDEX).is_file():
             index = load_index(root / corpus)
