@@ -148,7 +148,7 @@ class VideoResult:
     timings: tuple[StageTiming, ...] = ()
 
 
-def process(
+def process(  # noqa: PLR0913
     url: str,
     options: config.Options | None = None,
     *,
@@ -158,6 +158,7 @@ def process(
     captions: bool = True,
     force: bool = False,
     cookies_first: bool = False,
+    interactive: bool = False,
     progress: Callable[[ProgressEvent], None] | None = None,
     runner_factory: Callable[[Sequence[str]], YtDlpRunner] = default_runner,
 ) -> ContextDocument:
@@ -169,7 +170,8 @@ def process(
     YouTube asked us to back off before the video was done. `auth` is an auth spec as for `--auth`; without it the
     configured source applies. `cookies_first` sends the video's first request with cookies, for a video known to need
     a login such as one from a members playlist; without it the first request is anonymous and cookies follow only
-    when YouTube asks for them.
+    when YouTube asks for them. `interactive` lets the configured chatgpt LLM open a browser to sign in again when its
+    sign-in is missing or lapses; off by default, because a library must not open a browser on its own.
     """
     ref = ids.classify(url)
     if ref is None or ref.kind is not ids.RefKind.VIDEO:
@@ -184,6 +186,7 @@ def process(
         captions=captions,
         force=force,
         cookies_first=cookies_first,
+        interactive=interactive,
         progress=progress,
         on_video=results.append,
         runner_factory=runner_factory,
@@ -212,6 +215,7 @@ def process_many(  # noqa: PLR0913
     force: bool = False,
     ignore_cooldown: bool = False,
     cookies_first: bool = False,
+    interactive: bool = False,
     progress: Callable[[ProgressEvent], None] | None = None,
     on_video: Callable[[VideoResult], None] | None = None,
     runner_factory: Callable[[Sequence[str]], YtDlpRunner] = default_runner,
@@ -225,12 +229,21 @@ def process_many(  # noqa: PLR0913
     request; the batch itself is `fetch`'s, with this pipeline as its per-video hook. Per-video failures land in the
     report; a batch stop mid-run ends the batch and is recorded as well. An ASR worker killed by the memory watch
     raises `EngineMemoryError`, after the report of the videos before it is written: every later video would run the
-    same engine into the same limit.
+    same engine into the same limit. `interactive` is as for `process`.
     """
     options = options or config.load_options()
     out = out if out is not None else paths.default_output_root()
     captions = captions or options.asr.source == "captions"
-    settings = _settings(options, llm, out, force=force, captions=captions, emit=progress or _no_progress, clock=clock)
+    settings = _settings(
+        options,
+        llm,
+        out,
+        force=force,
+        captions=captions,
+        interactive=interactive,
+        emit=progress or _no_progress,
+        clock=clock,
+    )
     fetch_options = FetchOptions(
         policy=options.auth.policy,
         captions=captions,
@@ -312,6 +325,7 @@ def _settings(
     captions: bool,
     emit: Callable[[ProgressEvent], None],
     clock: Callable[[], datetime],
+    interactive: bool = False,
 ) -> _Settings:
     definition = registry.get(options.asr.engine)
     registry.check_dependencies(definition)
@@ -326,8 +340,8 @@ def _settings(
         registry.check_dependencies(second)
     if llm is None and options.llm.provider != "none":
         # A missing `claude` CLI or base URL must fail now, not after an hour of ASR.
-        check_ready(options.llm)
-        llm = client_from_options(options.llm)
+        check_ready(options.llm, interactive=interactive)
+        llm = client_from_options(options.llm, interactive=interactive)
     if options.text.correct and llm is None:
         raise ConfigError("correction needs an LLM; pass --llm PROVIDER:MODEL or set [llm], or use --no-correct")
     text = replace(options.text, correct=llm is not None if options.text.correct is None else options.text.correct)

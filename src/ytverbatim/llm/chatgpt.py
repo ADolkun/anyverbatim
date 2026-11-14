@@ -36,7 +36,12 @@ class ChatGPTClient:
         timeout_s: float = 900.0,
         opener: Opener = https_open,
         clock: Callable[[], float] = time.monotonic,
+        reauth: Callable[[], object] | None = None,
     ) -> None:
+        """Build the client; `reauth`, if given, signs in again when the stored sign-in can no longer be used.
+
+        Wire `reauth` only when a person is at hand to finish a browser sign-in. Without it, a lapsed sign-in raises.
+        """
         if not model:
             raise ConfigError("chatgpt needs a model")
         if effort not in EFFORTS:
@@ -46,6 +51,7 @@ class ChatGPTClient:
         self._timeout_s = timeout_s
         self._opener = opener
         self._clock = clock
+        self._reauth = reauth
 
     @property
     def id(self) -> str:
@@ -72,10 +78,7 @@ class ChatGPTClient:
     def complete(self, request: LLMRequest) -> LLMResponse:
         started = self._clock()
         deadline = started + self._timeout_s
-        try:
-            token = chatgpt_auth.access_token(opener=self._opener)
-        except ChatGPTAuthError as exc:
-            raise LLMUnavailableError(f"{self.id}: {exc}; usage unknown", code=exc.code) from None
+        token = self._access_token()
         http_request = urllib.request.Request(
             RESPONSES_URL,
             data=json.dumps(self.payload(request), ensure_ascii=False).encode(),
@@ -92,6 +95,29 @@ class ChatGPTClient:
         finally:
             response.close()
         return LLMResponse(text=text, usage=usage, elapsed_s=self._clock() - started)
+
+    def _access_token(self) -> str:
+        """Return a usable token, signing in again once through `reauth` when only that can help.
+
+        All of this happens before the request is sent, so nothing is billed twice.
+        """
+        try:
+            return chatgpt_auth.access_token(opener=self._opener)
+        except ChatGPTAuthError as exc:
+            if self._reauth is None or not exc.needs_sign_in:
+                raise self._auth_error(exc) from None
+        reauth, self._reauth = self._reauth, None
+        try:
+            reauth()
+            token = chatgpt_auth.access_token(opener=self._opener)
+        except ChatGPTAuthError as exc:
+            # Left unwired after a failed sign-in, so later calls in the batch do not reopen the browser each time.
+            raise self._auth_error(exc) from None
+        self._reauth = reauth
+        return token
+
+    def _auth_error(self, exc: ChatGPTAuthError) -> LLMUnavailableError:
+        return LLMUnavailableError(f"{self.id}: {exc}; usage unknown", code=exc.code)
 
     def _open(self, request: urllib.request.Request, deadline: float) -> Response:
         try:

@@ -16,6 +16,7 @@ import os
 import secrets
 import socket
 import stat
+import sys
 import threading
 import time
 import urllib.error
@@ -68,6 +69,8 @@ _TERMINAL_REFRESH_ERRORS = frozenset(
     }
 )
 _KNOWN_ERRORS = _TERMINAL_REFRESH_ERRORS | {"invalid_client", "access_denied"}
+# Failures only a new browser sign-in can mend; a network error, a refused request or an early refresh never count.
+_NEEDS_SIGN_IN = _TERMINAL_REFRESH_ERRORS | {"not_signed_in", "expired", "plan_disabled", "invalid_client"}
 
 Status = Literal["signed_out", "no_plan", "ready", "refreshable", "expired"]
 STATUS_DETAIL: dict[Status, str] = {
@@ -85,6 +88,10 @@ class ChatGPTAuthError(YtverbatimError):
     def __init__(self, message: str, *, code: str = "auth_error") -> None:
         super().__init__(message)
         self.code = code
+
+    @property
+    def needs_sign_in(self) -> bool:
+        return self.code in _NEEDS_SIGN_IN
 
 
 @dataclass(frozen=True)
@@ -105,6 +112,14 @@ class Account:
         if self.expires_at > now + _REFRESH_MARGIN_S:
             return "ready"
         return "refreshable" if self.refresh_token else "expired"
+
+    def refresh_due(self, now: float) -> bool:
+        """Refresh at the first chance the server allows, or a minute before expiry, whichever comes first.
+
+        Refresh tokens rotate, so renewing as early as allowed keeps the chain as fresh as each use permits.
+        """
+        opened = self.earliest_refresh_at > 0 and now >= self.earliest_refresh_at
+        return opened or self.expires_at <= now + _REFRESH_MARGIN_S
 
     def signed_out(self) -> "Account":
         return Account(self.subject, self.email)
@@ -151,11 +166,14 @@ def login(
     previous = state.account
     # Asking for consent again is the only way to add the plan scope to an account that signed in without it.
     consent = previous is not None and bool(previous.access_token) and PLAN_SCOPE not in previous.scopes
+    # The identity page preselects the account signed in before, so a re-sign-in while the browser session lives
+    # can finish without a click.
+    hint = previous.email if previous is not None and previous.email else None
     client_id = state.client_id or DYNAMIC_CLIENT
     reauthorized = False
     while True:
         pending, callback = _authorize_in_browser(
-            state.host_id, client_id, open_url=open_url, timeout_s=timeout_s, consent=consent
+            state.host_id, client_id, open_url=open_url, timeout_s=timeout_s, consent=consent, login_hint=hint
         )
         client_id = _issued_client(pending, callback)
         # Kept before the exchange: a first sign-in that fails after this point must not register the host again.
@@ -184,8 +202,30 @@ def login(
     return LoginResult(account.email, PLAN_SCOPE in account.scopes)
 
 
+def interactive_login(reason: str, *, opener: Opener = https_open) -> LoginResult:
+    """Sign in again through the browser for a caller at a terminal: say why on stderr, print the URL, open it.
+
+    Only callers that know a person is watching may use this; a library never opens a browser on its own.
+    """
+    print(
+        f"{reason}; opening the browser to sign in again (waiting up to {LOGIN_TIMEOUT_S / 60:g} minutes)",
+        file=sys.stderr,
+    )
+
+    def open_url(url: str) -> None:
+        # The URL is printed, so a browser that will not open still leaves a way through: keep waiting.
+        print(f"If no browser opens, visit:\n  {url}", file=sys.stderr)
+        webbrowser.open(url)
+
+    return login(open_url=open_url, opener=opener)
+
+
 def access_token(*, opener: Opener = https_open, clock: Callable[[], float] = time.time) -> str:
-    """Return a current access token with plan permission, refreshed first when it expires within a minute."""
+    """Return a current access token with plan permission, refreshed first when `Account.refresh_due`.
+
+    The refresh runs under the store's flock, which every caller takes on its own open file, so concurrent processes
+    and threads alike never present the same rotating refresh token twice.
+    """
     with _locked() as state:
         account = state.account
         if account is None or not account.access_token:
@@ -193,7 +233,7 @@ def access_token(*, opener: Opener = https_open, clock: Callable[[], float] = ti
         if PLAN_SCOPE not in account.scopes:
             raise ChatGPTAuthError(STATUS_DETAIL["no_plan"], code="plan_disabled")
         now = clock()
-        if account.expires_at > now + _REFRESH_MARGIN_S:
+        if not account.refresh_due(now):
             return account.access_token
         if now < account.earliest_refresh_at:
             if account.expires_at > now:
@@ -562,7 +602,7 @@ class _Pending:
     verifier: str = field(default_factory=lambda: secrets.token_urlsafe(64))
 
 
-def _authorization_url(pending: _Pending, host_id: str, *, consent: bool) -> str:
+def _authorization_url(pending: _Pending, host_id: str, *, consent: bool, login_hint: str | None) -> str:
     challenge = base64.urlsafe_b64encode(hashlib.sha256(pending.verifier.encode()).digest()).rstrip(b"=").decode()
     query = {
         "client_id": pending.client_id,
@@ -580,6 +620,8 @@ def _authorization_url(pending: _Pending, host_id: str, *, consent: bool) -> str
         query["agent_name_hint"] = AGENT_NAME
     if consent:
         query["prompt"] = "consent"
+    if login_hint is not None:
+        query["login_hint"] = login_hint
     return AUTHORIZE_URL + "?" + urllib.parse.urlencode(query)
 
 
@@ -636,6 +678,7 @@ def _authorize_in_browser(
     open_url: Callable[[str], object],
     timeout_s: float,
     consent: bool,
+    login_hint: str | None,
 ) -> tuple[_Pending, dict[str, str]]:
     received: list[dict[str, str]] = []
     pending: _Pending | None = None
@@ -665,7 +708,7 @@ def _authorize_in_browser(
         server.timeout = 0.25
         server.deadline = time.monotonic() + timeout_s
         pending = _Pending(client_id, f"http://127.0.0.1:{server.server_port}{CALLBACK_PATH}")
-        if open_url(_authorization_url(pending, host_id, consent=consent)) is False:
+        if open_url(_authorization_url(pending, host_id, consent=consent, login_hint=login_hint)) is False:
             raise ChatGPTAuthError("could not open a browser; retry with --no-browser", code="no_browser")
         while not received and time.monotonic() < server.deadline:
             server.handle_request()

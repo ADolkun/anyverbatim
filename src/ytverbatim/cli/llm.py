@@ -4,6 +4,7 @@ from typing import Literal
 import click
 from pydantic import BaseModel
 
+from ytverbatim.cli import interactive
 from ytverbatim.config import LLMOptions, load_options
 from ytverbatim.errors import YtverbatimError
 from ytverbatim.llm import (
@@ -96,7 +97,7 @@ def check(provider: str | None, model: str | None, effort: str | None, *, probe:
         if not status.ready:
             raise SystemExit(1)
         if probe:
-            _probe(options)
+            _probe(options, interactive=interactive())
     except YtverbatimError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -109,9 +110,9 @@ def _readiness(options: LLMOptions) -> Readiness:
     return openai_compat.readiness(options.base_url, options.api_key_env)
 
 
-def _probe(options: LLMOptions) -> None:
+def _probe(options: LLMOptions, *, interactive: bool) -> None:
     meter = UsageMeter()
-    client = meter.metered("probe", client_from_options(options))
+    client = meter.metered("probe", client_from_options(options, interactive=interactive))
     request = LLMRequest(system="You are a connectivity probe.", user='Return {"ok": true}.', max_output_tokens=256)
     result = complete_json(client, request, _Probe)
     (usage,) = meter.summary()

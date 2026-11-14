@@ -9,6 +9,7 @@ from ytverbatim.acquire.session import REPORT_FILE, BatchReport, VideoStatus, st
 from ytverbatim.auth.fixes import fix_for
 from ytverbatim.auth.preflight import fix_context
 from ytverbatim.auth.source import resolve_source
+from ytverbatim.cli import interactive
 from ytverbatim.cli.fetch import EXIT_AUTH, EXIT_FAILED, EXIT_STOPPED
 from ytverbatim.contract import LLMUsage
 from ytverbatim.errors import AuthError, BatchStopError, EngineMemoryError, YtverbatimError
@@ -96,6 +97,7 @@ def run_command(  # noqa: PLR0913
             captions=captions,
             force=force,
             ignore_cooldown=ignore_cooldown,
+            interactive=interactive(),
             progress=_print_progress,
             on_video=_print_result,
         )

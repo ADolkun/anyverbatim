@@ -440,8 +440,8 @@ def test_the_resolved_value_is_what_the_stored_document_depends_on(session_kit, 
 
 def test_cli_correct_flag_is_tri_state(session_kit, worker, monkeypatch) -> None:
     llm = FakeLLM()
-    monkeypatch.setattr(pipeline, "client_from_options", lambda _options: llm)
-    monkeypatch.setattr(pipeline, "check_ready", lambda _options: None)
+    monkeypatch.setattr(pipeline, "client_from_options", lambda _options, **_kwargs: llm)
+    monkeypatch.setattr(pipeline, "check_ready", lambda _options, **_kwargs: None)
     spec = ("--llm", "claude-cli:claude-sonnet-5-5")
 
     def correction_requests(*flags: str) -> int:
@@ -482,12 +482,12 @@ def test_cli_llm_spec_reaches_the_pipeline(session_kit, worker, monkeypatch) -> 
     built: list[config.LLMOptions] = []
     llm = FakeLLM(model="claude-sonnet-5-5")
 
-    def client_from_options(options: config.LLMOptions) -> FakeLLM:
+    def client_from_options(options: config.LLMOptions, **_kwargs: object) -> FakeLLM:
         built.append(options)
         return llm
 
     monkeypatch.setattr(pipeline, "client_from_options", client_from_options)
-    monkeypatch.setattr(pipeline, "check_ready", lambda _options: None)
+    monkeypatch.setattr(pipeline, "check_ready", lambda _options, **_kwargs: None)
     result = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH, "--llm", "claude-cli:claude-sonnet-5-5")
     assert result.exit_code == 0, result.output
     assert (built[0].provider, built[0].model) == ("claude-cli", "claude-sonnet-5-5")
@@ -869,6 +869,24 @@ def test_the_default_llm_without_a_chatgpt_sign_in_fails_before_any_request(sess
     assert yt.calls == [] and worker.calls == []
 
 
+@pytest.mark.parametrize("interactive", [True, False])
+def test_interactivity_reaches_the_llm_checks(session_kit, worker, monkeypatch, interactive: bool) -> None:
+    (session_kit.home / ".config" / "ytverbatim" / "config.toml").unlink()
+    seen: list[tuple[str, object]] = []
+
+    def check_ready(_options: config.LLMOptions, **kwargs: object) -> None:
+        seen.append(("check_ready", kwargs["interactive"]))
+
+    def client_from_options(_options: config.LLMOptions, **kwargs: object) -> FakeLLM:
+        seen.append(("client", kwargs["interactive"]))
+        return FakeLLM()
+
+    monkeypatch.setattr(pipeline, "check_ready", check_ready)
+    monkeypatch.setattr(pipeline, "client_from_options", client_from_options)
+    run(session_kit, zh_yt(session_kit), interactive=interactive)
+    assert seen == [("check_ready", interactive), ("client", interactive)]
+
+
 def test_cli_default_llm_without_a_sign_in_names_login_and_llm_none(session_kit, worker, monkeypatch) -> None:
     (session_kit.home / ".config" / "ytverbatim" / "config.toml").unlink()
     refused = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH)
@@ -884,12 +902,12 @@ def test_cli_llm_spec_switches_provider_over_the_configured_one(session_kit, wor
     config_file.write_text('[llm]\nprovider = "openai-compat"\nmodel = "m"\nbase_url = "http://127.0.0.1:8080/v1"\n')
     built: list[config.LLMOptions] = []
 
-    def client_from_options(options: config.LLMOptions) -> FakeLLM:
+    def client_from_options(options: config.LLMOptions, **_kwargs: object) -> FakeLLM:
         built.append(options)
         return FakeLLM()
 
     monkeypatch.setattr(pipeline, "client_from_options", client_from_options)
-    monkeypatch.setattr(pipeline, "check_ready", lambda _options: None)
+    monkeypatch.setattr(pipeline, "check_ready", lambda _options, **_kwargs: None)
     result = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH, "--llm", "claude-cli:claude-sonnet-5-5")
     assert result.exit_code == 0, result.output
     assert (built[0].provider, built[0].model, built[0].base_url) == ("claude-cli", "claude-sonnet-5-5", None)
