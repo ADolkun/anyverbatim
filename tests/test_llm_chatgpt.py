@@ -668,6 +668,39 @@ def test_a_401_without_reauth_keeps_the_login_hint(monkeypatch: pytest.MonkeyPat
     assert len(opener.requests) == 1
 
 
+def test_a_sign_in_before_the_request_does_not_spend_its_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [0.0]
+    monkeypatch.setattr(chatgpt_auth, "access_token", Tokens(lapsed()))
+
+    def slow_browser() -> None:
+        now[0] += 1000.0
+
+    chat = ChatGPTClient(
+        model=MODEL,
+        effort="medium",
+        timeout_s=900.0,
+        opener=stream(sse(completed([message("ok")]))),
+        clock=lambda: now[0],
+        reauth=slow_browser,
+    )
+    response = chat.complete(REQUEST)
+    assert response.text == "ok" and response.elapsed_s < 900.0
+
+
+def test_a_401_waits_for_a_sign_in_another_thread_is_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chatgpt_auth, "access_token", Tokens())
+
+    def unauthorized_while_another_thread_signs_in(request: urllib.request.Request) -> FakeResponse:
+        chat._sign_ins += 1  # that thread's sign-in finishes before this one takes the lock
+        return http_error(401)(request)
+
+    opener = responses(unauthorized_while_another_thread_signs_in, ok_stream)
+    chat = reauth_client(opener, lambda: pytest.fail("a second browser sign-in"))
+    chat._reauth = None  # another thread's sign-in is under way
+    assert chat.complete(REQUEST).text == "ok"
+    assert len(opener.requests) == 2
+
+
 def test_threads_sharing_a_client_sign_in_once(monkeypatch: pytest.MonkeyPatch) -> None:
     signed_in = threading.Event()
     sign_ins: list[str] = []

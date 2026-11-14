@@ -207,11 +207,17 @@ def _json(
     options: LLMOptions,
 ) -> dict[str, object]:
     if report is not None:
-        youtube: dict[str, object] = report.to_json()
+        youtube: dict[str, object] = {**report.to_json(), "usable": report.ok or _anonymous(report)}
     else:
         assert youtube_error is not None
         state = youtube_error.state
-        youtube = {"state": state.value, "ok": False, "fix": fix_for(state), "detail": redact(youtube_error.detail)}
+        youtube = {
+            "state": state.value,
+            "ok": False,
+            "usable": False,
+            "fix": fix_for(state),
+            "detail": redact(youtube_error.detail),
+        }
     chatgpt_status: dict[str, object] = (
         {"email": session.email, "status": session.status, "usable": session.usable}
         if session is not None

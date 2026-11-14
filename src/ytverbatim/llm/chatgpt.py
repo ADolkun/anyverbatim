@@ -53,6 +53,7 @@ class ChatGPTClient:
         self._opener = opener
         self._clock = clock
         self._reauth = reauth
+        self._can_reauth = reauth is not None
         self._reauth_lock = threading.Lock()
         self._sign_ins = 0
 
@@ -79,17 +80,19 @@ class ChatGPTClient:
         }
 
     def complete(self, request: LLMRequest) -> LLMResponse:
-        started = self._clock()
-        deadline = started + self._timeout_s
         body = json.dumps(self.payload(request), ensure_ascii=False).encode()
         seen = self._sign_ins
         token = self._access_token()
+        # The deadline and the elapsed time cover the request alone, never a browser sign-in before it.
+        started = self._clock()
         try:
-            response = self._open(_http_request(body, token), deadline, reauthorize=True)
+            response = self._open(_http_request(body, token), started + self._timeout_s, reauthorize=True)
         except _Unauthorized as unauthorized:
             # A 401 arrives before any generation, so signing in again and resending bills nothing twice.
             token = self._sign_in_again(unauthorized.error, seen)
-            response = self._open(_http_request(body, token), deadline, reauthorize=False)
+            started = self._clock()
+            response = self._open(_http_request(body, token), started + self._timeout_s, reauthorize=False)
+        deadline = started + self._timeout_s
         try:
             text, usage = self._read(response, deadline)
         finally:
@@ -149,7 +152,9 @@ class ChatGPTClient:
             return self._opener(request, self._remaining(deadline))
         except urllib.error.HTTPError as exc:
             error = self._http_error(exc)
-            if exc.code == _UNAUTHORIZED and reauthorize and self._reauth is not None:
+            # Decided by the wiring, not by `_reauth`, which is unset while another thread signs in; waiting for that
+            # sign-in is `_sign_in_again`'s job.
+            if exc.code == _UNAUTHORIZED and reauthorize and self._can_reauth:
                 raise _Unauthorized(error) from None
             raise error from None
         except TimeoutError:
