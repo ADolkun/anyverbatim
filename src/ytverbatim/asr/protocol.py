@@ -1,6 +1,6 @@
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from pydantic import JsonValue
 
@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 ChunkFlag = Literal["forced_cut", "token_cap_hit", "decoder_anomaly", "empty_output", "redecoded"]
-LanguagePolicy = Literal["auto", "pass"]
+LanguagePolicy = Literal["auto", "pass", "detect"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +38,12 @@ class EngineDef:
     """A hypothesis as the worker receives it: spec, adapter factory and variant parameters.
 
     The variant's `language` is the engine's language policy: `pass` hands it the file's metadata language as
-    production does, `auto` always lets it detect the language itself.
+    production does, `auto` always lets it detect the language itself, and `detect` has the worker identify each
+    chunk's language within the file's allowed set before decoding it with that language. Under `detect` a declared
+    language is an explicit choice and wins over detection.
+
+    A variant `mode` of `runs` decodes each run of consecutive same-language chunks as one stretch of audio instead
+    of chunk by chunk.
     """
 
     spec: EngineSpec
@@ -47,13 +52,16 @@ class EngineDef:
 
     def language_policy(self) -> LanguagePolicy:
         policy = self.variant.get("language")
-        if policy == "auto" or policy == "pass":
+        if policy == "auto" or policy == "pass" or policy == "detect":
             return policy
-        raise ValueError(f"{self.spec.id} needs the variant language set to 'auto' or 'pass', got {policy!r}")
+        raise ValueError(f"{self.spec.id} needs the variant language set to 'auto', 'pass' or 'detect', got {policy!r}")
 
     def engine_language(self, language: str | None) -> str | None:
-        """Return the language hint this engine decodes with for a file whose metadata says `language`."""
-        return language if self.language_policy() == "pass" else None
+        """Return the declared language hint this engine decodes with for a file whose metadata says `language`."""
+        return None if self.language_policy() == "auto" else language
+
+    def decodes_runs(self) -> bool:
+        return self.variant.get("mode") == "runs"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +105,15 @@ class Engine(Protocol):
     def transcribe(
         self, audio: "NDArray[np.float32]", *, language: str | None, context: AsrContext | None
     ) -> RawChunk: ...
+
+
+@runtime_checkable
+class LanguageDetector(Protocol):
+    """An engine that can say which language a slice of at most one chunk is spoken in, without decoding it."""
+
+    def detect_language(self, audio: "NDArray[np.float32]") -> Mapping[str, float]:
+        """Return the probability of every language the engine knows, keyed by its code."""
+        ...
 
 
 class Guard(Protocol):

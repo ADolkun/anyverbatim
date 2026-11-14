@@ -276,11 +276,11 @@ def test_the_language_policy_decides_what_the_engine_hears(tmp_path: Path, wav: 
     assert seen == [None if policy == "auto" else "zh+en"]
 
 
-@pytest.mark.parametrize("policy", [None, "detect", True])
+@pytest.mark.parametrize("policy", [None, "guess", True])
 def test_a_request_without_a_valid_language_policy_is_refused(tmp_path: Path, wav: Path, policy: JsonValue) -> None:
     variant: dict[str, JsonValue] = {} if policy is None else {"language": policy}
     engine = EngineDef(definition().spec, "fake_engine.create", variant)
-    with pytest.raises(ValidationError, match="'auto' or 'pass'"):
+    with pytest.raises(ValidationError, match="'auto', 'pass' or 'detect'"):
         request(tmp_path, FileJob(id="f1", wav=str(wav)), engine=engine)
 
 

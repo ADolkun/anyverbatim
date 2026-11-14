@@ -17,7 +17,9 @@ _WHISPER_REPO = "mlx-community/whisper-large-v3-mlx"
 _WHISPER_REVISION = "49e6aa286ad60c14352c404340ded53710378a11"
 
 # `emits_punctuation` is the vendors' claim for Qwen3 and MiMo and unverified for FireRed; the engine runs settle it.
-# Whisper passes the metadata language as production does. The challengers auto-detect: Qwen3 accepts only English
+# Whisper passes the metadata language as production does; its `-lid` variants detect each chunk's language within
+# the file's allowed set (`max_chunk_s` is then the detection window, and `w-runs-lid` decodes whole same-language
+# runs). The challengers auto-detect: Qwen3 accepts only English
 # language names (§B2), FireRed has no language input, and MiMo knows only zh and en, so a metadata tag such as
 # "zh+en" would either abort the decode or force a wrong language.
 # Adapters are named by dotted path so that looking up a hypothesis never imports an engine library. Each entry also
@@ -60,6 +62,42 @@ _ENTRIES: tuple[tuple[EngineDef, tuple[str, ...]], ...] = (
             ),
             "ytverbatim.asr.engines.whisper_mlx.create",
             {"mode": "chunk", "language": "pass"},
+        ),
+        (*_WHISPER, *_MLX_AUDIO),
+    ),
+    (
+        EngineDef(
+            EngineSpec(
+                id="w-vad-lid",
+                family="whisper",
+                repo=_WHISPER_REPO,
+                revision=_WHISPER_REVISION,
+                max_chunk_s=30.0,
+                native_timestamps=True,
+                emits_punctuation=True,
+                supports_context=False,
+                sample_rate=16_000,
+            ),
+            "ytverbatim.asr.engines.whisper_mlx.create",
+            {"mode": "chunk", "language": "detect"},
+        ),
+        (*_WHISPER, *_MLX_AUDIO),
+    ),
+    (
+        EngineDef(
+            EngineSpec(
+                id="w-runs-lid",
+                family="whisper",
+                repo=_WHISPER_REPO,
+                revision=_WHISPER_REVISION,
+                max_chunk_s=30.0,
+                native_timestamps=True,
+                emits_punctuation=True,
+                supports_context=False,
+                sample_rate=16_000,
+            ),
+            "ytverbatim.asr.engines.whisper_mlx.create",
+            {"mode": "runs", "language": "detect"},
         ),
         (*_WHISPER, *_MLX_AUDIO),
     ),
