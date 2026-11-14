@@ -166,6 +166,7 @@ _IDIOMS = (
     "三三两两",
     "七七八八",
     "十万八千里",
+    "百度",
     "进一步",
     "一步一步",
 )
@@ -176,8 +177,6 @@ _IDIOM_PATTERNS = (
     r"一点(?![〇零一二两兩三四五六七八九十钟半])",
     # Weekdays, not 周1; 每周一次 is "once a week".
     r"(?:周|星期|礼拜)[一二三四五六日天](?![次回遍趟])",
-    # Fractions (三分之一, 千分之五) are not one quantity; 百分之 on its own is a percent.
-    rf"(?!百分之)[{_NUMERALS}]+分之[{_NUMERALS}]+",
 )
 
 
@@ -249,9 +248,11 @@ _TOKEN = re.compile(
     "|".join(
         (
             rf"(?P<idiom>{'|'.join(_IDIOM_PATTERNS)}|{_alternation(_IDIOMS)})",
-            # A 点 followed by tens or hundreds is a clock unit (三点四十分), not a decimal point.
-            rf"(?P<cjk>(?P<pct>百分之)?(?P<ord>第)?(?P<run>[{_NUMERALS}]+(?:点(?![{_NUMERALS}]*[十百千廿卅])[{_NUMERALS}]+)?)"
-            rf"(?P<unit>{_alternation((*_MEASURE_WORDS, '%'))})?)",
+            # 百分之 on its own is a percent; 三分之一 and 千分之五 are fractions.
+            rf"(?P<fraction>(?!百分之)[{_NUMERALS}]+分之[{_NUMERALS}]+)",
+            # A percent takes no measure word: the 支 of 百分之六十支持 starts the next word.
+            rf"(?P<cjk>(?P<pct>百分之)?(?P<ord>第)?(?P<run>[{_NUMERALS}]+(?:点[{_NUMERALS}]+)?)"
+            rf"(?(pct)|(?P<unit>{_alternation((*_MEASURE_WORDS, '%'))})?))",
             rf"(?P<cashtag>\$[A-Z]{{1,6}}(?:\.[A-Z]{{1,2}})?{_NO_ALNUM_AFTER})",
             rf"(?P<exchange>(?i:\b(?:NYSE|NASDAQ|AMEX|NYSEARCA|NYSEAMERICAN|BATS|OTC|OTCQX|OTCQB))\s*:\s*"
             rf"[A-Z]{{1,5}}(?:\.[A-Z])?{_NO_ALNUM_AFTER})",
@@ -294,7 +295,8 @@ _YI_SHORTHAND = re.compile("(?P<head>.*?(?P<unit>万?亿))(?P<digit>[一二三�
 _YI_GROUP = re.compile("(?P<head>.*?(?P<unit>万?亿))(?P<group>(?![零〇])[^万亿]*[百千][^万亿]*)")
 # A shorthand digit (一万五, 一千五) already stands for the next lower place, so a decimal after it is not one number.
 _SHORTHAND_END = re.compile("[百千万亿][一二两三四五六七八九]$")
-_PLACE_START = frozenset("十百千万亿萬億")
+_TENS = frozenset("十百千廿卅")
+_LAST_HOUR, _LAST_MINUTE = 24, 59
 _SHORTHAND_AFTER_UNIT = re.compile("[万亿][一二三四五六七八九]$")
 _FRACTION = re.compile(rf"([{''.join(_DIGIT_VALUE)}]+)([万亿]*)")
 
@@ -361,6 +363,9 @@ def _integer_value(integer: str) -> str | None:
         lower_unit = Decimal(10) ** (_magnitude_exponent(shorthand["unit"]) - 1)
         value = None if head is None else head + int(_DIGIT_VALUE[shorthand["digit"]]) * lower_unit
     elif group := _YI_GROUP.fullmatch(integer):
+        # 零 inside the group (一亿五千零三) leaves its place uncertain.
+        if _ZEROS & set(group["group"]):
+            return None
         head, part = _cn2an_value(group["head"]), _integer_value(group["group"])
         place = Decimal(10) ** (_magnitude_exponent(group["unit"]) - _MAGNITUDE["万"])
         value = None if head is None or part is None or Decimal(part) >= place else head + Decimal(part) * place
@@ -394,8 +399,8 @@ class _Quantity:
 
     ``prefix`` is 百分之 or 第, ``run`` the span of the numeral or digit run (a digit token's magnitude included),
     ``unit`` the measure word or %, ``value`` the run's inverse text normalization without prefix or unit (None for a
-    ticker, a spelled-out number or a run that is not one number; a code read digit by digit keeps its leading zeros)
-    and ``magnitude`` the largest of 万亿, 亿 and 万 the run is spoken or written in.
+    ticker, a spelled-out number, a fraction, a rough figure or a run that is not one number; a code read digit by
+    digit keeps its leading zeros) and ``magnitude`` the largest of 万亿, 亿 and 万 the run is spoken or written in.
     """
 
     token: QToken
@@ -406,18 +411,22 @@ class _Quantity:
     magnitude: str
 
 
+def _normalized(numerals: str) -> str:
+    return numerals.translate(_VARIANT_NUMERALS).replace("廿", "二十").replace("卅", "三十")
+
+
 def _cjk_quantity(text: str, start: int, prefix: str, run: tuple[int, int], unit: str) -> _Quantity | None:
     surface_run = text[run[0] : run[1]]
     numeral_count = sum(1 for ch in surface_run if ch != "点")
     if not (prefix or unit or numeral_count >= _MIN_BARE_RUN):
         return None
-    numerals = surface_run.translate(_VARIANT_NUMERALS).replace("廿", "二十").replace("卅", "三十")
+    numerals = _normalized(surface_run)
     integer, _, fraction = numerals.partition("点")
-    if not _is_quantity(integer, unit) or _is_approximation(text, prefix, run, numerals):
+    if not _is_quantity(integer, unit):
         return None
     end = run[1] + len(unit)
     surface = text[start:end]
-    value = _cjk_value(integer, fraction)
+    value = None if _is_approximation(text, prefix, run, numerals) else _cjk_value(integer, fraction)
     ordinal = "第" if prefix == "第" else ""
     if value is None:
         itn = surface
@@ -434,9 +443,10 @@ def _cjk_quantity(text: str, start: int, prefix: str, run: tuple[int, int], unit
 def _is_approximation(text: str, prefix: str, run: tuple[int, int], numerals: str) -> bool:
     """几 or 数 next to a run makes it a rough figure: 二十几岁, 几十个, 数十亿, 一百几十.
 
-    Approximate 数 is followed by a place word, so the 数 that ends a word (指数两千八百点) is not one.
+    A run of place words alone after 数 may be rough (数十亿) or exact after a noun ending in 数 (人数十万), so it
+    keeps no value either way; a digit in the run makes it exact (人数十五万).
     """
-    if not prefix and text[run[0] - 1 : run[0]] in ("几", "数") and numerals[0] in _PLACE_START:
+    if not prefix and text[run[0] - 1 : run[0]] in ("几", "数") and set(numerals) <= _PLACE_WORDS:
         return True
     return text[run[1] : run[1] + 1] == "几" and text[run[1] : run[1] + 2] != "几乎"
 
@@ -457,6 +467,26 @@ def _per_unit_split(text: str, match: re.Match[str]) -> int | None:
     return end - 1
 
 
+def _clock_split(text: str, match: re.Match[str]) -> int | None:
+    """Find the 点 of a clock time, where tens follow it: 三点四十分 is 3点 and 40, not a decimal.
+
+    Only an hour up to 24 and minutes up to 59 with no measure word after them read this way, so 一百点二十 and
+    三点五十年 are not times.
+    """
+    if match.group("pct") or match.group("ord") or match.group("unit"):
+        return None
+    start, end = match.span("run")
+    dot = text.find("点", start, end)
+    if dot < 0 or not _TENS & set(text[dot + 1 : end]):
+        return None
+    hour, minute = _normalized(text[start:dot]), _normalized(text[dot + 1 : end])
+    hour_value = _integer_value(hour) if _is_quantity(hour, "点") else None
+    minute_value = _integer_value(minute)
+    if hour_value is None or minute_value is None:
+        return None
+    return dot if Decimal(hour_value) <= _LAST_HOUR and Decimal(minute_value) <= _LAST_MINUTE else None
+
+
 def _cjk_quantities(text: str, match: re.Match[str]) -> list[_Quantity]:
     prefix = match.group("pct") or match.group("ord") or ""
     unit = match.group("unit") or ""
@@ -467,6 +497,13 @@ def _cjk_quantities(text: str, match: re.Match[str]) -> list[_Quantity]:
         if head is not None and head.value is not None:
             tail = _cjk_quantity(text, split, "", (split, run[1]), unit)
             return [head] if tail is None else [head, tail]
+    dot = _clock_split(text, match)
+    if dot is not None:
+        pieces = (
+            _cjk_quantity(text, run[0], "", (run[0], dot), "点"),
+            _cjk_quantity(text, dot + 1, "", (dot + 1, run[1]), ""),
+        )
+        return [piece for piece in pieces if piece is not None]
     quantity = _cjk_quantity(text, match.start(), prefix, run, unit)
     return [] if quantity is None else [quantity]
 
@@ -594,12 +631,14 @@ def quantity_tokens(text: str) -> list[QToken]:
     """Return the quantity tokens of ``text`` in order, with offsets into ``text`` itself.
 
     A Chinese numeral run is a quantity only when it has two or more numeral characters, is
-    attached to a measure word, or follows ``第``, and is neither an idiom, a fraction, a range of
-    bare digits nor a rough figure with ``几`` or ``数``. ``value_itn`` is the inverse text
-    normalization of the token: ``一百五十期`` becomes ``150期``, ``3.5亿`` becomes ``350000000``
-    and ``2万亿`` becomes ``2000000000000``. English magnitudes scale the same way (``$1.5
-    billion`` and ``$1.5B`` become ``$1500000000``), a dollar amount is ``$`` however it is written
-    (``15 dollars``, ``15美元``), ``15 percent`` is ``15%``, and spelled-out numbers convert
+    attached to a measure word, or follows ``第``, and is neither an idiom nor a range of bare
+    digits. A fraction (``三分之一``) or a rough figure with ``几`` or ``数`` (``二十几岁``) is a
+    token whose ``value_itn`` is its surface, so it is still compared but never read as an exact
+    value. ``value_itn`` is the inverse text normalization of the token: ``一百五十期`` becomes
+    ``150期``, ``3.5亿`` becomes ``350000000`` and ``2万亿`` becomes ``2000000000000``. English
+    magnitudes scale the same way (``$1.5 billion`` and ``$1.5B`` become ``$1500000000``), a
+    dollar amount is ``$`` however it is written (``15 dollars``, ``15美元``), ``15 percent`` is
+    ``15%``, and spelled-out numbers convert
     (``twenty-five`` is ``25``).
     """
     return [quantity.token for quantity in _quantities(text)]
@@ -610,7 +649,10 @@ def _quantities(text: str) -> list[_Quantity]:
     for match in _TOKEN.finditer(text):
         if match.group("idiom") is not None:
             continue
-        if match.group("cjk") is not None:
+        if match.group("fraction") is not None:
+            surface = match.group(0)
+            found.append(_bare(QToken(match.start(), match.end(), surface, surface, "cjk_quantity")))
+        elif match.group("cjk") is not None:
             found.extend(_cjk_quantities(text, match))
         elif match.group("number") is not None:
             found.append(_number_quantity(match))
