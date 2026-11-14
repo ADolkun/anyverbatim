@@ -15,7 +15,7 @@ from chatgpt_fakes import NOW, FakeOpener, FakeResponse, form, http_error, json_
 from ytverbatim.errors import ConfigError, LLMOutputError, LLMUnavailableError
 from ytverbatim.llm import chatgpt, chatgpt_auth, chatgpt_http
 from ytverbatim.llm.chatgpt import RESPONSES_URL, ChatGPTClient
-from ytverbatim.llm.chatgpt_auth import TOKEN_URL
+from ytverbatim.llm.chatgpt_auth import TOKEN_URL, ChatGPTAuthError
 from ytverbatim.llm.protocol import LLMRequest, Usage
 
 MODEL = "gpt-6.1-sol"
@@ -388,6 +388,20 @@ def chunk(data: bytes) -> bytes:
     return f"{len(data):x}\r\n".encode() + data + b"\r\n"
 
 
+def read_request(connection: socket.socket) -> None:
+    # The whole request, body included: bytes left unread would turn the server's close into a reset.
+    data = b""
+    while b"\r\n\r\n" not in data:
+        data += connection.recv(65536)
+    head, _, body = data.partition(b"\r\n\r\n")
+    length = next(
+        (int(line.split(b":", 1)[1]) for line in head.split(b"\r\n") if line.lower().startswith(b"content-length:")),
+        0,
+    )
+    while len(body) < length:
+        body += connection.recv(65536)
+
+
 def real_client(script: Script, timeout_s: float) -> tuple[ChatGPTClient, threading.Event]:
     """A client whose responses are real http.client responses from a server on 127.0.0.1 running `script`."""
     done = threading.Event()
@@ -398,7 +412,7 @@ def real_client(script: Script, timeout_s: float) -> tuple[ChatGPTClient, thread
         with server:
             connection, _ = server.accept()
             with connection:
-                connection.recv(65536)
+                read_request(connection)
                 with contextlib.suppress(OSError):
                     script(connection)
                 done.wait(5)
@@ -535,3 +549,75 @@ def test_a_whole_body_read_through_urllib_ends_cleanly() -> None:
         assert bounded.read() == body
     finally:
         bounded.close()
+
+
+class Tokens:
+    """Stands in for `chatgpt_auth.access_token`: raises the queued errors in turn, then hands out a token."""
+
+    def __init__(self, *errors: ChatGPTAuthError) -> None:
+        self.errors = list(errors)
+        self.calls = 0
+
+    def __call__(self, *, opener: object) -> str:
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return "test-access-token"
+
+
+def lapsed() -> ChatGPTAuthError:
+    return ChatGPTAuthError("the ChatGPT sign-in was revoked or expired (invalid_grant)", code="invalid_grant")
+
+
+def reauth_client(opener: FakeOpener, reauth: Callable[[], object] | None) -> ChatGPTClient:
+    return ChatGPTClient(model=MODEL, effort="medium", opener=opener, reauth=reauth)
+
+
+def test_a_lapsed_sign_in_signs_in_again_once_then_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    tokens = Tokens(lapsed())
+    monkeypatch.setattr(chatgpt_auth, "access_token", tokens)
+    signed_in: list[str] = []
+    opener = stream(sse(completed([message("ok")])))
+    assert reauth_client(opener, lambda: signed_in.append("browser")).complete(REQUEST).text == "ok"
+    assert signed_in == ["browser"] and tokens.calls == 2
+    assert len(opener.requests) == 1
+
+
+def test_a_second_failure_after_signing_in_again_raises_without_a_third_try(monkeypatch: pytest.MonkeyPatch) -> None:
+    tokens = Tokens(lapsed(), lapsed(), lapsed())
+    monkeypatch.setattr(chatgpt_auth, "access_token", tokens)
+    signed_in: list[str] = []
+    opener = FakeOpener()
+    chat = reauth_client(opener, lambda: signed_in.append("browser"))
+    with pytest.raises(LLMUnavailableError, match="invalid_grant") as raised:
+        chat.complete(REQUEST)
+    assert raised.value.code == "invalid_grant"
+    assert signed_in == ["browser"] and tokens.calls == 2 and opener.requests == []
+    with pytest.raises(LLMUnavailableError):
+        chat.complete(REQUEST)
+    assert signed_in == ["browser"], "a failed sign-in is not reopened on every later call"
+
+
+def test_a_sign_in_that_fails_raises_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chatgpt_auth, "access_token", Tokens(lapsed()))
+
+    def time_out() -> object:
+        raise ChatGPTAuthError("sign-in timed out after 300s; the stored sign-in was kept", code="timeout")
+
+    with pytest.raises(LLMUnavailableError, match="timed out") as raised:
+        reauth_client(FakeOpener(), time_out).complete(REQUEST)
+    assert raised.value.code == "timeout"
+
+
+@pytest.mark.parametrize("code", ["network_error", "request_failed", "refresh_not_yet"])
+def test_a_transient_failure_never_opens_a_browser(monkeypatch: pytest.MonkeyPatch, code: str) -> None:
+    monkeypatch.setattr(chatgpt_auth, "access_token", Tokens(ChatGPTAuthError("transient", code=code)))
+    with pytest.raises(LLMUnavailableError) as raised:
+        reauth_client(FakeOpener(), lambda: pytest.fail("opened a browser")).complete(REQUEST)
+    assert raised.value.code == code
+
+
+def test_without_reauth_a_lapsed_sign_in_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chatgpt_auth, "access_token", Tokens(lapsed()))
+    with pytest.raises(LLMUnavailableError, match="invalid_grant"):
+        reauth_client(FakeOpener(), None).complete(REQUEST)

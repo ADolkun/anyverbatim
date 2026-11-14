@@ -1,5 +1,6 @@
 import base64
 import contextlib
+import dataclasses
 import hashlib
 import http.client
 import json
@@ -114,6 +115,7 @@ def test_login_registers_this_host_exchanges_the_code_and_stores_the_account(sta
     assert query["code_challenge_method"] == "S256"
     assert query["state"] and query["nonce"] and query["state"] != query["nonce"]
     assert "prompt" not in query
+    assert "login_hint" not in query, "nothing is stored before the first sign-in"
     assert browser.statuses == [200]
 
     (exchange,) = opener.requests
@@ -148,6 +150,7 @@ def test_signing_in_again_reuses_the_registration_and_host_id() -> None:
     login(again, opener)
 
     assert again.query["client_id"] == CLIENT_ID
+    assert again.query["login_hint"] == EMAIL
     assert "agent_name_hint" not in again.query
     assert again.query["ext_agent_host_id"] == first.query["ext_agent_host_id"]
     assert form(opener.requests[0])["client_id"] == CLIENT_ID
@@ -562,3 +565,111 @@ def test_logout_clears_the_tokens_even_when_revocation_fails_unexpectedly() -> N
         chatgpt_auth.logout(opener=opener)
     account = stored_state().account
     assert account is not None and account.access_token == "" and account.refresh_token == ""
+
+
+def test_a_signed_out_account_still_hints_its_email_and_no_email_means_no_hint() -> None:
+    store_account()
+    chatgpt_auth.logout(opener=FakeOpener({f"GET {DISCOVERY_URL}": http_error(503)}))
+    browser = Browser(approve)
+    login(browser, token_endpoint(browser))
+    assert browser.query["login_hint"] == EMAIL
+
+    with chatgpt_auth._locked() as state:
+        assert state.account is not None
+        chatgpt_auth._save(dataclasses.replace(state, account=dataclasses.replace(state.account, email="")))
+    unnamed = Browser(lambda query: [{"code": "auth-code", "state": query["state"]}])
+    login(unnamed, token_endpoint(unnamed, email=None))
+    assert "login_hint" not in unnamed.query
+
+
+@pytest.mark.parametrize(
+    ("expires_at", "earliest", "refreshed"),
+    [
+        (NOW + 1800, NOW - 1, True),
+        (NOW + 1800, NOW, True),
+        (NOW + 1800, NOW + 1, False),
+        (NOW + 1800, 0.0, False),
+        (NOW + 59, 0.0, True),
+        (NOW + 61, 0.0, False),
+    ],
+)
+def test_the_token_is_refreshed_at_the_first_chance_the_server_allows(
+    expires_at: float, earliest: float, refreshed: bool
+) -> None:
+    store_account(expires_at=expires_at, earliest_refresh_at=earliest)
+    opener = FakeOpener({f"POST {TOKEN_URL}": json_response(token_payload(access="access-2", refresh="refresh-2"))})
+    token = chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
+    assert (token == "access-2") is refreshed
+    assert len(opener.requests) == int(refreshed)
+
+
+@pytest.mark.parametrize(
+    ("code", "needs"),
+    [
+        ("not_signed_in", True),
+        ("expired", True),
+        ("plan_disabled", True),
+        ("invalid_client", True),
+        ("invalid_grant", True),
+        ("invalid_refresh_token", True),
+        ("token_expired", True),
+        ("refresh_token_expired", True),
+        ("refresh_token_invalidated", True),
+        ("refresh_token_reused", True),
+        ("network_error", False),
+        ("request_failed", False),
+        ("refresh_not_yet", False),
+        ("timeout", False),
+        ("unsafe_store", False),
+    ],
+)
+def test_needs_sign_in_marks_only_what_a_new_sign_in_mends(code: str, needs: bool) -> None:
+    assert ChatGPTAuthError("x", code=code).needs_sign_in is needs
+
+
+def test_concurrent_refreshes_send_one_token_request() -> None:
+    store_account(expires_at=NOW)
+    calls: list[str] = []
+
+    def refresh(request: urllib.request.Request) -> FakeResponse:
+        calls.append(form(request)["refresh_token"])
+        time.sleep(0.3)
+        return json_response(token_payload(access="access-2", refresh="refresh-2"))(request)
+
+    opener = FakeOpener({f"POST {TOKEN_URL}": refresh})
+    tokens: list[str] = []
+    errors: list[BaseException] = []
+
+    def use() -> None:
+        try:
+            tokens.append(chatgpt_auth.access_token(opener=opener, clock=lambda: NOW))
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=use) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+    assert errors == []
+    assert tokens == ["access-2", "access-2"]
+    assert calls == ["refresh-1"], "the rotated refresh token is presented exactly once"
+
+
+def test_interactive_login_says_why_prints_the_url_and_opens_the_browser(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    opened: list[str] = []
+    url = "https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client"
+
+    def fake_login(*, open_url: Callable[[str], object], opener: object) -> chatgpt_auth.LoginResult:
+        assert open_url(url) is None, "a browser that will not open must not abort the wait"
+        return chatgpt_auth.LoginResult(EMAIL, plan=True)
+
+    monkeypatch.setattr(chatgpt_auth, "login", fake_login)
+    monkeypatch.setattr(chatgpt_auth.webbrowser, "open", lambda target: opened.append(target) or False)
+    assert chatgpt_auth.interactive_login("ChatGPT sign-in lapsed").plan
+    err = capsys.readouterr().err
+    assert err.startswith("ChatGPT sign-in lapsed; opening the browser to sign in again (waiting up to 5 minutes)\n")
+    assert url in err and opened == [url]
+    assert "access-" not in err and "refresh-" not in err

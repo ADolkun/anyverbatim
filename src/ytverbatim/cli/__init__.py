@@ -1,3 +1,4 @@
+import sys
 from collections.abc import Mapping
 from importlib import import_module
 from typing import Any, override
@@ -15,6 +16,14 @@ LAZY_COMMANDS: Mapping[str, str] = {
     "render": "ytverbatim.cli.render:render_command",
     "run": "ytverbatim.cli.run:run_command",
 }
+
+
+def interactive() -> bool:
+    """Whether a person is at the terminal to finish a browser sign-in; cron, pipes and CI are not.
+
+    Only the CLI decides this. Library calls default to non-interactive and never open a browser on their own.
+    """
+    return sys.stdin.isatty() and sys.stderr.isatty()
 
 
 class LazyGroup(click.Group):

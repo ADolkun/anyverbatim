@@ -4,13 +4,15 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
-from chatgpt_fakes import EMAIL, store_account
+from chatgpt_fakes import EMAIL, PLAN_SCOPES, FakeOpener, Route, http_error, json_response, store_account, token_payload
 from click.testing import CliRunner
 
+import ytverbatim.cli as cli_module
 from ytverbatim.cli import llm as llm_cli
 from ytverbatim.cli import main
+from ytverbatim.cli import run as run_cli
 from ytverbatim.config import LLMOptions, load_options
-from ytverbatim.errors import ConfigError, DependencyError
+from ytverbatim.errors import ConfigError, DependencyError, LLMUnavailableError
 from ytverbatim.llm import (
     ChatGPTClient,
     ClaudeCLIClient,
@@ -22,6 +24,7 @@ from ytverbatim.llm import (
     client_from_options,
     openai_compat,
 )
+from ytverbatim.llm.chatgpt_auth import TOKEN_URL
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Readiness, Usage
 
 
@@ -86,7 +89,7 @@ def test_check_openai_uses_configured_base_url(config: Path, monkeypatch: pytest
 def test_probe_sends_one_json_call_and_reports_usage(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     probe = ProbeClient()
     monkeypatch.setattr(claude_cli, "readiness", lambda: Readiness(True, "ok"))
-    monkeypatch.setattr(llm_cli, "client_from_options", lambda options: probe)
+    monkeypatch.setattr(llm_cli, "client_from_options", lambda options, **_kwargs: probe)
     result = CliRunner().invoke(main, ["llm", "check", "--provider", "claude-cli", "--model", "haiku", "--probe"])
     assert result.exit_code == 0, result.output
     assert len(probe.requests) == 1
@@ -100,7 +103,7 @@ def test_probe_errors_are_reported(config: Path, monkeypatch: pytest.MonkeyPatch
     assert "needs a model" in result.output
 
 
-def _forbidden(options: LLMOptions) -> object:
+def _forbidden(options: LLMOptions, **_kwargs: object) -> object:
     raise AssertionError("readiness must not build a client")
 
 
@@ -222,11 +225,143 @@ def test_check_ready_for_chatgpt_names_login_and_llm_none(
     assert "ytverbatim llm login" in raised.value.fix and "--llm none" in raised.value.fix
 
 
-@pytest.mark.parametrize("expires_at", [time.time() + 3600, time.time() - 1])
-def test_check_ready_accepts_a_ready_or_refreshable_account_without_a_request(config: Path, expires_at: float) -> None:
-    store_account(expires_at=expires_at)
+def test_check_ready_accepts_a_ready_account_without_a_request(config: Path) -> None:
+    store_account(expires_at=time.time() + 3600)
     # tests/conftest.py makes any real request to OpenAI fail this test.
     check_ready(LLMOptions())
+    check_ready(LLMOptions(), interactive=True)
+
+
+@dataclass
+class SignIns:
+    """Stands in for the browser sign-in: records each reason and stores what the sign-in would."""
+
+    plan: bool = True
+    reasons: list[str] = field(default_factory=list)
+
+    def __call__(self, reason: str) -> chatgpt_auth.LoginResult:
+        self.reasons.append(reason)
+        store_account(expires_at=time.time() + 3600, scopes=PLAN_SCOPES if self.plan else ("openid",))
+        return chatgpt_auth.LoginResult(EMAIL, plan=self.plan)
+
+
+def token_endpoint(monkeypatch: pytest.MonkeyPatch, route: Route) -> FakeOpener:
+    opener = FakeOpener({f"POST {TOKEN_URL}": route})
+    real = chatgpt_auth.access_token
+    monkeypatch.setattr(chatgpt_auth, "access_token", lambda **_kwargs: real(opener=opener))
+    return opener
+
+
+def test_check_ready_renews_a_due_token_now_without_llm_quota(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store_account(expires_at=time.time() - 1)
+    opener = token_endpoint(monkeypatch, json_response(token_payload(access="access-2", refresh="refresh-2")))
+    check_ready(LLMOptions())
+    assert [r.full_url for r in opener.requests] == [TOKEN_URL]
+    assert chatgpt_auth.status() == "ready"
+
+
+@pytest.mark.parametrize("account", ["signed_out", "dead_refresh_chain"])
+def test_check_ready_raises_when_not_interactive_and_signs_in_when_interactive(
+    config: Path, monkeypatch: pytest.MonkeyPatch, account: str
+) -> None:
+    if account == "dead_refresh_chain":
+        store_account(expires_at=time.time() - 1)
+    token_endpoint(monkeypatch, http_error(400, {"error": "invalid_grant"}))
+    sign_ins = SignIns()
+    monkeypatch.setattr(chatgpt_auth, "interactive_login", sign_ins)
+    with pytest.raises(ConfigError, match="ytverbatim llm login"):
+        check_ready(LLMOptions())
+    assert sign_ins.reasons == []
+
+    if account == "dead_refresh_chain":
+        store_account(expires_at=time.time() - 1)
+    check_ready(LLMOptions(), interactive=True)
+    assert len(sign_ins.reasons) == 1
+    assert chatgpt_auth.status() == "ready"
+
+
+def test_check_ready_signs_in_at_most_once(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sign_ins = SignIns(plan=False)
+    monkeypatch.setattr(chatgpt_auth, "interactive_login", sign_ins)
+    with pytest.raises(ConfigError, match="plan"):
+        check_ready(LLMOptions(), interactive=True)
+    assert sign_ins.reasons == ["ChatGPT is not signed in"]
+
+
+def test_a_transient_refresh_failure_in_pre_flight_never_opens_a_browser(
+    config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_account(expires_at=time.time() - 1)
+    token_endpoint(monkeypatch, http_error(503))
+    monkeypatch.setattr(chatgpt_auth, "interactive_login", lambda _reason: pytest.fail("opened a browser"))
+    with pytest.raises(chatgpt_auth.ChatGPTAuthError) as raised:
+        check_ready(LLMOptions(), interactive=True)
+    assert raised.value.code == "request_failed"
+
+
+def test_only_an_interactive_chatgpt_client_signs_in_again(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sign_ins = SignIns()
+    monkeypatch.setattr(chatgpt_auth, "interactive_login", sign_ins)
+    request = LLMRequest(system="s", user="u")
+    with pytest.raises(LLMUnavailableError, match="not signed in"):
+        client_from_options(LLMOptions()).complete(request)
+    assert sign_ins.reasons == []
+    # Signed in again, the client goes on to send the request, which tests/conftest.py stops at the network.
+    with pytest.raises(AssertionError, match=r"tried to contact https://api\.openai\.com/v1/responses"):
+        client_from_options(LLMOptions(), interactive=True).complete(request)
+    assert sign_ins.reasons == ["ChatGPT sign-in lapsed"]
+
+
+def test_the_terminal_decides_interactivity(monkeypatch: pytest.MonkeyPatch) -> None:
+    for stdin, stderr, expected in [(True, True, True), (True, False, False), (False, True, False)]:
+        monkeypatch.setattr(cli_module.sys, "stdin", Terminal(tty=stdin))
+        monkeypatch.setattr(cli_module.sys, "stderr", Terminal(tty=stderr))
+        assert cli_module.interactive() is expected
+
+
+@dataclass
+class Terminal:
+    tty: bool
+
+    def isatty(self) -> bool:
+        return self.tty
+
+
+@pytest.mark.parametrize("tty", [True, False])
+def test_run_and_probe_pass_the_terminals_interactivity(
+    config: Path, monkeypatch: pytest.MonkeyPatch, tty: bool
+) -> None:
+    seen: dict[str, object] = {}
+
+    def process_many(*_args: object, **kwargs: object) -> object:
+        seen["run"] = kwargs["interactive"]
+        raise ConfigError("stopped by the test")
+
+    monkeypatch.setattr(run_cli, "interactive", lambda: tty)
+    monkeypatch.setattr(run_cli.pipeline, "process_many", process_many)
+    result = CliRunner().invoke(main, ["run", "--llm", "none", "https://www.youtube.com/watch?v=BaW_jenozKc"])
+    assert result.exit_code == 1 and "stopped by the test" in result.output
+
+    store_account()
+    probe = ProbeClient()
+
+    def build(options: LLMOptions, *, interactive: bool = False) -> ProbeClient:
+        seen["probe"] = interactive
+        return probe
+
+    monkeypatch.setattr(llm_cli, "interactive", lambda: tty)
+    monkeypatch.setattr(llm_cli, "client_from_options", build)
+    assert CliRunner().invoke(main, ["llm", "check", "--probe"]).exit_code == 0
+    assert seen == {"run": tty, "probe": tty}
+
+
+def test_library_calls_default_to_non_interactive() -> None:
+    import inspect
+
+    from ytverbatim import pipeline
+
+    for function in (pipeline.process, pipeline.process_many, check_ready, client_from_options):
+        assert inspect.signature(function).parameters["interactive"].default is False
 
 
 def test_check_reports_chatgpt_status_without_contacting_openai(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -255,7 +390,7 @@ def test_check_probe_goes_through_the_chatgpt_client(config: Path, monkeypatch: 
     probe = ProbeClient()
     built: list[LLMOptions] = []
 
-    def build(options: LLMOptions) -> ProbeClient:
+    def build(options: LLMOptions, **_kwargs: object) -> ProbeClient:
         built.append(options)
         return probe
 
