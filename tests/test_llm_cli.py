@@ -17,7 +17,6 @@ from ytverbatim.llm import (
     OpenAICompatClient,
     apply_spec,
     chatgpt_auth,
-    chatgpt_http,
     check_ready,
     claude_cli,
     client_from_options,
@@ -217,20 +216,17 @@ def test_check_ready_for_chatgpt_names_login_and_llm_none(
         store_account(**account)
     with pytest.raises(ConfigError, match=detail) as raised:
         check_ready(LLMOptions())
-    assert "`ytverbatim llm login`" in str(raised.value) and "`--llm none`" in str(raised.value)
+    message = str(raised.value)
+    assert "`ytverbatim llm login`" in message and "`--llm none`" in message
+    assert '`LLMOptions(provider="none")`' in message
+    assert "ytverbatim llm login" in raised.value.fix and "--llm none" in raised.value.fix
 
 
 @pytest.mark.parametrize("expires_at", [time.time() + 3600, time.time() - 1])
-def test_check_ready_accepts_a_ready_or_refreshable_account_without_a_request(
-    config: Path, monkeypatch: pytest.MonkeyPatch, expires_at: float
-) -> None:
-    monkeypatch.setattr(chatgpt_http, "https_open", _no_network)
+def test_check_ready_accepts_a_ready_or_refreshable_account_without_a_request(config: Path, expires_at: float) -> None:
     store_account(expires_at=expires_at)
+    # tests/conftest.py makes any real request to OpenAI fail this test.
     check_ready(LLMOptions())
-
-
-def _no_network(request: object, timeout_s: float) -> object:
-    raise AssertionError("must not contact OpenAI")
 
 
 def test_check_reports_chatgpt_status_without_contacting_openai(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -326,11 +322,26 @@ def test_login_failures_are_reported(config: Path, monkeypatch: pytest.MonkeyPat
     assert result.exit_code == 1 and "sign-in timed out" in result.output
 
 
-@pytest.mark.parametrize(("confirmed", "said"), [(True, "confirmed the revocation"), (False, "did not confirm")])
-def test_logout_reports_whether_the_revocation_was_confirmed(
-    config: Path, monkeypatch: pytest.MonkeyPatch, confirmed: bool, said: str
+@pytest.mark.parametrize(
+    ("outcome", "said"),
+    [
+        ("confirmed", "chatgpt: signed out; OpenAI confirmed the revocation"),
+        ("unconfirmed", "chatgpt: signed out; OpenAI did not confirm the revocation"),
+        ("no_refresh_token", "chatgpt: signed out; there was no refresh token to revoke"),
+        ("not_signed_in", "chatgpt: not signed in; nothing to revoke"),
+    ],
+)
+def test_logout_reports_what_happened_to_the_revocation(
+    config: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, said: str
 ) -> None:
-    monkeypatch.setattr(chatgpt_auth, "logout", lambda: confirmed)
+    monkeypatch.setattr(chatgpt_auth, "logout", lambda: outcome)
     result = CliRunner().invoke(main, ["llm", "logout"])
     assert result.exit_code == 0, result.output
-    assert "chatgpt: signed out" in result.output and said in result.output
+    assert result.output.startswith(said)
+
+
+def test_check_creates_no_directory(config: Path, tmp_path: Path) -> None:
+    assert CliRunner().invoke(main, ["llm", "check"]).exit_code == 1
+    with pytest.raises(ConfigError):
+        check_ready(LLMOptions())
+    assert not (tmp_path / "state").exists()

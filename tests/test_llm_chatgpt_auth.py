@@ -1,11 +1,15 @@
 import base64
+import contextlib
 import hashlib
 import http.client
 import json
 import os
+import socket
 import stat
 import threading
+import time
 import urllib.parse
+import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
@@ -377,7 +381,7 @@ def test_logout_revokes_at_the_discovered_endpoint_and_clears_the_tokens() -> No
     opener = FakeOpener(
         {f"GET {DISCOVERY_URL}": json_response(DISCOVERY), f"POST {REVOKE_URL}": lambda _r: FakeResponse()}
     )
-    assert chatgpt_auth.logout(opener=opener) is True
+    assert chatgpt_auth.logout(opener=opener) == "confirmed"
     (revoke,) = opener.to(REVOKE_URL)
     assert form(revoke) == {"token": "refresh-1", "token_type_hint": "refresh_token", "client_id": CLIENT_ID}
     state = stored_state()
@@ -397,15 +401,31 @@ def test_logout_revokes_at_the_discovered_endpoint_and_clears_the_tokens() -> No
 def test_an_unconfirmed_revocation_still_clears_the_tokens(routes: dict[str, Route]) -> None:
     store_account()
     opener = FakeOpener(routes)
-    assert chatgpt_auth.logout(opener=opener) is False
+    assert chatgpt_auth.logout(opener=opener) == "unconfirmed"
     account = stored_state().account
     assert account is not None and account.access_token == "" and account.refresh_token == ""
 
 
-def test_logout_without_an_account_contacts_nobody() -> None:
+def test_logout_says_when_there_was_nothing_to_revoke() -> None:
     opener = FakeOpener()
-    assert chatgpt_auth.logout(opener=opener) is True
+    assert chatgpt_auth.logout(opener=opener) == "not_signed_in"
+    store_account(refresh="")
+    assert chatgpt_auth.logout(opener=opener) == "no_refresh_token"
+    assert chatgpt_auth.status() == "signed_out"
+    assert chatgpt_auth.logout(opener=opener) == "not_signed_in"
     assert opener.requests == []
+
+
+def test_a_revocation_response_cut_off_mid_body_still_clears_the_tokens() -> None:
+    store_account()
+
+    def truncated(_request: object) -> FakeResponse:
+        return FakeResponse(read_error=ConnectionError("the HTTP response broke off (IncompleteRead)"))
+
+    opener = FakeOpener({f"GET {DISCOVERY_URL}": json_response(DISCOVERY), f"POST {REVOKE_URL}": truncated})
+    assert chatgpt_auth.logout(opener=opener) == "unconfirmed"
+    account = stored_state().account
+    assert account is not None and account.access_token == account.refresh_token == ""
 
 
 def test_the_store_never_holds_more_than_one_account() -> None:
@@ -413,4 +433,96 @@ def test_the_store_never_holds_more_than_one_account() -> None:
     raw = json.loads(paths.chatgpt_credentials_file().read_text())
     assert set(raw) == {"schema_version", "host_id", "client_id", "account"}
     assert raw["account"]["scopes"] == list(PLAN_SCOPES)
+    assert "id_token" not in raw["account"]
     assert os.stat(paths.chatgpt_lock_file()).st_mode & 0o077 == 0
+
+
+def test_reading_the_status_creates_no_directory(tmp_path: Path) -> None:
+    assert chatgpt_auth.status() == "signed_out"
+    assert chatgpt_auth.readiness().ready is False
+    assert not (tmp_path / "state").exists()
+
+
+class Browsers:
+    """Several sign-in rounds: one `Browser` per authorization URL opened."""
+
+    def __init__(self, callbacks: Callbacks) -> None:
+        self.callbacks = callbacks
+        self.rounds: list[Browser] = []
+
+    def __call__(self, url: str) -> bool:
+        browser = Browser(self.callbacks)
+        self.rounds.append(browser)
+        return browser(url)
+
+
+def test_invalid_grant_on_a_first_registration_reauthorizes_once_under_the_issued_client() -> None:
+    browsers = Browsers(
+        lambda query: [{"code": f"code-{query['state'][:4]}", "state": query["state"], "client_id": CLIENT_ID}]
+    )
+    calls: list[str] = []
+
+    def token(request: urllib.request.Request) -> FakeResponse:
+        calls.append(form(request)["code_verifier"])
+        if len(calls) == 1:
+            return http_error(400, {"error": "invalid_grant"})(request)
+        nonce = browsers.rounds[-1].query["nonce"]
+        return FakeResponse(body=json.dumps(token_payload(id_token=id_token(nonce=nonce))).encode())
+
+    login(browsers, FakeOpener({f"POST {TOKEN_URL}": token}))  # type: ignore[arg-type]
+    first, second = (b.query for b in browsers.rounds)
+    assert first["client_id"] == "dynamic_agent_client" and "agent_name_hint" in first
+    assert second["client_id"] == CLIENT_ID and "agent_name_hint" not in second
+    assert first["state"] != second["state"] and first["nonce"] != second["nonce"]
+    assert first["code_challenge"] != second["code_challenge"] and calls[0] != calls[1]
+    assert chatgpt_auth.status(clock=lambda: NOW) == "ready"
+
+
+def test_a_second_invalid_grant_is_not_retried_again() -> None:
+    browsers = Browsers(approve)
+    opener = FakeOpener({f"POST {TOKEN_URL}": http_error(400, {"error": "invalid_grant"})})
+    with pytest.raises(ChatGPTAuthError) as raised:
+        login(browsers, opener)  # type: ignore[arg-type]
+    assert raised.value.code == "invalid_grant"
+    assert len(browsers.rounds) == 2 and len(opener.requests) == 2
+
+
+def test_the_issued_client_id_is_kept_when_the_first_exchange_fails() -> None:
+    browser = Browser(approve)
+    with pytest.raises(ChatGPTAuthError) as raised:
+        login(browser, FakeOpener({f"POST {TOKEN_URL}": http_error(503)}))
+    assert raised.value.code == "request_failed"
+    state = stored_state()
+    assert state.client_id == CLIENT_ID and state.account is None
+
+    again = Browser(lambda query: [{"code": "auth-code", "state": query["state"]}])
+    login(again, token_endpoint(again))
+    assert again.query["client_id"] == CLIENT_ID
+
+
+def test_a_peer_that_trickles_bytes_cannot_hold_login_past_its_deadline() -> None:
+    stop = threading.Event()
+
+    def trickle(url: str) -> bool:
+        redirect = urllib.parse.urlsplit(dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))["redirect_uri"])
+
+        def send() -> None:
+            with socket.create_connection((redirect.hostname or "", redirect.port or 0), timeout=5) as connection:
+                for byte in b"GET /auth/callback?state=x HTTP/1.1\r\n":
+                    if stop.is_set():
+                        return
+                    with contextlib.suppress(OSError):
+                        connection.sendall(bytes([byte]))
+                    time.sleep(0.2)
+
+        threading.Thread(target=send, daemon=True).start()
+        return True
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(ChatGPTAuthError) as raised:
+            chatgpt_auth.login(open_url=trickle, opener=FakeOpener(), timeout_s=1.0)
+    finally:
+        stop.set()
+    assert raised.value.code == "timeout"
+    assert time.monotonic() - started < 3.0

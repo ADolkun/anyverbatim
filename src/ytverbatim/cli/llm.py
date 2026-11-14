@@ -7,10 +7,10 @@ from pydantic import BaseModel
 from ytverbatim.config import LLMOptions, load_options
 from ytverbatim.errors import YtverbatimError
 from ytverbatim.llm import (
+    EFFORTS,
     LLMRequest,
     Readiness,
     UsageMeter,
-    chatgpt,
     chatgpt_auth,
     check_effort,
     claude_cli,
@@ -19,7 +19,15 @@ from ytverbatim.llm import (
     openai_compat,
 )
 
-_EFFORTS = sorted({*chatgpt.EFFORTS, *claude_cli.EFFORTS})
+_EFFORTS = list(dict.fromkeys(effort for efforts in EFFORTS.values() for effort in efforts))
+
+
+_LOGOUT_MESSAGES: dict[chatgpt_auth.Revocation, str] = {
+    "confirmed": "signed out; OpenAI confirmed the revocation",
+    "unconfirmed": "signed out; OpenAI did not confirm the revocation, so the sign-in may stay valid until it expires",
+    "no_refresh_token": "signed out; there was no refresh token to revoke",
+    "not_signed_in": "not signed in; nothing to revoke",
+}
 
 
 class _Probe(BaseModel):
@@ -63,11 +71,10 @@ def login(*, no_browser: bool) -> None:
 def logout() -> None:
     """Revoke the ChatGPT sign-in and remove its tokens from this machine."""
     try:
-        confirmed = chatgpt_auth.logout()
+        outcome = chatgpt_auth.logout()
     except YtverbatimError as exc:
         raise click.ClickException(str(exc)) from exc
-    revoked = "OpenAI confirmed the revocation" if confirmed else "OpenAI did not confirm the revocation"
-    click.echo(f"chatgpt: signed out; {revoked}")
+    click.echo(f"chatgpt: {_LOGOUT_MESSAGES[outcome]}")
 
 
 @llm.command()

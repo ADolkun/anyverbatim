@@ -16,6 +16,7 @@ import os
 import secrets
 import socket
 import stat
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -92,7 +93,6 @@ class Account:
     email: str = ""
     access_token: str = field(default="", repr=False)
     refresh_token: str = field(default="", repr=False)
-    id_token: str = field(default="", repr=False)
     scopes: tuple[str, ...] = ()
     expires_at: float = 0.0
     earliest_refresh_at: float = 0.0
@@ -151,10 +151,25 @@ def login(
     previous = state.account
     # Asking for consent again is the only way to add the plan scope to an account that signed in without it.
     consent = previous is not None and bool(previous.access_token) and PLAN_SCOPE not in previous.scopes
-    pending, callback = _authorize_in_browser(
-        state.host_id, state.client_id or DYNAMIC_CLIENT, open_url=open_url, timeout_s=timeout_s, consent=consent
-    )
-    client_id, payload = _exchange(pending, callback, opener)
+    client_id = state.client_id or DYNAMIC_CLIENT
+    reauthorized = False
+    while True:
+        pending, callback = _authorize_in_browser(
+            state.host_id, client_id, open_url=open_url, timeout_s=timeout_s, consent=consent
+        )
+        client_id = _issued_client(pending, callback)
+        # Kept before the exchange: a first sign-in that fails after this point must not register the host again.
+        _remember_client(client_id)
+        try:
+            payload = _exchange(pending, callback, client_id, opener)
+        except ChatGPTAuthError as exc:
+            # A first registration can refuse the code it was issued with; OpenAI then expects one fresh
+            # authorization under the issued client. This is the protocol's step, not a retry of a failure.
+            if exc.code != "invalid_grant" or reauthorized:
+                raise
+            reauthorized = True
+            continue
+        break
     account = _credentials(payload, client_id, clock(), nonce=pending.nonce)
     with _locked() as current:
         _save(replace(current, client_id=client_id, account=account))
@@ -204,16 +219,19 @@ def access_token(*, opener: Opener = https_open, clock: Callable[[], float] = ti
     return renewed.access_token
 
 
-def logout(*, opener: Opener = https_open) -> bool:
-    """Revoke the refresh token (best effort), then clear the tokens; True when OpenAI confirmed the revocation.
+Revocation = Literal["confirmed", "unconfirmed", "no_refresh_token", "not_signed_in"]
 
-    The registration and host id stay, so the next sign-in reuses them. Nothing to revoke counts as confirmed.
+
+def logout(*, opener: Opener = https_open) -> Revocation:
+    """Revoke the refresh token (best effort), then clear the tokens, and say how the revocation went.
+
+    The registration and host id stay, so the next sign-in reuses them.
     """
     with _locked() as state:
         account = state.account
-        if account is None:
-            return True
-        confirmed = not account.refresh_token
+        if account is None or not account.access_token:
+            return "not_signed_in"
+        outcome: Revocation = "no_refresh_token"
         if account.refresh_token and state.client_id is not None:
             try:
                 _post_form(
@@ -225,11 +243,11 @@ def logout(*, opener: Opener = https_open) -> bool:
                     },
                     opener,
                 )
-                confirmed = True
+                outcome = "confirmed"
             except ChatGPTAuthError:
-                confirmed = False
+                outcome = "unconfirmed"
         _save(replace(state, account=account.signed_out()))
-    return confirmed
+    return outcome
 
 
 def _require_private(info: os.stat_result, *, directory: bool) -> None:
@@ -243,7 +261,7 @@ def _require_private(info: os.stat_result, *, directory: bool) -> None:
 
 
 def _require_dir(*, create: bool) -> Path | None:
-    root = paths.chatgpt_auth_dir()
+    root = paths.chatgpt_auth_dir(create_parents=create)
     if create:
         with suppress(FileExistsError):
             root.mkdir(mode=_DIR_MODE)
@@ -314,7 +332,6 @@ def _save(state: State) -> None:
             "email": account.email,
             "access_token": account.access_token,
             "refresh_token": account.refresh_token,
-            "id_token": account.id_token,
             "scopes": list(account.scopes),
             "expires_at": account.expires_at,
             "earliest_refresh_at": account.earliest_refresh_at,
@@ -353,7 +370,6 @@ def _decode(value: object) -> State:
         email=_string(fields, "email", allow_empty=True),
         access_token=_string(fields, "access_token", allow_empty=True),
         refresh_token=_string(fields, "refresh_token", allow_empty=True),
-        id_token=_string(fields, "id_token", allow_empty=True),
         scopes=tuple(cast("list[str]", scopes)),
         expires_at=_number(fields, "expires_at"),
         earliest_refresh_at=_number(fields, "earliest_refresh_at"),
@@ -486,10 +502,8 @@ def _credentials(
         returned = payload.get("id_token")
         if returned is None and previous is not None:
             identity: dict[str, object] = {"sub": previous.subject, "email": previous.email}
-            id_token = previous.id_token
         elif isinstance(returned, str) and returned:
             identity = id_token_claims(returned, client_id, now, nonce=nonce)
-            id_token = returned
         else:
             raise ValueError("id_token")
         subject = _string(identity, "sub")
@@ -518,7 +532,6 @@ def _credentials(
         email=email,
         access_token=access,
         refresh_token=refresh,
-        id_token=id_token,
         scopes=scopes,
         expires_at=now + expires_in,
         earliest_refresh_at=earliest,
@@ -534,7 +547,7 @@ class _Pending:
     verifier: str = field(default_factory=lambda: secrets.token_urlsafe(64))
 
 
-def authorization_url(pending: _Pending, host_id: str, *, consent: bool) -> str:
+def _authorization_url(pending: _Pending, host_id: str, *, consent: bool) -> str:
     challenge = base64.urlsafe_b64encode(hashlib.sha256(pending.verifier.encode()).digest()).rstrip(b"=").decode()
     query = {
         "client_id": pending.client_id,
@@ -569,17 +582,36 @@ def _callback_params(target: str, pending: _Pending) -> dict[str, str] | None:
 
 class _LoopbackServer(HTTPServer):
     deadline: float = 0.0
+    _closer: threading.Timer | None = None
 
     @override
     def get_request(self) -> tuple[socket.socket, tuple[str, int]]:
         connection, address = super().get_request()
-        # A browser preconnect may send nothing; bounding each accepted socket keeps it from holding the loop.
-        connection.settimeout(max(0.01, min(1.0, self.deadline - time.monotonic())))
+        left = self.deadline - time.monotonic()
+        # A browser preconnect may send nothing; bounding each read keeps it from holding the loop. A peer that
+        # trickles bytes beats a per-read bound, so the connection is also closed outright at the login deadline.
+        connection.settimeout(max(0.01, min(1.0, left)))
+        self._closer = threading.Timer(max(0.0, left), _close_connection, args=(connection,))
+        self._closer.daemon = True
+        self._closer.start()
         return connection, address
+
+    @override
+    def shutdown_request(self, request: object) -> None:
+        if self._closer is not None:
+            self._closer.cancel()
+            self._closer = None
+        super().shutdown_request(cast("socket.socket", request))
 
     @override
     def handle_error(self, request: object, client_address: object) -> None:
         pass
+
+
+def _close_connection(connection: socket.socket) -> None:
+    with suppress(OSError):
+        connection.shutdown(socket.SHUT_RDWR)
+    connection.close()
 
 
 def _authorize_in_browser(
@@ -618,7 +650,7 @@ def _authorize_in_browser(
         server.timeout = 0.25
         server.deadline = time.monotonic() + timeout_s
         pending = _Pending(client_id, f"http://127.0.0.1:{server.server_port}{CALLBACK_PATH}")
-        if open_url(authorization_url(pending, host_id, consent=consent)) is False:
+        if open_url(_authorization_url(pending, host_id, consent=consent)) is False:
             raise ChatGPTAuthError("could not open a browser; retry with --no-browser", code="no_browser")
         while not received and time.monotonic() < server.deadline:
             server.handle_request()
@@ -627,19 +659,29 @@ def _authorize_in_browser(
     return pending, received[0]
 
 
-def _exchange(pending: _Pending, callback: dict[str, str], opener: Opener) -> tuple[str, dict[str, object]]:
+def _issued_client(pending: _Pending, callback: dict[str, str]) -> str:
+    """Return the client id a callback with the right state names; the first sign-in registers this host."""
     if not hmac.compare_digest(callback.get("state", ""), pending.state):
         raise ChatGPTAuthError("the sign-in callback had the wrong state", code="invalid_state")
     if callback.get("error"):
         raise ChatGPTAuthError("sign-in was not authorized; the stored sign-in was kept", code="access_denied")
-    # The first sign-in registers this host; the callback names the client id OpenAI assigned it.
     client_id = callback.get("client_id", pending.client_id)
     if client_id in ("", DYNAMIC_CLIENT) or (pending.client_id != DYNAMIC_CLIENT and client_id != pending.client_id):
         raise ChatGPTAuthError("the sign-in callback named an unexpected registration", code="invalid_client")
+    return client_id
+
+
+def _remember_client(client_id: str) -> None:
+    with _locked() as state:
+        if state.client_id != client_id:
+            _save(replace(state, client_id=client_id))
+
+
+def _exchange(pending: _Pending, callback: dict[str, str], client_id: str, opener: Opener) -> dict[str, object]:
     code = callback.get("code")
     if not code:
         raise ChatGPTAuthError("the sign-in callback had no authorization code", code="no_code")
-    payload = _post_form(
+    return _post_form(
         TOKEN_URL,
         {
             "grant_type": "authorization_code",
@@ -651,4 +693,3 @@ def _exchange(pending: _Pending, callback: dict[str, str], opener: Opener) -> tu
         },
         opener,
     )
-    return client_id, payload
