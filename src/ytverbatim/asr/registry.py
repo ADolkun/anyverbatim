@@ -19,12 +19,24 @@ _WHISPER_REVISION = "49e6aa286ad60c14352c404340ded53710378a11"
 # `emits_punctuation` is the vendors' claim for Qwen3 and MiMo and unverified for FireRed; the engine runs settle it.
 # Whisper passes the metadata language as production does; its `-lid` variants detect each chunk's language within
 # the file's allowed set (`max_chunk_s` is then the detection window, and `w-runs-lid` decodes whole same-language
-# runs). The challengers auto-detect: Qwen3 accepts only English
-# language names (§B2), FireRed has no language input, and MiMo knows only zh and en, so a metadata tag such as
-# "zh+en" would either abort the decode or force a wrong language.
+# runs). The challengers auto-detect: Qwen3 accepts only English language names (§B2), FireRed has no language input,
+# and MiMo knows only zh and en, so a metadata tag such as "zh+en" would either abort the decode or force a wrong
+# language.
 # Adapters are named by dotted path so that looking up a hypothesis never imports an engine library. Each entry also
 # names the top-level modules its worker imports, so a missing extra fails before anything is downloaded; chunked
 # hypotheses need mlx_audio for the Silero VAD that plans their chunks.
+# mlx-whisper's `tokenizer.LANGUAGES` keys, copied so the parent can check an allowed set without importing MLX (the
+# package imports it on load); a test keeps the copy equal to the installed tokenizer.
+# fmt: off
+WHISPER_LANGUAGES = frozenset((
+    "en", "zh", "de", "es", "ru", "ko", "fr", "ja", "pt", "tr", "pl", "ca", "nl", "ar", "sv", "it", "id", "hi", "fi",
+    "vi", "he", "uk", "el", "ms", "cs", "ro", "da", "hu", "ta", "no", "th", "ur", "hr", "bg", "lt", "la", "mi", "ml",
+    "cy", "sk", "te", "fa", "lv", "bn", "sr", "az", "sl", "kn", "et", "mk", "br", "eu", "is", "hy", "ne", "mn", "bs",
+    "kk", "sq", "sw", "gl", "mr", "pa", "si", "km", "sn", "yo", "so", "af", "oc", "ka", "be", "tg", "sd", "gu", "am",
+    "yi", "lo", "uz", "fo", "ht", "ps", "tk", "nn", "mt", "sa", "lb", "my", "bo", "tl", "mg", "as", "tt", "haw", "ln",
+    "ha", "ba", "jw", "su", "yue",
+))
+# fmt: on
 _WHISPER = ("mlx_whisper",)
 _MLX_AUDIO = ("mlx_audio",)
 _EXTRAS: Mapping[str, str] = {"mlx_whisper": "whisper", "mlx_audio": "asr"}
@@ -175,6 +187,7 @@ _ENTRIES: tuple[tuple[EngineDef, tuple[str, ...]], ...] = (
     ),
 )
 HYPOTHESES: Mapping[str, EngineDef] = {definition.spec.id: definition for definition, _ in _ENTRIES}
+_DETECTION_LANGUAGES: Mapping[str, frozenset[str]] = {"w-vad-lid": WHISPER_LANGUAGES, "w-runs-lid": WHISPER_LANGUAGES}
 _MODULES: Mapping[str, tuple[str, ...]] = {definition.spec.id: modules for definition, modules in _ENTRIES}
 
 
@@ -183,6 +196,13 @@ def get(hypothesis_id: str) -> EngineDef:
         return HYPOTHESES[hypothesis_id]
     except KeyError:
         raise ConfigError(f"unknown ASR hypothesis {hypothesis_id!r}; known: {', '.join(HYPOTHESES)}") from None
+
+
+def detection_languages(definition: EngineDef) -> frozenset[str] | None:
+    """Return the codes a registered `detect` hypothesis can choose from; None for an engine not registered here."""
+    if HYPOTHESES.get(definition.spec.id) != definition:
+        return None
+    return _DETECTION_LANGUAGES.get(definition.spec.id)
 
 
 def build_engine(definition: EngineDef) -> Engine:

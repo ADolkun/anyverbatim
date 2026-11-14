@@ -1,7 +1,9 @@
+import re
 from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
+from ytverbatim.asr import registry
 from ytverbatim.asr.chunks import Chunk
 from ytverbatim.asr.protocol import AsrContext, ChunkFlag, EngineDef
 from ytverbatim.contract.models import Word
@@ -34,7 +36,8 @@ class ChunkHypothesis(_Model):
     language: str | None = None
     # The detector's unrestricted probability for the language this row was decoded with; for a run, the lowest of
     # its chunks'. None when no detection chose it.
-    language_prob: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
+    # Left out of the line while None, so a control row reads the same to a ytverbatim that predates the field.
+    language_prob: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False, exclude_if=lambda v: v is None)
     words: tuple[Word, ...] = ()
     generated_tokens: int | None = None
     max_tokens: int | None = None
@@ -80,6 +83,15 @@ class FileJob(_Model):
     # it their worker folder.
     languages: tuple[str, ...] = Field(default=(), exclude_if=lambda value: not value)
 
+    @field_validator("languages")
+    @classmethod
+    def _primary_codes(cls, languages: tuple[str, ...]) -> tuple[str, ...]:
+        """Reduce tags such as `zh-Hans` to their primary code, as the Whisper adapter does, keeping first order."""
+        codes = [re.split(r"[-_]", tag.strip(), maxsplit=1)[0].lower() for tag in languages]
+        if not all(codes):
+            raise ValueError(f"allowed languages must be language codes, got {list(languages)}")
+        return tuple(dict.fromkeys(codes))
+
 
 class WorkerRequest(_Model):
     engine: EngineDef
@@ -102,8 +114,14 @@ class WorkerRequest(_Model):
         detects = engine.language_policy() == "detect"
         if engine.spec.max_chunk_s is None and (detects or engine.decodes_runs()):
             raise ValueError(f"{engine.spec.id} detects languages per chunk, so its spec needs a max_chunk_s")
+        if engine.decodes_runs() and not detects:
+            raise ValueError(f"{engine.spec.id} decodes same-language runs, so its language policy must be 'detect'")
         if not detects and any(job.languages for job in self.files):
             raise ValueError(f"{engine.spec.id} does not detect languages, so it cannot take an allowed language set")
+        known = registry.detection_languages(engine)
+        unknown = sorted({code for job in self.files for code in job.languages} - known) if known is not None else []
+        if unknown:
+            raise ValueError(f"{engine.spec.id} cannot detect the allowed languages {unknown}")
         return self
 
     def fingerprint(self) -> dict[str, JsonValue]:

@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from ytverbatim import store
 from ytverbatim.asr import registry, worker
 from ytverbatim.asr.chunks import Chunk
+from ytverbatim.asr.guard import QualityGuard
 from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, FileJob, WorkerRequest, without_wav
 from ytverbatim.asr.protocol import AsrContext, EngineDef, RawChunk
 from ytverbatim.asr.worker import DecodeUnit, pick_language, plan_runs
@@ -252,3 +253,66 @@ def test_an_allowed_set_is_part_of_the_fingerprint() -> None:
     assert FileJob.model_validate_json(
         FileJob(id="f1", wav="/a.wav", languages=("zh",)).model_dump_json()
     ).languages == ("zh",)
+
+
+def test_an_interrupted_per_chunk_output_detects_only_the_chunks_it_still_decodes(tmp_path: Path, wav: Path) -> None:
+    rows = run(tmp_path, DetectingEngine([ZH, ZH, EN, ZH]), lid("chunk"), job(wav))
+    sink = tmp_path / "out" / HYPOTHESES_FILE
+    sink.write_text("".join(row.model_dump_json() + "\n" for row in rows[:2]), encoding="utf-8")
+    again = DetectingEngine([EN, ZH])
+    request = WorkerRequest(engine=lid("chunk"), out_dir=str(tmp_path / "out"), files=(job(wav),))
+    metrics = worker.run_request(request, engine=again)
+    assert [kind for kind, _, _ in again.calls] == ["load", "detect", "transcribe", "detect", "transcribe"]
+    assert again.decodes() == [(3 * 16_000, "en"), (3 * 16_000, "zh")]
+    assert (metrics.chunks_decoded, metrics.chunks_skipped) == (2, 2)
+
+
+def test_the_per_chunk_guard_redecodes_the_halves_in_the_detected_language(tmp_path: Path, wav: Path) -> None:
+    class SilentFirst(DetectingEngine):
+        def transcribe(self, audio: object, *, language: str | None, context: AsrContext | None) -> RawChunk:
+            raw = super().transcribe(audio, language=language, context=context)
+            return RawChunk(text="", language=language) if len(self.decodes()) == 1 else raw
+
+    engine = SilentFirst([EN])
+    single = FileJob(id="f1", wav=str(wav), chunks=(Chunk(1.0, 4.0),), languages=("zh", "en"))
+    request = WorkerRequest(engine=lid("chunk"), out_dir=str(tmp_path / "out"), files=(single,))
+    worker.run_request(request, engine=engine, guard=QualityGuard())
+    assert [language for _, language in engine.decodes()] == ["en", "en", "en"]
+    (row,) = [ChunkHypothesis.model_validate_json(line) for line in (tmp_path / "out" / HYPOTHESES_FILE).open()]
+    assert ("redecoded" in row.flags, row.language, row.language_prob) == (True, "en", 0.7)
+
+
+def test_allowed_languages_reduce_to_primary_codes_and_unknown_ones_fail_before_any_decode() -> None:
+    assert FileJob(id="f1", wav="/a.wav", languages=("zh-Hans", "EN_us", "zh")).languages == ("zh", "en")
+    with pytest.raises(ValidationError, match="language codes"):
+        FileJob(id="f1", wav="/a.wav", languages=("zh", " "))
+    declared = FileJob(id="f1", wav="/a.wav", language="zh", languages=("zh", "xx"))
+    with pytest.raises(ValidationError, match=r"cannot detect the allowed languages \['xx'\]"):
+        WorkerRequest(engine=registry.get("w-runs-lid"), out_dir="/out", files=(declared,))
+
+
+def test_the_whisper_language_copy_matches_the_installed_tokenizer() -> None:
+    tokenizer = pytest.importorskip("mlx_whisper.tokenizer")
+    assert frozenset(tokenizer.LANGUAGES) == registry.WHISPER_LANGUAGES
+
+
+def test_runs_need_the_detect_policy() -> None:
+    for policy in ("auto", "pass"):
+        with pytest.raises(ValidationError, match="must be 'detect'"):
+            WorkerRequest(engine=definition(mode="runs", language=policy), out_dir="/out", files=())
+
+
+# A w-prod row as ytverbatim a3b4b2a serialized it, before `language_prob` existed.
+MAIN_ROW = (
+    '{"hypothesis":"w-prod","file":"abcdefghijk","chunk":0,"start":0.0,"end":12.0,"text":"示例","language":"zh",'
+    '"words":[{"text":"示例","start":0.5,"end":1.0,"conf":0.75}],"generated_tokens":null,"max_tokens":null,'
+    '"confidence":0.75,"flags":["decoder_anomaly"]}'
+)
+
+
+def test_a_control_row_serializes_as_it_did_before_language_prob() -> None:
+    row = ChunkHypothesis.model_validate_json(MAIN_ROW)
+    assert row.language_prob is None
+    assert row.model_dump_json() == MAIN_ROW
+    detected = row.model_copy(update={"language_prob": 0.5}).model_dump_json()
+    assert '"language_prob":0.5' in detected
