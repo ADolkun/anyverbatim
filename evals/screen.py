@@ -115,7 +115,9 @@ def available(layout: Layout, video: Video, plan: Plan, hypotheses: Sequence[str
         if hypothesis == CAPTION_HYPOTHESIS:
             if rows:
                 out[hypothesis] = rows
-        elif rows and file_complete(registry.get(hypothesis), plan, rows):
+        elif rows and file_complete(
+            registry.get(hypothesis), plan, rows, finished=layout.file_finished(hypothesis, video.id)
+        ):
             out[hypothesis] = rows
     return out
 
