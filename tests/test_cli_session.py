@@ -24,7 +24,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_the_command_tree() -> None:
     top = CliRunner().invoke(main, ["--help"]).output
     commands = {line.split()[0] for line in top.split("Commands:", 1)[1].splitlines() if line.strip()}
-    assert commands == {"auth", "fetch", "llm", "login", "logout", "render", "run", "status"}
+    assert commands == {"auth", "fetch", "llm", "login", "logout", "memos", "render", "run", "status"}
     llm = CliRunner().invoke(main, ["llm", "--help"]).output
     assert {line.split()[0] for line in llm.split("Commands:", 1)[1].splitlines() if line.strip()} == {"test"}
     for gone in (["llm", "login"], ["llm", "logout"], ["llm", "check"], ["auth", "status"]):

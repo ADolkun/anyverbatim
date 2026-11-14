@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 import click
 
+from ytverbatim.acquire import voicememos
 from ytverbatim.auth.fixes import fix_for
 from ytverbatim.auth.preflight import AuthReport, preflight
 from ytverbatim.auth.source import resolve_source
@@ -101,11 +102,12 @@ class _Row:
 @click.option("--refresh", is_flag=True, help="Ignore the one-hour cache and probe YouTube again.")
 @IGNORE_COOLDOWN
 def status_command(*, as_json: bool, refresh: bool, ignore_cooldown: bool) -> None:
-    """Show the YouTube login, the ChatGPT sign-in and the LLM in use. Makes no LLM call.
+    """Show the YouTube login, the ChatGPT sign-in, the LLM in use and Voice Memos access. Makes no LLM call.
 
     The YouTube check takes a cookie snapshot and makes one :ytfav request, cached for an hour. Nothing printed is a
     cookie or a token. Exit codes: 0 when everything configured is usable (no browser login, which limits YouTube to
-    public videos, counts as usable), 1 when a line says what needs attention.
+    public videos, counts as usable), 1 when a line says what needs attention. The Voice Memos line is informational
+    and never changes the exit code.
     """
     try:
         options = load_options().llm
@@ -117,14 +119,16 @@ def status_command(*, as_json: bool, refresh: bool, ignore_cooldown: bool) -> No
         store_error = None
     except chatgpt_auth.ChatGPTAuthError as exc:
         session, store_error = None, exc
+    memos = voicememos.probe()
     if as_json:
-        click.echo(json.dumps(_json(report, youtube_error, session, store_error, options), ensure_ascii=False))
+        click.echo(json.dumps(_json(report, youtube_error, session, store_error, options, memos), ensure_ascii=False))
     else:
         _print_rows(
             [
                 _youtube_row(report, youtube_error),
                 _chatgpt_row(session, store_error),
                 _Row("LLM", llm_label(options)),
+                _memos_row(memos),
             ]
         )
     youtube_usable = report is not None and (report.ok or _anonymous(report))
@@ -184,6 +188,22 @@ def _chatgpt_row(session: chatgpt_auth.Session | None, error: chatgpt_auth.ChatG
     return row
 
 
+_MEMOS_STATE = {
+    "no_access": "no access (Full Disk Access)",
+    "not_syncing": "not syncing",
+}
+
+
+def _memos_row(probe: voicememos.Probe) -> _Row:
+    match probe.state:
+        case "ok":
+            return _Row("Voice Memos", "-", f"ok · {probe.memos} memo{'' if probe.memos == 1 else 's'}")
+        case "unreadable":
+            return _Row("Voice Memos", "-", f"unreadable: {probe.detail}")
+        case state:
+            return _Row("Voice Memos", "-", _MEMOS_STATE[state], notes=[f"Fix: {probe.fix}"])
+
+
 def _print_rows(rows: list[_Row]) -> None:
     label_width = max(len(row.label) for row in rows)
     who_width = max(len(row.who) for row in rows if row.what)
@@ -205,6 +225,7 @@ def _json(
     session: chatgpt_auth.Session | None,
     store_error: chatgpt_auth.ChatGPTAuthError | None,
     options: LLMOptions,
+    memos: voicememos.Probe,
 ) -> dict[str, object]:
     if report is not None:
         youtube: dict[str, object] = {**report.to_json(), "usable": report.ok or _anonymous(report)}
@@ -224,4 +245,10 @@ def _json(
         else {"error": str(store_error)}
     )
     llm: dict[str, object] = {"provider": options.provider, "label": llm_label(options)}
-    return {"youtube": youtube, "chatgpt": chatgpt_status, "llm": llm}
+    voice_memos: dict[str, object] = {
+        "state": memos.state,
+        "memos": memos.memos,
+        "detail": memos.detail,
+        "fix": memos.fix,
+    }
+    return {"youtube": youtube, "chatgpt": chatgpt_status, "llm": llm, "voice_memos": voice_memos}
