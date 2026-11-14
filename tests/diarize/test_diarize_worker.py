@@ -1,21 +1,25 @@
+import fcntl
 import json
+import logging
+import os
 import subprocess
 import sys
-from collections.abc import Generator
-from contextlib import contextmanager
+import threading
 from pathlib import Path
 
 import pytest
 from fake_diarizer import CHANNELS, FRAME_S, definition, write_silence
 
-from ytverbatim import proc
+from ytverbatim import paths, proc
+from ytverbatim.asr import runner as asr_runner
 from ytverbatim.contract.models import Word
-from ytverbatim.diarize import protocol, runner, worker
+from ytverbatim.diarize import protocol, registry, runner, worker
 from ytverbatim.diarize.attribution import assign
 from ytverbatim.diarize.protocol import (
     ERROR_FILE,
     FINGERPRINT_FILE,
     METRICS_FILE,
+    REQUEST_FILE,
     DiarizeRequest,
     FileJob,
     RunMetrics,
@@ -65,13 +69,13 @@ def test_fake_output_becomes_turns_and_float16_probabilities(tmp_path: Path) -> 
     request = make_request(tmp_path, 4.0)
     metrics = worker.run_request(request)
     out = tmp_path / "out"
-    stored = protocol.read_file_diarization(out, "f0")
+    stored = protocol.read_file_diarization(out, "f0", "d-fake")
     assert stored.diarizer == "d-fake"
     assert (stored.frames, stored.channels, stored.frame_s) == (400, CHANNELS, FRAME_S)
     assert stored.num_speakers == 2
     assert [(t.speaker, t.start, t.end) for t in stored.turns] == [(0, 0.0, 2.0), (1, 2.0, 4.0)]
     assert probs_path(out, "f0").stat().st_size == 400 * CHANNELS * 2
-    loaded = protocol.load(out, "f0")
+    loaded = protocol.load(out, "f0", "d-fake")
     assert loaded.prob(0, 0) == pytest.approx(0.9, abs=1e-3)
     assert loaded.prob(399, 1) == pytest.approx(0.8, abs=1e-3)
     assert loaded.prob(399, 0) == 0.0
@@ -127,6 +131,38 @@ def test_a_diarizer_failure_names_the_file(tmp_path: Path) -> None:
         worker.run_request(make_request(tmp_path, 2.0, fail=True))
 
 
+def test_file_ids_differing_only_in_case_are_refused(tmp_path: Path) -> None:
+    jobs = (FileJob(id="Ab", wav="a.wav"), FileJob(id="aB", wav="b.wav"))
+    with pytest.raises(ValueError, match="ignoring case"):
+        DiarizeRequest(diarizer=definition(), out_dir=str(tmp_path / "out"), files=jobs)
+
+
+def test_a_turns_file_written_for_another_id_is_refused(tmp_path: Path) -> None:
+    worker.run_request(make_request(tmp_path, 2.0))
+    out = tmp_path / "out"
+    turns_path(out, "f0").rename(turns_path(out, "g0"))
+    probs_path(out, "f0").rename(probs_path(out, "g0"))
+    with pytest.raises(EngineError, match="for file 'f0', not d-fake output for 'g0'"):
+        protocol.load(out, "g0", "d-fake")
+    with pytest.raises(EngineError, match="holds d-fake output"):
+        protocol.read_file_diarization(out, "g0", "d-other")
+
+
+def test_a_turns_file_without_its_probabilities_is_not_skipped(tmp_path: Path) -> None:
+    request = make_request(tmp_path, 2.0)
+    worker.run_request(request)
+    probs_path(tmp_path / "out", "f0").unlink()
+    with pytest.raises(EngineError, match=r"f0\.probs\.f16 is unreadable"):
+        worker.run_request(request)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), 1.5, -0.1])
+def test_probabilities_outside_zero_and_one_are_refused(tmp_path: Path, bad: float) -> None:
+    with pytest.raises(EngineError, match="outside"):
+        worker.run_request(make_request(tmp_path, 2.0, bad_prob=bad))
+    assert not probs_path(tmp_path / "out", "f0").exists()
+
+
 def test_a_file_id_that_is_not_a_plain_name_is_refused() -> None:
     with pytest.raises(ValueError, match="names output files"):
         FileJob(id="../x", wav="a.wav")
@@ -157,39 +193,62 @@ def test_the_error_report_travels_to_the_parent(tmp_path: Path) -> None:
     assert json.loads((tmp_path / "out" / ERROR_FILE).read_text(encoding="utf-8"))["type"] == "EngineError"
 
 
-def test_the_worker_runs_under_the_asr_lock_and_a_memory_watch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_worker_runs_in_its_output_folder_under_the_asr_lock_and_a_memory_watch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seen: dict[str, object] = {}
-    held: list[bool] = []
 
-    def fake_run(argv: list[str], *, memory_watch: proc.MemoryWatch, **_: object) -> proc.ProcResult:
-        seen["argv"] = argv
-        seen["cap"] = memory_watch.cap_bytes
-        held.append(locked["now"])
+    def fake_run(argv: list[str], *, memory_watch: proc.MemoryWatch, cwd: Path, **_: object) -> proc.ProcResult:
+        seen.update(argv=argv, cap=memory_watch.cap_bytes, cwd=cwd)
+        fd = os.open(paths.locks_dir() / asr_runner.LOCK_NAME, os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
         return proc.ProcResult(1, "", "boom", 0.1)
 
-    locked = {"now": False}
-    real_lock = runner.worker_lock
-
-    @contextmanager
-    def spy_lock() -> Generator[int, None, None]:
-        with real_lock() as fd:
-            locked["now"] = True
-            yield fd
-            locked["now"] = False
-
-    monkeypatch.setattr(runner, "worker_lock", spy_lock)
     monkeypatch.setattr(runner.proc, "run", fake_run)
     monkeypatch.setattr("ytverbatim.asr.runner.sysmem.physical_memory_bytes", lambda: 24 * GIB)
+    monkeypatch.chdir(tmp_path)
+    request = make_request(tmp_path, 2.0).model_copy(update={"out_dir": "out"})
     with pytest.raises(EngineError, match="exited with 1"):
-        runner.run_worker(make_request(tmp_path, 2.0))
-    assert held == [True]
+        runner.run_worker(request)
     assert seen["cap"] == 12 * GIB
+    assert seen["cwd"] == (tmp_path / "out").resolve()
     assert seen["argv"][1:4] == ["-P", "-m", "ytverbatim.diarize.worker"]  # type: ignore[index]
+    written = DiarizeRequest.model_validate_json((tmp_path / "out" / REQUEST_FILE).read_text(encoding="utf-8"))
+    assert Path(written.out_dir).is_absolute()
+    assert all(Path(job.wav).is_absolute() for job in written.files)
+
+
+def test_a_diarizer_waits_for_an_asr_worker_and_says_so(caplog: pytest.LogCaptureFixture) -> None:
+    entered = threading.Event()
+
+    def take() -> None:
+        with runner.mlx_lock():
+            entered.set()
+
+    with caplog.at_level(logging.INFO), asr_runner.worker_lock():
+        thread = threading.Thread(target=take)
+        thread.start()
+        assert not entered.wait(0.3)
+    thread.join(timeout=10)
+    assert entered.is_set()
+    assert "waiting for another MLX worker (ASR or diarization)" in caplog.text
+
+
+def test_the_memory_advice_names_a_lighter_diarizer_only_when_there_is_one() -> None:
+    assert runner._smaller(registry.get("d-nemotron-bf16").spec) == "use d-nemotron-8bit"
+    assert runner._smaller(registry.get("d-nemotron-8bit").spec) == "split the recording into shorter files"
 
 
 @pytest.mark.parametrize(
     ("trigger", "fix"),
-    [("footprint", "use the 8-bit diarizer, or raise asr.memory_cap_gib"), ("available", "close memory-heavy apps")],
+    [
+        ("footprint", "split the recording into shorter files, or raise asr.memory_cap_gib"),
+        ("available", "close memory-heavy apps"),
+    ],
 )
 def test_a_memory_kill_becomes_an_engine_memory_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trigger: str, fix: str

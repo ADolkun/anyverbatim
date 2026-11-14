@@ -24,10 +24,12 @@ REQUEST_FILE = "request.json"
 FINGERPRINT_FILE = "fingerprint.json"
 TURNS_SUFFIX = ".turns.json"
 PROBS_SUFFIX = ".probs.f16"
-# Little-endian IEEE half floats, row-major (frames, channels).
+# Little-endian IEEE half floats, row-major (frames, channels). Half precision rounds a probability just above the
+# threshold to it (0.5002 stores as 0.5, so it reads as inactive); the band is under 0.00025 wide around 0.5, far
+# below anything the threshold is meant to separate.
 _HALF = struct.Struct("<e")
 
-# File ids become file names in the output folder.
+# File ids become file names in the output folder; uniqueness is checked case-insensitively for APFS.
 _FILE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -121,9 +123,10 @@ class DiarizeRequest(_Model):
 
     @model_validator(mode="after")
     def _valid(self) -> Self:
-        ids = [job.id for job in self.files]
+        # APFS is case-insensitive by default, so ids differing only in case would share one output file.
+        ids = [job.id.casefold() for job in self.files]
         if len(set(ids)) != len(ids):
-            raise ValueError("file ids must be unique within a request")
+            raise ValueError("file ids must be unique within a request, ignoring case")
         self.diarizer.threshold()
         return self
 
@@ -188,17 +191,23 @@ def probs_path(out_dir: Path, file_id: str) -> Path:
     return out_dir / f"{file_id}{PROBS_SUFFIX}"
 
 
-def read_file_diarization(out_dir: Path, file_id: str) -> FileDiarization:
+def read_file_diarization(out_dir: Path, file_id: str, diarizer_id: str) -> FileDiarization:
+    """Read one file's turns, refusing a file written for another id or by another diarizer."""
     path = turns_path(out_dir, file_id)
     try:
-        return FileDiarization.model_validate_json(path.read_text(encoding="utf-8"))
+        stored = FileDiarization.model_validate_json(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise EngineError(f"{path} is unreadable: {exc}") from exc
+    if stored.file != file_id or stored.diarizer != diarizer_id:
+        raise EngineError(
+            f"{path} holds {stored.diarizer} output for file {stored.file!r}, not {diarizer_id} output for {file_id!r}"
+        )
+    return stored
 
 
-def load(out_dir: Path, file_id: str) -> Diarization:
+def load(out_dir: Path, file_id: str, diarizer_id: str) -> Diarization:
     """Read one file's stored diarization; raise `EngineError` if its two parts are missing or disagree."""
-    meta = read_file_diarization(out_dir, file_id)
+    meta = read_file_diarization(out_dir, file_id, diarizer_id)
     path = probs_path(out_dir, file_id)
     try:
         data = path.read_bytes()

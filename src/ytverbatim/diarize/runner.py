@@ -1,25 +1,29 @@
 """Parent side of the diarization worker: same lock, memory watch and failure reporting as the ASR worker.
 
-It takes the ASR worker's machine-wide MLX lock, so a diarizer never runs while an ASR engine does. Nothing here
+It takes the ASR worker's machine-wide MLX lock file, so a diarizer never runs while an ASR engine does. Nothing here
 imports MLX or numpy.
 
 `python -m ytverbatim.diarize.runner DIARIZER OUT_DIR WAV...` diarizes WAVs outside the pipeline, for smoke runs and
 evals; it prints the metrics and each file's speaker count as JSON.
 """
 
+import contextlib
+import fcntl
 import json
+import logging
+import os
 import resource
 import sys
 import wave
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import JsonValue
 
-from ytverbatim import atomic, proc
+from ytverbatim import atomic, paths, proc
 from ytverbatim.asr.models import WorkerError, without_wav
-from ytverbatim.asr.runner import default_memory_cap_bytes, memory_fix, timeout_s, worker_lock
+from ytverbatim.asr.runner import LOCK_NAME, default_memory_cap_bytes, memory_fix, timeout_s
 from ytverbatim.diarize import registry
 from ytverbatim.diarize.protocol import (
     ERROR_FILE,
@@ -27,11 +31,14 @@ from ytverbatim.diarize.protocol import (
     METRICS_FILE,
     REQUEST_FILE,
     DiarizeRequest,
+    DiarizerSpec,
     FileJob,
     RunMetrics,
     read_file_diarization,
 )
 from ytverbatim.errors import EngineError, EngineMemoryError, MediaValidationError, ProcMemoryExceeded, stderr_preview
+
+log = logging.getLogger(__name__)
 
 WORKER_MODULE = "ytverbatim.diarize.worker"
 
@@ -56,24 +63,31 @@ def run_worker(request: DiarizeRequest, *, python: str | None = None) -> Diarize
     machine runs short of memory; the files it finished stay on disk for the next run to skip.
     """
     cap = request.memory_cap_bytes or default_memory_cap_bytes()
-    request = request.model_copy(update={"memory_cap_bytes": cap})
-    out = Path(request.out_dir)
+    # Absolute, because the worker runs in its output folder (see `cwd` below).
+    out = Path(request.out_dir).resolve()
+    files = tuple(job.model_copy(update={"wav": str(Path(job.wav).resolve())}) for job in request.files)
+    request = request.model_copy(update={"memory_cap_bytes": cap, "out_dir": str(out), "files": files})
     out.mkdir(parents=True, exist_ok=True)
     request_path = out / REQUEST_FILE
     limit = timeout_s(sum(_wav_seconds(Path(job.wav)) for job in request.files))
     diarizer = request.diarizer.spec.id
-    with worker_lock():
+    with mlx_lock():
         # Under the lock, so a run waiting its turn cannot overwrite a running worker's request or read a report left
         # by an earlier run as this worker's failure.
         (out / ERROR_FILE).unlink(missing_ok=True)
         atomic.write_text(request_path, request.model_dump_json(indent=2) + "\n")
         try:
+            # mlx-audio loads a directory named like the repo from the working directory in place of the pinned
+            # download, so the worker runs in its own output folder, which holds no such directory.
             result = proc.run(
-                worker_argv(request_path, python=python), timeout_s=limit, memory_watch=proc.MemoryWatch(cap)
+                worker_argv(request_path, python=python),
+                timeout_s=limit,
+                memory_watch=proc.MemoryWatch(cap),
+                cwd=out,
             )
         except ProcMemoryExceeded as exc:
             detail = f"{diarizer} worker stopped to protect the machine: {exc}"
-            fix = memory_fix(exc, smaller="use the 8-bit diarizer", kept="finished files")
+            fix = memory_fix(exc, smaller=_smaller(request.diarizer.spec), kept="finished files")
             raise EngineMemoryError(detail, fix, exc) from exc
     children_rss = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
     if result.returncode != 0:
@@ -83,6 +97,28 @@ def run_worker(request: DiarizeRequest, *, python: str | None = None) -> Diarize
     except (OSError, ValueError) as exc:
         raise EngineError(f"{diarizer} worker exited cleanly but left no readable {METRICS_FILE}: {exc}") from exc
     return DiarizeResult(out, metrics, children_rss, result.elapsed_s)
+
+
+@contextlib.contextmanager
+def mlx_lock() -> Generator[int, None, None]:
+    """Hold the machine-wide MLX lock the ASR worker also takes; two models at once would fight over unified memory."""
+    fd = os.open(paths.locks_dir() / LOCK_NAME, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log.info("waiting for another MLX worker (ASR or diarization) to finish (%s)", LOCK_NAME)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def _smaller(spec: DiarizerSpec) -> str:
+    lighter = [d.spec for d in registry.DIARIZERS.values() if d.spec.weights_bytes < spec.weights_bytes]
+    if lighter:
+        return f"use {min(lighter, key=lambda s: s.weights_bytes).id}"
+    return "split the recording into shorter files"
 
 
 def finished(request: DiarizeRequest) -> Path | None:
@@ -126,7 +162,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     files = {
         str(wav): {"num_speakers": stored.num_speakers, "turns": len(stored.turns), "duration_s": stored.duration_s}
         for wav, stored in (
-            (wav, read_file_diarization(result.out_dir, job.id)) for wav, job in zip(wavs, jobs, strict=True)
+            (wav, read_file_diarization(result.out_dir, job.id, definition.spec.id))
+            for wav, job in zip(wavs, jobs, strict=True)
         )
     }
     summary = {"metrics": result.metrics.model_dump(mode="json"), "elapsed_s": result.elapsed_s, "files": files}

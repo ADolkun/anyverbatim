@@ -5,9 +5,13 @@ Rules (plan §2.5):
   the diarizer's threshold) in at least one of them.
 - A word with no active channel takes the speaker of the nearest active frame within `GAP_S`, else the previous
   word's speaker; leading words with neither take the first attributed word's speaker.
-- A word is overlapped when some other channel is active over at least half of its frames.
-- Smoothing: a run of same-speaker words lasting under `SMOOTH_S`, or of fewer than `SMOOTH_WORDS` words, takes its
-  neighbours' speaker when both neighbouring runs share one and no word of the run is overlapped.
+- A word is overlapped when one other channel is active together with the chosen one over at least half of its
+  frames.
+- Smoothing: a run of same-speaker words is short when it lasts under `SMOOTH_S` or has fewer than `SMOOTH_WORDS`
+  words, and protected when one of its words is overlapped. A short, unprotected run takes its neighbours' speaker
+  when both neighbouring runs share one and neither is itself short and unprotected. Judging neighbours too keeps a
+  string of alternating blips from flipping into new blips, and makes a second pass change nothing.
+- Overlap spans merge consecutive overlapped words less than `GAP_S` apart.
 """
 
 import math
@@ -21,6 +25,7 @@ GAP_S = 0.5
 OVERLAP_SHARE = 0.5
 SMOOTH_S = 0.5
 SMOOTH_WORDS = 2
+_FRAME_DIGITS = 6
 
 
 class Span(NamedTuple):
@@ -63,8 +68,9 @@ def speech_seconds(segments: Iterable[tuple[float, float, str | None]]) -> dict[
 
 def _frames(start: float, end: float, d: Diarization) -> range:
     """Frames overlapping [start, end); a zero-length word gets the frame it falls in. Clipped to the stored frames."""
-    first = max(0, math.floor(start / d.frame_s))
-    last = max(first + 1, math.ceil(end / d.frame_s))
+    # Rounded first: 0.29 / 0.01 is 28.999..., which would add a frame that ends where the word starts.
+    first = max(0, math.floor(round(start / d.frame_s, _FRAME_DIGITS)))
+    last = max(first + 1, math.ceil(round(end / d.frame_s, _FRAME_DIGITS)))
     return range(min(first, d.frames), min(last, d.frames))
 
 
@@ -86,8 +92,14 @@ def _score(word: Word, d: Diarization) -> _Scored:
     if not candidates:
         return _Scored(None, False)
     best = max(candidates, key=lambda c: (sums[c], -c))
-    others = sum(1 for frame in frames if any(c != best for c in _active(d, frame)))
-    return _Scored(best, others >= OVERLAP_SHARE * len(frames))
+    together = [0] * d.channels
+    for frame in frames:
+        active = _active(d, frame)
+        if best in active:
+            for c in active:
+                together[c] += 1
+    together[best] = 0
+    return _Scored(best, max(together) >= OVERLAP_SHARE * len(frames))
 
 
 def _nearest(word: Word, d: Diarization) -> int | None:
@@ -135,16 +147,23 @@ def _runs(channels: Sequence[int | None]) -> list[range]:
 def _smooth(words: Sequence[Word], channels: list[int | None], overlapped: Sequence[bool]) -> list[int | None]:
     # Decided on the unsmoothed runs, so the outcome does not depend on the order runs are visited in.
     runs = _runs(channels)
+    movable = [_movable(words, run, overlapped) for run in runs]
     smoothed = list(channels)
-    for before, run, after in zip(runs, runs[1:], runs[2:], strict=False):
+    for index in range(1, len(runs) - 1):
+        before, run, after = runs[index - 1], runs[index], runs[index + 1]
         neighbour = channels[before.start]
-        if neighbour != channels[after.start] or any(overlapped[i] for i in run):
+        if not movable[index] or movable[index - 1] or movable[index + 1] or neighbour != channels[after.start]:
             continue
-        duration = words[run.stop - 1].end - words[run.start].start
-        if duration < SMOOTH_S or len(run) < SMOOTH_WORDS:
-            for i in run:
-                smoothed[i] = neighbour
+        for i in run:
+            smoothed[i] = neighbour
     return smoothed
+
+
+def _movable(words: Sequence[Word], run: range, overlapped: Sequence[bool]) -> bool:
+    if any(overlapped[i] for i in run):
+        return False
+    duration = words[run.stop - 1].end - words[run.start].start
+    return duration < SMOOTH_S or len(run) < SMOOTH_WORDS
 
 
 def _renumber(channels: Sequence[int | None]) -> tuple[str | None, ...]:
@@ -160,7 +179,7 @@ def _overlap_spans(words: Sequence[Word], overlapped: Sequence[bool]) -> tuple[S
     previous = False
     for word, flagged in zip(words, overlapped, strict=True):
         if flagged:
-            if previous:
+            if previous and word.start - spans[-1].end < GAP_S:
                 spans[-1] = Span(spans[-1].start, max(spans[-1].end, word.end))
             else:
                 spans.append(Span(word.start, word.end))

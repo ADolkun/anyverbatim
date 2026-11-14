@@ -3,6 +3,7 @@ import struct
 import pytest
 
 from ytverbatim.contract.models import Word
+from ytverbatim.diarize import attribution
 from ytverbatim.diarize.attribution import Span, assign, speech_seconds
 from ytverbatim.diarize.protocol import Diarization
 
@@ -87,11 +88,17 @@ def test_a_one_word_blip_is_smoothed_into_the_surrounding_speaker() -> None:
 
 def test_a_short_multi_word_run_is_smoothed_but_a_long_one_is_kept() -> None:
     short = diarization(4, (0, 0, 1.5, 0.9), (1, 1.5, 1.9, 0.9), (0, 1.9, 4, 0.9))
-    two_quick = words((0.2, 1.2), (1.55, 1.7), (1.7, 1.85), (2.5, 3.5))
-    assert assign(two_quick, short).speakers == ("S1",) * 4
+    two_quick = words((0.2, 0.6), (0.7, 1.2), (1.55, 1.7), (1.7, 1.85), (2.5, 3.0), (3.1, 3.5))
+    assert assign(two_quick, short).speakers == ("S1",) * 6
     long = diarization(5, (0, 0, 1.5, 0.9), (1, 1.5, 3.0, 0.9), (0, 3.0, 5, 0.9))
-    two_slow = words((0.2, 1.2), (1.6, 2.2), (2.3, 2.9), (3.5, 4.5))
-    assert assign(two_slow, long).speakers == ("S1", "S2", "S2", "S1")
+    two_slow = words((0.2, 0.6), (0.7, 1.2), (1.6, 2.2), (2.3, 2.9), (3.5, 4.0), (4.1, 4.5))
+    assert assign(two_slow, long).speakers == ("S1", "S1", "S2", "S2", "S1", "S1")
+
+
+def test_a_blip_next_to_a_one_word_neighbour_is_kept() -> None:
+    # A single word is short by count, however long it lasts, so it cannot anchor smoothing.
+    d = diarization(4, (0, 0, 1.5, 0.9), (1, 1.5, 1.9, 0.9), (0, 1.9, 4, 0.9))
+    assert assign(words((0.2, 1.2), (1.55, 1.85), (2.5, 3.0), (3.1, 3.5)), d).speakers == ("S1", "S2", "S1", "S1")
 
 
 def test_an_overlap_flagged_blip_is_kept() -> None:
@@ -127,3 +134,49 @@ def test_speech_seconds_sums_segments_in_first_appearance_order() -> None:
     totals = speech_seconds([(0.0, 2.0, "S1"), (2.0, 3.5, "S2"), (4.0, 5.0, "S1"), (5.0, 6.0, None)])
     assert list(totals) == ["S1", "S2"]
     assert totals == pytest.approx({"S1": 3.0, "S2": 1.5})
+
+
+def test_a_clean_change_halfway_through_a_word_is_not_overlap() -> None:
+    d = diarization(4, (0, 0, 2, 0.9), (1, 2, 4, 0.8))
+    result = assign(words((0.5, 1.5), (1.75, 2.25), (2.5, 3.5)), d)
+    assert result.overlaps == ()
+    assert result.speakers == ("S1", "S1", "S2")
+
+
+def test_overlap_counts_one_other_speaker_at_a_time() -> None:
+    # Two others each share a third of the word with the chosen speaker; neither reaches half on its own.
+    d = diarization(3, (0, 0, 3, 0.9), (1, 1.0, 1.2, 0.7), (2, 1.2, 1.4, 0.7))
+    assert assign(words((0.2, 0.8), (1.0, 1.6), (2.0, 2.8)), d).overlaps == ()
+
+
+def test_alternating_blips_never_turn_into_new_blips() -> None:
+    d = diarization(6, (0, 0, 1.2, 0.9), (1, 1.2, 1.6, 0.9), (0, 1.6, 2.0, 0.9), (1, 2.0, 2.4, 0.9), (0, 2.4, 6, 0.9))
+    spans = ((0.1, 0.5), (0.6, 1.1), (1.25, 1.55), (1.65, 1.95), (2.05, 2.35), (2.5, 3.5), (3.6, 4.5))
+    raw = assign(words(*spans), d, smoothing=False).speakers
+    assert raw == ("S1", "S1", "S2", "S1", "S2", "S1", "S1")
+    # Each blip neighbours another blip, so none is moved rather than all being flipped.
+    assert assign(words(*spans), d).speakers == raw
+
+
+def test_a_second_smoothing_pass_changes_nothing() -> None:
+    w = words(*((i * 0.4, i * 0.4 + 0.3) for i in range(12)))
+    pattern = [0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 0]
+    once = attribution._smooth(w, list(pattern), [False] * 12)
+    assert once != pattern
+    assert attribution._smooth(w, once, [False] * 12) == once
+
+
+def test_a_word_within_half_a_second_past_the_stored_frames_takes_the_nearest_speaker() -> None:
+    d = diarization(1, (0, 0, 0.5, 0.9), (1, 0.5, 1.0, 0.9))
+    result = assign(words((0.1, 0.4), (1.2, 1.3), (1.7, 1.8)), d)
+    assert result.speakers == ("S1", "S2", "S2")
+
+
+def test_frame_edges_do_not_pull_in_the_frame_before_a_word() -> None:
+    assert attribution._frames(0.29, 0.35, diarization(4)) == range(29, 35)
+
+
+def test_overlapped_words_far_apart_give_separate_spans() -> None:
+    d = diarization(8, (0, 0, 8, 0.9), (1, 1.0, 1.5, 0.7), (1, 5.0, 5.5, 0.7))
+    result = assign(words((1.0, 1.5), (5.0, 5.5)), d)
+    assert result.overlaps == (Span(1.0, 1.5), Span(5.0, 5.5))
