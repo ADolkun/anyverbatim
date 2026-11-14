@@ -1,0 +1,18 @@
+{
+  "tracks": [
+    {
+      "language": "en",
+      "kind": "manual",
+      "format": "json3",
+      "word_timings": false,
+      "segments": 3
+    },
+    {
+      "language": "en-orig",
+      "kind": "auto",
+      "format": "json3",
+      "word_timings": true,
+      "segments": 3
+    }
+  ]
+}

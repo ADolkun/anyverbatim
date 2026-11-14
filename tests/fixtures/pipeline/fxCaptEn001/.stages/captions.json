@@ -1,0 +1,45 @@
+{
+  "stage_version": "1+stages-v1",
+  "input_hash": "24c5818d764ae223c436efb4dc7c22169ec636d3fc2ec2fa9454509dd4aef94e",
+  "output": {
+    "run": {
+      "id": "caption_manual:en",
+      "kind": "caption_manual",
+      "engine": null,
+      "model_repo": null,
+      "model_revision": null,
+      "params": {
+        "format": "json3",
+        "language": "en"
+      },
+      "vad": null,
+      "chunking": null,
+      "aligner": null
+    },
+    "language": "en",
+    "stretches": [
+      {
+        "text": "so today we look at fifteen funds Markets rose twelve percent.",
+        "start": 0.0,
+        "end": 10.0,
+        "words": [],
+        "word_timed": false,
+        "flags": [],
+        "edits": []
+      },
+      {
+        "text": "Then they fell sharply.",
+        "start": 12.0,
+        "end": 16.0,
+        "words": [],
+        "word_timed": false,
+        "flags": [],
+        "edits": []
+      }
+    ],
+    "speech_seconds": null,
+    "decoder_anomalies": 0,
+    "chunk_flags": {},
+    "warnings": []
+  }
+}

@@ -1,0 +1,114 @@
+{
+  "stage_version": "1+correction-v6+stages-v1+numbers-v2+guards-v1",
+  "input_hash": "8594d9c2b355494caad84385f7cbc1e9cd10ccc5edc1d7c07354ef994f150e4b",
+  "output": {
+    "stretches": [
+      {
+        "text": "大家好欢迎回来。",
+        "start": 0.0,
+        "end": 4.0,
+        "words": [
+          {
+            "text": "大家好欢迎回来",
+            "start": 0.0,
+            "end": 4.0,
+            "conf": 0.6
+          }
+        ],
+        "word_timed": true,
+        "flags": [],
+        "edits": []
+      },
+      {
+        "text": "今天聊聊ETF和GAAP利润。",
+        "start": 5.0,
+        "end": 9.0,
+        "words": [
+          {
+            "text": "今天聊聊ETF和GAP利润",
+            "start": 5.0,
+            "end": 9.0,
+            "conf": 0.65
+          }
+        ],
+        "word_timed": true,
+        "flags": [
+          {
+            "kind": "entity_corrected",
+            "char_start": 8,
+            "char_end": 12,
+            "note": "GAP → GAAP",
+            "readings": []
+          }
+        ],
+        "edits": [
+          {
+            "stage": "correction",
+            "before": "今天聊聊ETF和GAP利润。",
+            "after": "今天聊聊ETF和GAAP利润。",
+            "llm": "fake:fixture-model"
+          }
+        ]
+      },
+      {
+        "text": "上周涨了十五个百分点。",
+        "start": 10.0,
+        "end": 14.0,
+        "words": [
+          {
+            "text": "上周涨了十五个百分点",
+            "start": 10.0,
+            "end": 14.0,
+            "conf": 0.7
+          }
+        ],
+        "word_timed": true,
+        "flags": [],
+        "edits": []
+      },
+      {
+        "text": "收入三万五千美元。",
+        "start": 20.0,
+        "end": 24.0,
+        "words": [
+          {
+            "text": "收入三万五千美元",
+            "start": 20.0,
+            "end": 24.0,
+            "conf": 0.6
+          }
+        ],
+        "word_timed": true,
+        "flags": [],
+        "edits": []
+      },
+      {
+        "text": "Really strong quarter.",
+        "start": 25.0,
+        "end": 29.0,
+        "words": [
+          {
+            "text": "really strong quarter",
+            "start": 25.0,
+            "end": 29.0,
+            "conf": 0.65
+          }
+        ],
+        "word_timed": true,
+        "flags": [],
+        "edits": []
+      }
+    ],
+    "usage": [
+      {
+        "stage": "correction",
+        "client": "fake:fixture-model",
+        "calls": 1,
+        "input_tokens": 100,
+        "output_tokens": 20
+      }
+    ],
+    "notices": [],
+    "llm_punctuated": false
+  }
+}

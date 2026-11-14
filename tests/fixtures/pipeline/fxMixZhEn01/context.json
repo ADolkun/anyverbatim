@@ -1,0 +1,280 @@
+{
+  "schema_version": "1.1",
+  "generator": {
+    "name": "ytverbatim",
+    "version": "0.0.1"
+  },
+  "created_at": "2030-01-01T12:00:00Z",
+  "video": {
+    "id": "fxMixZhEn01",
+    "url": "https://www.youtube.com/watch?v=fxMixZhEn01",
+    "title": "合成标题 Synthetic title",
+    "channel": "Synthetic channel",
+    "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx",
+    "upload_date": "2029-12-31",
+    "duration_s": 40.0,
+    "description": "A made-up description for a test fixture.",
+    "language": "zh",
+    "tags": [
+      "GAAP",
+      "ETF",
+      "合成标签"
+    ],
+    "creator_note": {
+      "text": "更正：GAAP 利润以财报为准。",
+      "author": "@synthetic-channel",
+      "like_count": 7,
+      "published": "1 day ago"
+    }
+  },
+  "access": {
+    "auth_source": "none",
+    "cookies_used": false,
+    "logged_in": null,
+    "premium": null,
+    "member": null,
+    "availability": "public",
+    "ytdlp_version": "2099.01.01",
+    "warnings": []
+  },
+  "transcript": {
+    "language": "zh",
+    "script": "zh-Hans",
+    "runs": [
+      {
+        "id": "asr:w-prod",
+        "kind": "asr",
+        "engine": "w-prod",
+        "model_repo": "mlx-community/whisper-large-v3-mlx",
+        "model_revision": "49e6aa286ad60c14352c404340ded53710378a11",
+        "params": {
+          "language": "pass",
+          "language_hint": "zh",
+          "mode": "whole_file",
+          "sample_rate": 16000
+        },
+        "vad": null,
+        "chunking": null,
+        "aligner": null
+      }
+    ],
+    "punctuation": "llm",
+    "correction_llm": "fake:fixture-model"
+  },
+  "chapters": [
+    {
+      "index": 0,
+      "title": "开场",
+      "start": 0.0,
+      "end": 16.0,
+      "source": "youtube",
+      "first_segment": 0,
+      "last_segment": 2
+    },
+    {
+      "index": 1,
+      "title": "Numbers",
+      "start": 16.0,
+      "end": 40.0,
+      "source": "youtube",
+      "first_segment": 3,
+      "last_segment": 4
+    }
+  ],
+  "paragraphs": [
+    {
+      "index": 0,
+      "start": 0.0,
+      "end": 14.0,
+      "first_segment": 0,
+      "last_segment": 2
+    },
+    {
+      "index": 1,
+      "start": 20.0,
+      "end": 29.0,
+      "first_segment": 3,
+      "last_segment": 4
+    }
+  ],
+  "segments": [
+    {
+      "id": 0,
+      "start": 0.0,
+      "end": 4.0,
+      "text": "大家好欢迎回来。",
+      "words": [
+        {
+          "text": "大家好欢迎回来。",
+          "start": 0.0,
+          "end": 4.0,
+          "conf": 0.6
+        }
+      ],
+      "source": {
+        "kind": "asr",
+        "run": "asr:w-prod"
+      },
+      "edits": [],
+      "flags": [],
+      "paragraph": 0,
+      "chapter": 0
+    },
+    {
+      "id": 1,
+      "start": 5.0,
+      "end": 9.0,
+      "text": "今天聊聊ETF和GAAP利润。",
+      "words": null,
+      "source": {
+        "kind": "asr",
+        "run": "asr:w-prod"
+      },
+      "edits": [
+        {
+          "stage": "correction",
+          "before": "GAP",
+          "after": "GAAP",
+          "llm": "fake:fixture-model"
+        }
+      ],
+      "flags": [
+        {
+          "kind": "timing_interpolated",
+          "char_start": 0,
+          "char_end": 15,
+          "note": "some words here had no engine timing; their times are interpolated from the words around them",
+          "readings": []
+        },
+        {
+          "kind": "entity_corrected",
+          "char_start": 8,
+          "char_end": 12,
+          "note": "GAP → GAAP",
+          "readings": []
+        }
+      ],
+      "paragraph": 0,
+      "chapter": 0
+    },
+    {
+      "id": 2,
+      "start": 10.0,
+      "end": 14.0,
+      "text": "上周涨了15个百分点。",
+      "words": [
+        {
+          "text": "上周涨了15个百分点。",
+          "start": 10.0,
+          "end": 14.0,
+          "conf": 0.7
+        }
+      ],
+      "source": {
+        "kind": "asr",
+        "run": "asr:w-prod"
+      },
+      "edits": [],
+      "flags": [
+        {
+          "kind": "numeric_disputed",
+          "char_start": 4,
+          "char_end": 10,
+          "note": "LLM chose '五十个百分点', which was heard beside this span, not for it; re-verify",
+          "readings": [
+            {
+              "source": "asr:w-prod",
+              "text": "十五个百分点"
+            },
+            {
+              "source": "caption_auto",
+              "text": "五十个百分点"
+            }
+          ]
+        }
+      ],
+      "paragraph": 0,
+      "chapter": 0
+    },
+    {
+      "id": 3,
+      "start": 20.0,
+      "end": 24.0,
+      "text": "收入3.5万美元。",
+      "words": [
+        {
+          "text": "收入3.5万美元。",
+          "start": 20.0,
+          "end": 24.0,
+          "conf": 0.6
+        }
+      ],
+      "source": {
+        "kind": "asr",
+        "run": "asr:w-prod"
+      },
+      "edits": [],
+      "flags": [],
+      "paragraph": 1,
+      "chapter": 1
+    },
+    {
+      "id": 4,
+      "start": 25.0,
+      "end": 29.0,
+      "text": "Really strong quarter.",
+      "words": [
+        {
+          "text": "Really strong quarter.",
+          "start": 25.0,
+          "end": 29.0,
+          "conf": 0.65
+        }
+      ],
+      "source": {
+        "kind": "asr",
+        "run": "asr:w-prod"
+      },
+      "edits": [],
+      "flags": [],
+      "paragraph": 1,
+      "chapter": 1
+    }
+  ],
+  "quality": {
+    "speech_seconds": 20.0,
+    "transcribed_seconds": 20.0,
+    "decoder_anomalies": 0,
+    "flags_by_kind": {
+      "entity_corrected": 1,
+      "numeric_disputed": 1,
+      "timing_interpolated": 1
+    },
+    "warnings": [
+      "word timings did not cover the text in 1 stretch(es); the uncovered words are timed between their timed neighbours and their segments are flagged timing_interpolated"
+    ]
+  },
+  "llm_usage": [
+    {
+      "stage": "punctuation",
+      "client": "fake:fixture-model",
+      "calls": 2,
+      "input_tokens": 200,
+      "output_tokens": 40
+    },
+    {
+      "stage": "correction",
+      "client": "fake:fixture-model",
+      "calls": 1,
+      "input_tokens": 100,
+      "output_tokens": 20
+    },
+    {
+      "stage": "numeric",
+      "client": "fake:fixture-model",
+      "calls": 1,
+      "input_tokens": 100,
+      "output_tokens": 20
+    }
+  ]
+}

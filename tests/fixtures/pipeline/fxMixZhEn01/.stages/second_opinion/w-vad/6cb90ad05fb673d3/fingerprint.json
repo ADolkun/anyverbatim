@@ -1,0 +1,41 @@
+{
+  "engine": {
+    "spec": {
+      "id": "w-vad",
+      "family": "whisper",
+      "repo": "mlx-community/whisper-large-v3-mlx",
+      "revision": "49e6aa286ad60c14352c404340ded53710378a11",
+      "max_chunk_s": 30.0,
+      "native_timestamps": true,
+      "emits_punctuation": true,
+      "supports_context": false,
+      "sample_rate": 16000
+    },
+    "factory": "ytverbatim.asr.engines.whisper_mlx.create",
+    "variant": {
+      "mode": "chunk",
+      "language": "pass"
+    }
+  },
+  "files": [
+    {
+      "id": "fxMixZhEn01",
+      "wav": "/fixture/audio.wav",
+      "language": "zh",
+      "context": null,
+      "chunks": [
+        {
+          "start": 4.5,
+          "end": 14.5,
+          "forced_cut": false
+        },
+        {
+          "start": 19.5,
+          "end": 24.5,
+          "forced_cut": false
+        }
+      ]
+    }
+  ],
+  "quality_guard": true
+}

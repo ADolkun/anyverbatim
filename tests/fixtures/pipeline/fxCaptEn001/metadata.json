@@ -1,0 +1,29 @@
+{
+  "video_id": "fxCaptEn001",
+  "title": "Synthetic captions title",
+  "channel": "Synthetic channel",
+  "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx",
+  "upload_date": "20291231",
+  "duration": 40.0,
+  "description": "A made-up description for a test fixture.",
+  "language": "en",
+  "availability": "public",
+  "live_status": null,
+  "chapters": [
+    {
+      "title": "开场",
+      "start": 0.0,
+      "end": 16.0
+    },
+    {
+      "title": "Numbers",
+      "start": 16.0,
+      "end": 40.0
+    }
+  ],
+  "subtitle_langs": [
+    "en"
+  ],
+  "auto_caption_lang": "en-orig",
+  "creator_note": null
+}
