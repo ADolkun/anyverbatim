@@ -9,9 +9,15 @@ from evals.diarization import Turn
 from evals.recordings_data import CorpusIndex, RefUtterance, wav_bytes, write_index, write_recording
 from evals.run_diarization import (
     ExternalBackend,
+    ProductionBackend,
     Recording,
+    RecordingScore,
     Run,
+    _turns_for,
     attribute_by_turns,
+    compare,
+    der_rates,
+    input_digest,
     load_words,
     make_backend,
     recordings_of,
@@ -20,14 +26,14 @@ from evals.run_diarization import (
     summarize,
 )
 from ytverbatim.contract.models import Word
-from ytverbatim.errors import ConfigError
+from ytverbatim.errors import ConfigError, EngineError
 
 SECONDS = 40
 REFERENCE = [RefUtterance(0, 10, "A", "one"), RefUtterance(10, 20, "B", "two"), RefUtterance(20, 30, "A", "three")]
 
 
 class FakeBackend:
-    def __init__(self, turns: Sequence[Turn], smoothed_labels: list[str] | None = None) -> None:
+    def __init__(self, turns: Sequence[Turn], smoothed_labels: list[str | None] | None = None) -> None:
         self.turns = tuple(turns)
         self.calls = 0
         self.smoothed_labels = smoothed_labels
@@ -38,8 +44,8 @@ class FakeBackend:
             self.turns, diarize_s=recording.duration_s * 0.05, load_s=1.0, peak_footprint_bytes=2**30, handle=None
         )
 
-    def attribute(self, words: Sequence[Word], run: Run, *, smoothing: bool) -> list[str]:
-        labels = ["x" if w.start < 10 else "y" if w.start < 20 else "x" for w in words]
+    def attribute(self, words: Sequence[Word], run: Run, *, smoothing: bool) -> list[str | None]:
+        labels: list[str | None] = ["x" if w.start < 10 else "y" if w.start < 20 else "x" for w in words]
         if not smoothing and self.smoothed_labels is not None:
             return self.smoothed_labels
         return labels
@@ -62,6 +68,7 @@ def test_score_recording_scores_der_at_both_collars_count_rtf_and_footprint(tmp_
     assert strict.missed == pytest.approx(0.2)
     assert strict.false_alarm == pytest.approx(2)
     assert strict.rate == pytest.approx(2.2 / 30)
+    assert forgiving.rate is not None and strict.rate is not None
     assert forgiving.rate < strict.rate
     assert (score.reference_speakers, score.hypothesis_speakers, score.speaker_count_error) == (2, 3, 1)
     assert score.rtf == pytest.approx(0.05)
@@ -138,3 +145,134 @@ def test_external_backend_needs_a_command_and_pyannote_ids_route_to_it():
     with pytest.raises(ConfigError, match="needs a command"):
         make_backend("d-pyannote-c1", None)
     assert isinstance(make_backend("d-pyannote-c1", "uv run python x.py"), ExternalBackend)
+
+
+def test_a_nan_rate_is_stored_as_none_and_survives_the_round_trip(tmp_path: Path):
+    recording = make_corpus(tmp_path / "data")
+    # Every word sits in the overlap of two reference speakers, so no word is eligible and WDER is undefined.
+    both = [RefUtterance(0, 30, "A", "one"), RefUtterance(0, 30, "B", "two")]
+    write_recording(tmp_path / "data" / "ami", "m1", wav_bytes(np.zeros(16_000 * SECONDS, dtype="<i2")), both)
+    recording.words.write_text(json.dumps([{"text": "w", "start": 1.0, "end": 2.0}]), encoding="utf-8")
+    backend = FakeBackend([Turn(0, 30, "x")])
+    (first,) = run_corpora(backend, "d-fake", [recording], tmp_path / "runs")
+    assert first.wder_raw is not None and first.wder_raw.rate is None
+    (second,) = run_corpora(backend, "d-fake", [recording], tmp_path / "runs")
+    assert second == first
+    assert backend.calls == 1
+
+
+def test_a_cached_score_is_recomputed_when_the_words_appear_but_keeps_its_timing(tmp_path: Path):
+    recording = make_corpus(tmp_path / "data")
+    backend = FakeBackend([Turn(0, 10, "x"), Turn(10, 20, "y"), Turn(20, 30, "x")])
+    (before,) = run_corpora(backend, "d-fake", [recording], tmp_path / "runs")
+    assert before.wder_raw is None
+    words = [{"text": "w", "start": float(t), "end": t + 0.5} for t in (1, 11, 21)]
+    recording.words.write_text(json.dumps(words), encoding="utf-8")
+    (after,) = run_corpora(backend, "d-fake", [recording], tmp_path / "runs")
+    assert after.wder_raw is not None and after.wder_smoothed is not None
+    assert backend.calls == 2
+    assert (after.diarize_s, after.rtf, after.peak_footprint_bytes) == (
+        before.diarize_s,
+        before.rtf,
+        before.peak_footprint_bytes,
+    )
+    assert after.inputs != before.inputs == input_digest(make_corpus(tmp_path / "other"))
+
+
+def test_attributed_speaker_counts_and_unattributed_words_are_reported(tmp_path: Path):
+    recording = make_corpus(tmp_path)
+    words = [{"text": "w", "start": float(t), "end": t + 0.5} for t in (1, 3, 11, 13, 21)]
+    recording.words.write_text(json.dumps(words), encoding="utf-8")
+    labels = ["x", "x", "y", "y", None]
+    backend = FakeBackend([Turn(0, 30, "x")], smoothed_labels=labels)
+    score = score_recording(backend, recording, tmp_path / "out")
+    assert score.wder_raw is not None
+    assert score.wder_raw.errors == 1
+    assert (score.attributed_speakers_raw, score.attributed_speakers_smoothed) == (2, 2)
+
+
+def test_primary_macro_needs_both_corpora_and_smoothed_count_error_is_reported(tmp_path: Path):
+    ami = make_corpus(tmp_path / "data", "ami", "m1")
+    only = score_recording(FakeBackend([Turn(0, 30, "x")]), ami, tmp_path / "a")
+    summary = summarize([only])
+    assert summary["primary_macro_der_collar_0"] is None
+    corpora = summary["corpora"]
+    assert isinstance(corpora, dict)
+    assert corpora["ami"]["mean_abs_smoothed_speaker_count_error"] is None
+    ami.words.write_text(json.dumps([{"text": "w", "start": 1.0, "end": 2.0}]), encoding="utf-8")
+    scored = score_recording(FakeBackend([Turn(0, 30, "x")]), ami, tmp_path / "b")
+    again = summarize([scored])["corpora"]
+    assert isinstance(again, dict)
+    assert again["ami"]["mean_abs_smoothed_speaker_count_error"] == 1
+
+
+def test_compare_pairs_recordings_across_two_runs(tmp_path: Path):
+    scores: dict[str, list[RecordingScore]] = {"good": [], "bad": []}
+    for corpus in ("ami", "alimeeting"):
+        for name in ("m1", "m2"):
+            recording = make_corpus(tmp_path / "data", corpus, name)
+            scores["good"].append(
+                score_recording(
+                    FakeBackend([Turn(0, 10, "x"), Turn(10, 20, "y"), Turn(20, 30, "x")]),
+                    recording,
+                    tmp_path / "g" / name,
+                )
+            )
+            scores["bad"].append(score_recording(FakeBackend([Turn(0, 30, "x")]), recording, tmp_path / "b" / name))
+    assert set(der_rates(scores["good"])) == {"ami/m1", "ami/m2", "alimeeting/m1", "alimeeting/m2"}
+    result = compare(scores["bad"], scores["good"])
+    assert result.difference > 0
+    with pytest.raises(ConfigError, match="different primary recordings"):
+        compare(scores["bad"][:2], scores["good"])
+
+
+def test_external_rttm_with_the_wrong_uri_is_never_read_as_no_speech(tmp_path: Path):
+    path = tmp_path / "o.rttm"
+    path.write_text("SPEAKER audio 1 0.000 5.000 <NA> <NA> S0 <NA> <NA>\n", encoding="utf-8")
+    assert _turns_for(path, "R8001_M8004") == (Turn(0.0, 5.0, "S0"),)
+    path.write_text(
+        "SPEAKER one 1 0.000 5.000 <NA> <NA> S0 <NA> <NA>\nSPEAKER two 1 0.000 5.000 <NA> <NA> S0 <NA> <NA>\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(EngineError, match="none for R8001_M8004"):
+        _turns_for(path, "R8001_M8004")
+    assert _turns_for(path, "one") == (Turn(0.0, 5.0, "S0"),)
+    path.write_text("", encoding="utf-8")
+    assert _turns_for(path, "x") == ()
+
+
+def test_production_backend_reads_what_the_real_diarize_worker_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Contract check against ytverbatim.diarize with a fake model: no weights, no subprocess."""
+    from ytverbatim.diarize import registry as diarize_registry
+    from ytverbatim.diarize import worker
+    from ytverbatim.diarize.protocol import DiarizeRequest, RawDiarization
+    from ytverbatim.diarize.protocol import Turn as RawTurn
+    from ytverbatim.diarize.runner import DiarizeResult
+
+    class FakeModel:
+        def load(self) -> None:
+            return None
+
+        def diarize(self, audio: np.ndarray) -> RawDiarization:
+            frames = round(len(audio) / 16_000 / 0.01)
+            probs = np.zeros((frames, 8), dtype=np.float32)
+            probs[: frames // 2, 0] = 0.9
+            probs[frames // 2 :, 1] = 0.8
+            half = frames // 2 * 0.01
+            turns = (RawTurn(start=0.0, end=half, speaker=0), RawTurn(start=half, end=frames * 0.01, speaker=1))
+            return RawDiarization(turns=turns, probs=probs, frame_s=0.01)
+
+    def fake_worker(request: DiarizeRequest) -> DiarizeResult:
+        metrics = worker.run_request(request, diarizer=FakeModel())
+        return DiarizeResult(Path(request.out_dir), metrics, 0, 0.1)
+
+    monkeypatch.setattr(diarize_registry, "check_dependencies", lambda _: None)
+    recording = make_corpus(tmp_path / "data")
+    words = [{"text": "w", "start": float(t), "end": t + 0.5} for t in (1, 3, 11, 13, 21, 23)]
+    recording.words.write_text(json.dumps(words), encoding="utf-8")
+    backend = ProductionBackend("d-nemotron-8bit", worker=fake_worker)
+    score = score_recording(backend, recording, tmp_path / "out")
+    assert score.hypothesis_speakers == 2
+    assert score.wder_raw is not None and score.wder_smoothed is not None
+    assert score.wder_raw.eligible == 6
+    assert (score.attributed_speakers_raw, score.attributed_speakers_smoothed) == (2, 2)

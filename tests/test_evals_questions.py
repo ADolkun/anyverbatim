@@ -1,6 +1,10 @@
 import json
 
+from click.testing import CliRunner
+
 from evals.questions import (
+    MAX_ANCHOR_CHARS,
+    MAX_OPTION_CHARS,
     MAX_SENTENCES,
     NO_PREFERENCE,
     OTHER,
@@ -14,12 +18,16 @@ from evals.questions import (
     clock,
     limit_sentences,
     load_disputes,
+    option_text,
     pick_anchors,
     redact,
     sentence_count,
     split_sentences,
     spot_excerpt,
     write_questions,
+)
+from evals.questions import (
+    main as build_group,
 )
 
 
@@ -208,3 +216,44 @@ def test_questions_contain_no_name_from_the_names_list_and_round_trip(tmp_path):
 def test_a_group_with_one_item_is_still_a_policy_question():
     built = build_questions([text_dispute("t1", 5, group="fillers")])
     assert [q.kind for q in built.questions] == ["policy"]
+
+
+def test_sentence_ends_close_over_quotes_and_brackets():
+    assert split_sentences('He said "stop." Then (we left.) Done') == ['He said "stop."', "Then (we left.)", "Done"]
+    assert split_sentences("他说“好。”然后走了") == ["他说“好。”", "然后走了"]
+
+
+def test_option_text_is_redacted_then_limited_in_sentences_and_characters():
+    long = "Maria said so. It was fine. Then more words " + "x" * 300
+    shown = option_text(long, ["Maria"])
+    assert shown == "[name] said so. It was fine."
+    assert len(option_text("y" * 500)) <= MAX_OPTION_CHARS + 1
+
+
+def test_text_options_that_differ_only_beyond_the_limit_show_once():
+    built = build_questions(
+        [text_dispute("t1", 5, a="Same start. Same second. Third one.", b="Same start. Same second. Other.")]
+    )
+    assert built.questions[0].examples[0].options[:-2] == ("Same start. Same second.",)
+    assert built.key[0].options[0][0] == (("a", "b"))
+
+
+def test_redaction_happens_before_truncation_so_no_name_fragment_shows():
+    name = "Bartholomew"
+    text = "x" * (MAX_ANCHOR_CHARS - 4) + f" {name} spoke here"
+    shown = anchor_text(text, [name])
+    assert "Bartho" not in shown
+    assert "[name]" in shown or len(shown) <= MAX_ANCHOR_CHARS + 1
+
+
+def test_the_cli_needs_names_or_an_explicit_no_names(tmp_path):
+    disputes = tmp_path / "d.jsonl"
+    disputes.write_text(text_dispute("t1", 5).model_dump_json() + "\n", encoding="utf-8")
+    runner = CliRunner()
+    args = ["build", str(disputes), "--out", str(tmp_path / "out")]
+    assert runner.invoke(build_group, args).exit_code != 0
+    names = tmp_path / "names.txt"
+    names.write_text("Maria\n", encoding="utf-8")
+    assert runner.invoke(build_group, [*args, "--names-file", str(names), "--no-names"]).exit_code != 0
+    assert runner.invoke(build_group, [*args, "--no-names"]).exit_code == 0
+    assert runner.invoke(build_group, [*args, "--names-file", str(names)]).exit_code == 0

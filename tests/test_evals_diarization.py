@@ -10,6 +10,7 @@ from evals.diarization import (
     disagreement_runs,
     format_rttm,
     macro_rate,
+    paired_macro_bootstrap,
     parse_rttm,
     pooled_rate,
     read_rttm,
@@ -168,3 +169,38 @@ def test_disagreement_runs_map_labels_and_keep_runs_of_two_seconds():
 def test_disagreement_ignores_silence_against_speech():
     runs = disagreement_runs({"one": turns((0, 10, "A")), "two": turns((0, 4, "p"))})
     assert runs == []
+
+
+def test_two_speakers_with_identical_boundaries_are_both_scored():
+    reference = turns((0, 10, "A"), (0, 10, "B"))
+    assert der(reference, turns((0, 10, "x"), (0, 10, "y"))).rate == 0
+    score = der(reference, turns((0, 10, "x")))
+    assert (score.total, score.missed) == (20, 10)
+
+
+def test_rttm_labels_with_whitespace_are_refused():
+    with pytest.raises(ConfigError, match="whitespace"):
+        format_rttm("rec", turns((0, 1, "SPK 1")))
+    with pytest.raises(ConfigError, match="whitespace"):
+        format_rttm("my rec", turns((0, 1, "A")))
+
+
+def test_wder_counts_an_unattributed_word_as_wrong_and_keeps_it_out_of_the_mapping():
+    reference = turns((0, 10, "A"), (10, 20, "B"))
+    spoken = words((1, 2), (3, 4), (11, 12), (13, 14))
+    score = wder(reference, spoken, ["x", None, "y", "y"])
+    assert (score.errors, score.eligible) == (1, 4)
+
+
+def test_paired_macro_bootstrap_averages_recordings_and_is_deterministic():
+    a = [0.20, 0.25, 0.30, 0.22]
+    b = [0.15, 0.20, 0.24, 0.18]
+    result = paired_macro_bootstrap(a, b, seed=3)
+    assert result.difference == pytest.approx((0.05 + 0.05 + 0.06 + 0.04) / 4)
+    assert result.low <= result.difference <= result.high
+    assert result.excludes_zero
+    assert paired_macro_bootstrap(a, b, seed=3) == result
+    mixed = paired_macro_bootstrap([0.2, 0.1, 0.3], [0.1, 0.2, 0.3], seed=3)
+    assert not mixed.excludes_zero
+    with pytest.raises(ValueError, match="equally long"):
+        paired_macro_bootstrap([0.1], [0.1, 0.2], seed=0)

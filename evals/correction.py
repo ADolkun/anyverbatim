@@ -335,7 +335,9 @@ def build_base(
     done = rows_by_file(store, hypothesis)
     for video in videos(manifest, files):
         rows = done.get(video.id, [])
-        if not file_complete(definition, require_plan(store, video.id), rows):
+        if not file_complete(
+            definition, require_plan(store, video.id), rows, finished=store.file_finished(hypothesis, video.id)
+        ):
             raise ConfigError(
                 f"{hypothesis} has no complete output for {video.id}; "
                 f"run `python -m evals.run_asr asr --hyp {hypothesis}` first"
@@ -747,7 +749,9 @@ def _timing(store: Layout, video: Video, base: BaseFile) -> _Timing:
     if not lacking:
         return _Timing(video, plan, language, base, words)
     rows = rows_by_file(store, TIMING_DONOR).get(video.id, [])
-    if not rows or not file_complete(registry.get(TIMING_DONOR), plan, rows):
+    if not rows or not file_complete(
+        registry.get(TIMING_DONOR), plan, rows, finished=store.file_finished(TIMING_DONOR, video.id)
+    ):
         raise ConfigError(
             f"{base.hypothesis} has no word timings for {video.id}, so its edits are timed from {TIMING_DONOR}; "
             f"run `python -m evals.run_asr asr --hyp {TIMING_DONOR}` first"
