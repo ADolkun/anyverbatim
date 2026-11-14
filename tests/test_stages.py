@@ -11,7 +11,6 @@ from ytverbatim.asr.models import ChunkHypothesis
 from ytverbatim.contract import Access, ContextDocument, Edit, Flag, Word, dump_document, load_document
 from ytverbatim.render import render_markdown
 from ytverbatim.stages import (
-    DocumentSource,
     SourceInfo,
     Stretch,
     Transcribed,
@@ -22,7 +21,7 @@ from ytverbatim.stages import (
     numerals,
     with_results,
     word_confidence,
-    youtube_video,
+    youtube_source,
 )
 from ytverbatim.text.numbers import quantity_tokens
 from ytverbatim.text.numerals import apply, conversions, readings
@@ -86,7 +85,7 @@ def document(
 ) -> ContextDocument:
     meta = metadata(language)
     doc = build_document(
-        info=SourceInfo(meta.video_id, meta.chapters, lambda s: DocumentSource(youtube_video(meta, (), s), ACCESS)),
+        info=SourceInfo(meta.video_id, meta.chapters, lambda s: youtube_source(meta, (), ACCESS, s)),
         source=source,
         stretches=stretches,
         chapters=False,

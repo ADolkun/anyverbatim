@@ -7,16 +7,19 @@ from ytverbatim.contract import (
     Access,
     Chapter,
     ContextDocument,
+    DiarizationRun,
     Edit,
     Flag,
     Generator,
     Paragraph,
     Quality,
+    RecordingSource,
     Segment,
     SourceRef,
+    Speaker,
     Transcript,
     TranscriptRun,
-    Video,
+    YouTubeSource,
 )
 
 RUN = TranscriptRun(
@@ -30,6 +33,40 @@ RUN = TranscriptRun(
     chunking=None,
     aligner=None,
 )
+ACCESS = Access(
+    auth_source="none",
+    cookies_used=False,
+    logged_in=None,
+    premium=None,
+    member=None,
+    availability="public",
+    ytdlp_version="2026.10.26",
+    warnings=(),
+)
+DIARIZATION = DiarizationRun(engine="d-example", model_repo="example/diarizer", model_revision="0" * 40, params={})
+AUDIO_SHA256 = "0123456789abcdef" + "0" * 48
+YOUTUBE: dict[str, object] = {
+    "kind": "youtube",
+    "id": "AAAAAAAAAAA",
+    "url": "https://www.youtube.com/watch?v=AAAAAAAAAAA",
+    "title": "Example Title",
+    "channel": "Example Channel",
+    "channel_id": "UCexample",
+    "upload_date": date(2026, 1, 1),
+    "description": "",
+    "tags": (),
+    "access": ACCESS,
+}
+RECORDING: dict[str, object] = {
+    "kind": "recording",
+    "id": f"rec-{AUDIO_SHA256[:16]}",
+    "audio_sha256": AUDIO_SHA256,
+    "title": "Example Title",
+    "file_name": "Example.m4a",
+    "origin": "voice_memos",
+    "recorded_at": None,
+    "language": None,
+}
 
 
 def _seg(
@@ -41,6 +78,7 @@ def _seg(
     chapter: int | None = None,
     flags: Sequence[Flag] = (),
     edits: Sequence[Edit] = (),
+    speaker: str | None = None,
 ) -> Segment:
     return Segment(
         id=0,
@@ -52,6 +90,7 @@ def _seg(
         flags=tuple(flags),
         paragraph=paragraph,
         chapter=chapter,
+        speaker=speaker,
     )
 
 
@@ -99,46 +138,40 @@ def make_doc() -> Callable[..., ContextDocument]:
         run: TranscriptRun = RUN,
         punctuation: str = "engine",
         correction_llm: str | None = None,
-        upload_date: date | None = date(2026, 1, 1),
+        source: Mapping[str, object] | None = None,
+        languages: Sequence[str] | None = None,
+        speakers: Mapping[str, tuple[str | None, float]] | None = None,
     ) -> ContextDocument:
+        """`source` overrides source fields (`kind="recording"` for a recording); `speakers` maps id → (name, talk)."""
         numbered = [s.model_copy(update={"id": index}) for index, s in enumerate(segments)]
         paragraphs = _ranges(numbered, lambda s: s.paragraph)
         chapter_ranges = _ranges(numbered, lambda s: s.chapter) if chapters else {}
+        overrides = {"duration_s": duration_s, **(source or {})}
+        described = (
+            RecordingSource.model_validate({**RECORDING, **overrides})
+            if overrides.get("kind") == "recording"
+            else YouTubeSource.model_validate({**YOUTUBE, "language": language, **overrides})
+        )
         return ContextDocument.model_validate(
             {
-                "schema_version": "1.1",
+                "schema_version": "2.0",
                 "generator": Generator(name="ytverbatim", version="0.0.1"),
                 "created_at": "2026-01-02T03:04:05+00:00",
-                "video": Video(
-                    id="AAAAAAAAAAA",
-                    url="https://www.youtube.com/watch?v=AAAAAAAAAAA",
-                    title="Example Title",
-                    channel="Example Channel",
-                    channel_id="UCexample",
-                    upload_date=upload_date,
-                    duration_s=duration_s,
-                    description="",
-                    language=language,
-                    tags=(),
-                ),
-                "access": Access(
-                    auth_source="none",
-                    cookies_used=False,
-                    logged_in=None,
-                    premium=None,
-                    member=None,
-                    availability="public",
-                    ytdlp_version="2026.10.26",
-                    warnings=(),
-                ),
+                "source": described,
                 "transcript": Transcript.model_validate(
                     {
                         "language": language,
+                        "languages": tuple(languages) if languages is not None else (language,),
                         "script": "zh-Hans" if language.startswith("zh") else "n/a",
                         "runs": (run,),
                         "punctuation": punctuation,
                         "correction_llm": correction_llm,
+                        "diarization": DIARIZATION if speakers else None,
                     }
+                ),
+                "speakers": tuple(
+                    Speaker(id=speaker, name=name, speech_s=seconds)
+                    for speaker, (name, seconds) in (speakers or {}).items()
                 ),
                 "chapters": tuple(
                     Chapter(
@@ -159,6 +192,7 @@ def make_doc() -> Callable[..., ContextDocument]:
                         end=numbered[last].end,
                         first_segment=first,
                         last_segment=last,
+                        speaker=numbered[first].speaker,
                     )
                     for index, (first, last) in paragraphs.items()
                 ),

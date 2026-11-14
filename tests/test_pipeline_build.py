@@ -11,10 +11,10 @@ from ytverbatim.acquire.metadata import Chapter, VideoMetadata
 from ytverbatim.asr import registry
 from ytverbatim.asr.models import ChunkHypothesis
 from ytverbatim.asr.protocol import ChunkFlag
-from ytverbatim.contract import Access, ContextDocument, Word, dump_document, load_document
+from ytverbatim.contract import Access, ContextDocument, Word, YouTubeSource, dump_document, load_document
 from ytverbatim.errors import ContractError
 from ytverbatim.render import render_markdown
-from ytverbatim.stages import DocumentSource, SourceInfo, Stretch, build_document, from_asr_rows, youtube_video
+from ytverbatim.stages import SourceInfo, Stretch, build_document, from_asr_rows, youtube_source
 
 ACCESS = Access(
     auth_source="none",
@@ -90,8 +90,8 @@ def build(
     meta = meta or metadata()
     source = from_asr_rows(rows, registry.get(engine), meta.language)
 
-    def describe(stretches: Sequence[Stretch]) -> DocumentSource:
-        return DocumentSource(youtube_video(meta, ("synthetic",), stretches), ACCESS)
+    def describe(stretches: Sequence[Stretch]) -> YouTubeSource:
+        return youtube_source(meta, ("synthetic",), ACCESS, stretches)
 
     return build_document(
         info=SourceInfo(meta.video_id, meta.chapters, describe),
@@ -363,7 +363,8 @@ def test_language_comes_from_the_engine_else_the_declared_language_else_und() ->
 def test_video_and_quality_fields() -> None:
     pieces = [" Hello", " there."]
     doc = build([row(0, "".join(pieces), 0, 4, chunk_words=words(pieces, 1.0, 0.5))])
-    video = doc.video
+    video = doc.source
+    assert isinstance(video, YouTubeSource) and video.access == ACCESS
     assert (video.id, video.url, video.title, video.channel) == (
         "synthVid001",
         "https://www.youtube.com/watch?v=synthVid001",
@@ -381,7 +382,8 @@ def test_an_unparseable_upload_date_becomes_none() -> None:
     meta = metadata()
     bad = VideoMetadata(**{**meta.__dict__, "upload_date": "soon", "duration": None})
     doc = build([row(0, "Hi.", 0, 7, hypothesis="q-base")], engine="q-base", meta=bad)
-    assert doc.video.upload_date is None and doc.video.duration_s == 7.0
+    assert isinstance(doc.source, YouTubeSource)
+    assert doc.source.upload_date is None and doc.source.duration_s == 7.0
 
 
 def test_the_library_surface_is_exported_lazily() -> None:

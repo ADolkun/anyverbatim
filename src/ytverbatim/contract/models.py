@@ -3,9 +3,18 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Annotated, Literal, Self
 
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    field_validator,
+    model_validator,
+)
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "2.0"
 
 # An absolute /Users/<name>/ or /home/<name>/ path, but not a URL path such as example.com/home/user/.
 _HOME_PATH = re.compile(r"(?<![\w.~-])/(?:Users|home)/[^/\s]+(?:/|\s|$)")
@@ -78,6 +87,7 @@ class Flag(_Model):
         "decoder_anomaly",
         "timing_interpolated",
         "punctuation_failed",
+        "overlapping_speech",
     ]
     # Half-open offsets into Segment.text; the render marks this occurrence, never a global mask.
     char_start: int = Field(ge=0)
@@ -110,6 +120,8 @@ class Segment(_Model):
     paragraph: int = Field(ge=0)
     # None only when the document has no chapters.
     chapter: int | None = Field(default=None, ge=0)
+    # None only when the document lists no speakers.
+    speaker: str | None = None
 
     @model_validator(mode="after")
     def _consistent(self) -> Self:
@@ -133,6 +145,8 @@ class Paragraph(_Model):
     end: Seconds
     first_segment: int = Field(ge=0)
     last_segment: int = Field(ge=0)
+    # Every segment of a paragraph has this speaker; None only when the document lists no speakers.
+    speaker: str | None = None
 
     @model_validator(mode="after")
     def _ordered(self) -> Self:
@@ -168,12 +182,30 @@ class TranscriptRun(_Model):
     aligner: str | None
 
 
+class DiarizationRun(_Model):
+    engine: str
+    model_repo: str
+    model_revision: str
+    # Includes the attribution and smoothing rules, so two runs with different rules never look alike.
+    params: JsonObject
+
+
 class Transcript(_Model):
     language: str
+    # Every language at least one stretch was decoded in, by descending text share; metadata, never a rule switch.
+    languages: tuple[str, ...]
     script: Literal["zh-Hans", "zh-Hant", "n/a"]
     runs: tuple[TranscriptRun, ...]
     punctuation: Literal["engine", "llm", "caption", "none"]
     correction_llm: str | None
+    diarization: DiarizationRun | None
+
+    @field_validator("languages")
+    @classmethod
+    def _distinct(cls, languages: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(languages)) != len(languages):
+            raise ValueError(f"transcript.languages lists a language twice: {list(languages)}")
+        return languages
 
 
 class Access(_Model):
@@ -204,7 +236,8 @@ class CreatorNote(_Model):
     published: str
 
 
-class Video(_Model):
+class YouTubeSource(_Model):
+    kind: Literal["youtube"]
     id: str
     url: str
     title: str
@@ -217,6 +250,48 @@ class Video(_Model):
     tags: tuple[str, ...]
     # Only when `[ytdlp] creator_note` is on and the uploader pinned a comment of their own.
     creator_note: CreatorNote | None = None
+    access: Access
+
+
+_RECORDING_ID = re.compile(r"rec-[0-9a-f]{16}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+class RecordingSource(_Model):
+    kind: Literal["recording"]
+    # "rec-" plus the first 16 hex digits of `audio_sha256`, the hash of the transcribed stream's encoded packets.
+    id: str
+    audio_sha256: str
+    title: str
+    # A basename only: no absolute path is ever persisted.
+    file_name: str
+    origin: Literal["file", "voice_memos"]
+    recorded_at: AwareDatetime | None
+    duration_s: Seconds
+    # The language the caller forced, else None.
+    language: str | None
+
+    @model_validator(mode="after")
+    def _identity(self) -> Self:
+        if not _SHA256.fullmatch(self.audio_sha256):
+            raise ValueError("recording audio_sha256 must be 64 lowercase hex digits")
+        if not _RECORDING_ID.fullmatch(self.id) or self.id != f"rec-{self.audio_sha256[:16]}":
+            raise ValueError(f"recording id {self.id!r} must be 'rec-' plus the first 16 hex digits of audio_sha256")
+        if "/" in self.file_name or not self.file_name:
+            raise ValueError(f"recording file_name {self.file_name!r} must be a non-empty basename without '/'")
+        return self
+
+
+Source = Annotated[YouTubeSource | RecordingSource, Field(discriminator="kind")]
+
+
+class Speaker(_Model):
+    # "S1", "S2", ... in order of first appearance.
+    id: str
+    # Two ids may share a name; the render then treats them as one person.
+    name: str | None
+    # The summed duration of this speaker's segments.
+    speech_s: Seconds
 
 
 class Quality(_Model):
@@ -269,12 +344,13 @@ def _check_partition(label: str, ranges: Sequence[tuple[int, int, int]], segment
 
 
 class ContextDocument(_Model):
-    schema_version: Literal["1.1"]
+    schema_version: Literal["2.0"]
     generator: Generator
     created_at: AwareDatetime
-    video: Video
-    access: Access
+    source: Source
     transcript: Transcript
+    # Empty when the transcript was not diarized.
+    speakers: tuple[Speaker, ...]
     chapters: tuple[Chapter, ...]
     paragraphs: tuple[Paragraph, ...]
     segments: tuple[Segment, ...]
@@ -293,6 +369,7 @@ class ContextDocument(_Model):
                 "chapter", [(c.index, c.first_segment, c.last_segment) for c in self.chapters], len(self.segments)
             )
         self._check_membership()
+        self._check_speakers()
         return self
 
     def _check_segments(self) -> None:
@@ -339,3 +416,35 @@ class ContextDocument(_Model):
             )
             if chapter is None or not chapter.first_segment <= segment.id <= chapter.last_segment:
                 raise ValueError(f"segment {segment.id} names chapter {segment.chapter}, which does not contain it")
+
+    def _check_speakers(self) -> None:
+        listed = [speaker.id for speaker in self.speakers]
+        if listed and self.transcript.diarization is None:
+            raise ValueError("speakers are listed but transcript.diarization is None")
+        for segment in self.segments:
+            if segment.speaker is None:
+                if listed:
+                    raise ValueError(f"segment {segment.id} has no speaker but the document lists speakers")
+            elif segment.speaker not in listed:
+                raise ValueError(f"segment {segment.id} names unknown speaker {segment.speaker!r}")
+        for paragraph in self.paragraphs:
+            if (paragraph.speaker is None) != (not listed):
+                state = (
+                    "has no speaker but the document lists" if listed else "names a speaker but the document lists no"
+                )
+                raise ValueError(f"paragraph {paragraph.index} {state} speakers")
+            for segment in self.segments[paragraph.first_segment : paragraph.last_segment + 1]:
+                if segment.speaker != paragraph.speaker:
+                    raise ValueError(
+                        f"paragraph {paragraph.index} is {paragraph.speaker!r} but its segment {segment.id} is "
+                        f"{segment.speaker!r}; a paragraph never spans speakers"
+                    )
+        appearance = list(dict.fromkeys(s.speaker for s in self.segments if s.speaker is not None))
+        for speaker in listed:
+            if speaker not in appearance:
+                raise ValueError(f"speaker {speaker!r} is listed but has no segment")
+        expected = [f"S{number}" for number in range(1, len(listed) + 1)]
+        if listed != expected or appearance != expected:
+            raise ValueError(
+                f"speaker ids must run {expected} in order of first appearance; listed {listed}, appearing {appearance}"
+            )

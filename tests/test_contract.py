@@ -17,12 +17,17 @@ from ytverbatim.contract import (
     export_schema,
     load_document,
 )
-from ytverbatim.contract.models import Access
+from ytverbatim.contract.models import Access, RecordingSource, YouTubeSource
 from ytverbatim.errors import ContractError
 
 Raw = dict[str, Any]
 
-V1_0_FIXTURE = Path(__file__).parent / "fixtures" / "contract" / "context_v1_0.json"
+FIXTURES = Path(__file__).parent / "fixtures"
+V1_0_FIXTURE = FIXTURES / "contract" / "context_v1_0.json"
+# The pipeline fixture's document as 1.1 wrote it; the committed 2.0 one is the same document upgraded.
+V1_1_FIXTURE = FIXTURES / "contract" / "context_v1_1.json"
+V2_OF_V1_1 = FIXTURES / "pipeline" / "fxMixZhEn01" / "context.json"
+AUDIO_SHA256 = "0123456789abcdef" + "0" * 48
 NOTE = {"text": "Correction: the figure is 12%.", "author": "@example", "like_count": None, "published": "1 day ago"}
 
 RUN = {
@@ -38,7 +43,9 @@ RUN = {
 }
 
 
-def _segment(index: int, text: str, start: float, end: float, *, paragraph: int, chapter: int | None) -> Raw:
+def _segment(
+    index: int, text: str, start: float, end: float, *, paragraph: int, chapter: int | None, speaker: str | None = None
+) -> Raw:
     return {
         "id": index,
         "start": start,
@@ -50,6 +57,7 @@ def _segment(index: int, text: str, start: float, end: float, *, paragraph: int,
         "flags": [],
         "paragraph": paragraph,
         "chapter": chapter,
+        "speaker": speaker,
     }
 
 
@@ -77,10 +85,11 @@ def make_raw() -> Raw:
         }
     ]
     return {
-        "schema_version": "1.1",
+        "schema_version": "2.0",
         "generator": {"name": "ytverbatim", "version": "0.0.1"},
         "created_at": "2026-01-02T03:04:05+00:00",
-        "video": {
+        "source": {
+            "kind": "youtube",
             "id": "AAAAAAAAAAA",
             "url": "https://www.youtube.com/watch?v=AAAAAAAAAAA",
             "title": "Example Title",
@@ -91,24 +100,28 @@ def make_raw() -> Raw:
             "description": "An example video.",
             "language": "zh",
             "tags": ["example"],
-        },
-        "access": {
-            "auth_source": "none",
-            "cookies_used": False,
-            "logged_in": None,
-            "premium": None,
-            "member": None,
-            "availability": "public",
-            "ytdlp_version": "2026.10.26",
-            "warnings": ["no JS runtime found"],
+            "creator_note": None,
+            "access": {
+                "auth_source": "none",
+                "cookies_used": False,
+                "logged_in": None,
+                "premium": None,
+                "member": None,
+                "availability": "public",
+                "ytdlp_version": "2026.10.26",
+                "warnings": ["no JS runtime found"],
+            },
         },
         "transcript": {
-            "language": "zh+en",
+            "language": "zh",
+            "languages": ["zh", "en"],
             "script": "zh-Hans",
             "runs": [RUN],
             "punctuation": "engine",
             "correction_llm": None,
+            "diarization": None,
         },
+        "speakers": [],
         "chapters": [
             {
                 "index": 0,
@@ -147,10 +160,45 @@ def make_raw() -> Raw:
     }
 
 
+def make_recording() -> Raw:
+    """A two-speaker recording: S1 speaks segments 0 and 2, S2 segment 1, one paragraph each."""
+    raw = make_raw()
+    raw["source"] = {
+        "kind": "recording",
+        "id": f"rec-{AUDIO_SHA256[:16]}",
+        "audio_sha256": AUDIO_SHA256,
+        "title": "Weekly sync",
+        "file_name": "Weekly sync.m4a",
+        "origin": "voice_memos",
+        "recorded_at": "2026-11-03T14:05:00+08:00",
+        "duration_s": 8.2,
+        "language": None,
+    }
+    raw["chapters"] = []
+    raw["transcript"]["diarization"] = {
+        "engine": "d-example",
+        "model_repo": "example/diarizer",
+        "model_revision": "0" * 40,
+        "params": {"smoothing": {"min_words": 2, "min_s": 0.5}},
+    }
+    raw["speakers"] = [
+        {"id": "S1", "name": None, "speech_s": 4.7},
+        {"id": "S2", "name": "Bob", "speech_s": 3.5},
+    ]
+    raw["paragraphs"] = [
+        {"index": 0, "start": 0.0, "end": 2.5, "first_segment": 0, "last_segment": 0, "speaker": "S1"},
+        {"index": 1, "start": 2.5, "end": 6.0, "first_segment": 1, "last_segment": 1, "speaker": "S2"},
+        {"index": 2, "start": 6.0, "end": 8.2, "first_segment": 2, "last_segment": 2, "speaker": "S1"},
+    ]
+    for index, (segment, speaker) in enumerate(zip(raw["segments"], ("S1", "S2", "S1"), strict=True)):
+        segment.update(paragraph=index, chapter=None, speaker=speaker)
+    return raw
+
+
 def test_checked_in_schema_matches_export() -> None:
     checked_in = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     assert checked_in == export_schema(), (
-        "context.v1.schema.json is stale; regenerate it with: uv run python -c "
+        "context.v2.schema.json is stale; regenerate it with: uv run python -c "
         "'import json; from ytverbatim.contract import SCHEMA_PATH, export_schema; "
         'SCHEMA_PATH.write_text(json.dumps(export_schema(), indent=2, ensure_ascii=False) + "\\n", encoding="utf-8")\''
     )
@@ -164,6 +212,15 @@ def test_round_trip_is_stable() -> None:
     reloaded = load_document(text)
     assert reloaded == doc
     assert dump_document(reloaded) == text
+
+
+def test_a_recording_round_trips() -> None:
+    doc = ContextDocument.model_validate(make_recording())
+    assert isinstance(doc.source, RecordingSource) and doc.source.recorded_at is not None
+    assert [s.speaker for s in doc.segments] == ["S1", "S2", "S1"]
+    text = dump_document(doc)
+    assert load_document(text) == doc
+    assert dump_document(load_document(text)) == text
 
 
 def test_round_trip_through_a_file(tmp_path: Path) -> None:
@@ -237,7 +294,7 @@ def test_every_supported_auth_source_is_recordable() -> None:
 def test_documents_are_frozen() -> None:
     doc = ContextDocument.model_validate(make_raw())
     with pytest.raises(ValidationError):
-        doc.video.__setattr__("title", "other")
+        doc.source.__setattr__("title", "other")
 
 
 def _bad_id(raw: Raw) -> None:
@@ -339,19 +396,39 @@ def _duplicate_run(raw: Raw) -> None:
 
 
 def _macos_home_path(raw: Raw) -> None:
-    raw["access"]["warnings"] = ["cookie db at /Users/example/Library/Cookies"]
+    raw["source"]["access"]["warnings"] = ["cookie db at /Users/example/Library/Cookies"]
 
 
 def _linux_home_path(raw: Raw) -> None:
-    raw["access"]["warnings"] = ["failed reading /home/example/.config/chromium"]
+    raw["source"]["access"]["warnings"] = ["failed reading /home/example/.config/chromium"]
 
 
 def _bare_home_path(raw: Raw) -> None:
-    raw["access"]["warnings"] = ["cannot open /home/example"]
+    raw["source"]["access"]["warnings"] = ["cannot open /home/example"]
 
 
 def _unknown_field(raw: Raw) -> None:
-    raw["video"]["surprise"] = 1
+    raw["source"]["surprise"] = 1
+
+
+def _unknown_source_kind(raw: Raw) -> None:
+    raw["source"]["kind"] = "podcast"
+
+
+def _youtube_without_access(raw: Raw) -> None:
+    del raw["source"]["access"]
+
+
+def _access_at_the_root(raw: Raw) -> None:
+    raw["access"] = raw["source"].pop("access")
+
+
+def _language_listed_twice(raw: Raw) -> None:
+    raw["transcript"]["languages"] = ["zh", "zh"]
+
+
+def _speaker_without_a_list(raw: Raw) -> None:
+    raw["segments"][0]["speaker"] = "S1"
 
 
 def _naive_timestamp(raw: Raw) -> None:
@@ -363,7 +440,68 @@ def _negative_time(raw: Raw) -> None:
 
 
 def _non_finite_time(raw: Raw) -> None:
-    raw["video"]["duration_s"] = float("inf")
+    raw["source"]["duration_s"] = float("inf")
+
+
+def _unknown_speaker(raw: Raw) -> None:
+    raw["segments"][2]["speaker"] = raw["paragraphs"][2]["speaker"] = "S9"
+
+
+def _listed_speaker_without_segments(raw: Raw) -> None:
+    raw["speakers"].append({"id": "S3", "name": None, "speech_s": 0.0})
+
+
+def _paragraph_spans_speakers(raw: Raw) -> None:
+    raw["paragraphs"][1:] = [
+        {"index": 1, "start": 2.5, "end": 8.2, "first_segment": 1, "last_segment": 2, "speaker": "S2"}
+    ]
+    raw["segments"][2]["paragraph"] = 1
+
+
+def _slash_in_file_name(raw: Raw) -> None:
+    raw["source"]["file_name"] = "Recordings/Weekly sync.m4a"
+
+
+def _empty_file_name(raw: Raw) -> None:
+    raw["source"]["file_name"] = ""
+
+
+def _segment_without_speaker(raw: Raw) -> None:
+    raw["segments"][1]["speaker"] = None
+
+
+def _paragraph_without_speaker(raw: Raw) -> None:
+    raw["paragraphs"][1]["speaker"] = None
+
+
+def _speakers_out_of_appearance_order(raw: Raw) -> None:
+    raw["speakers"].reverse()
+
+
+def _speaker_ids_skip(raw: Raw) -> None:
+    raw["speakers"][1]["id"] = "S3"
+    raw["segments"][1]["speaker"] = raw["paragraphs"][1]["speaker"] = "S3"
+
+
+def _speakers_without_diarization(raw: Raw) -> None:
+    raw["transcript"]["diarization"] = None
+
+
+def _id_not_from_the_hash(raw: Raw) -> None:
+    raw["source"]["id"] = "rec-ffffffffffffffff"
+
+
+def _uppercase_hash(raw: Raw) -> None:
+    raw["source"]["audio_sha256"] = AUDIO_SHA256.upper()
+    raw["source"]["id"] = f"rec-{AUDIO_SHA256[:16].upper()}"
+
+
+def _naive_recorded_at(raw: Raw) -> None:
+    raw["source"]["recorded_at"] = "2026-11-03T14:05:00"
+
+
+def _recording_with_access(raw: Raw) -> None:
+    raw["source"]["access"] = make_raw()["source"]["access"]
 
 
 REJECTED: dict[str, tuple[Callable[[Raw], None], str]] = {
@@ -397,6 +535,28 @@ REJECTED: dict[str, tuple[Callable[[Raw], None], str]] = {
     "naive timestamp": (_naive_timestamp, "created_at"),
     "negative time": (_negative_time, "start"),
     "non-finite time": (_non_finite_time, "duration_s"),
+    "unknown source kind": (_unknown_source_kind, "podcast"),
+    "youtube without access": (_youtube_without_access, "access"),
+    "access at the root": (_access_at_the_root, "access"),
+    "language listed twice": (_language_listed_twice, "twice"),
+    "speaker without a list": (_speaker_without_a_list, "unknown speaker 'S1'"),
+}
+
+REJECTED_RECORDINGS: dict[str, tuple[Callable[[Raw], None], str]] = {
+    "unknown speaker": (_unknown_speaker, "unknown speaker 'S9'"),
+    "listed speaker without segments": (_listed_speaker_without_segments, "'S3' is listed but has no segment"),
+    "paragraph spans speakers": (_paragraph_spans_speakers, "never spans speakers"),
+    "slash in file name": (_slash_in_file_name, "basename"),
+    "empty file name": (_empty_file_name, "basename"),
+    "segment without speaker": (_segment_without_speaker, "segment 1 has no speaker"),
+    "paragraph without speaker": (_paragraph_without_speaker, "paragraph 1 has no speaker"),
+    "speakers out of appearance order": (_speakers_out_of_appearance_order, "order of first appearance"),
+    "speaker ids skip": (_speaker_ids_skip, "order of first appearance"),
+    "speakers without diarization": (_speakers_without_diarization, "diarization is None"),
+    "id not from the hash": (_id_not_from_the_hash, "first 16 hex digits"),
+    "uppercase hash": (_uppercase_hash, "lowercase hex"),
+    "naive recorded_at": (_naive_recorded_at, "recorded_at"),
+    "recording with access": (_recording_with_access, "access"),
 }
 
 
@@ -409,6 +569,34 @@ def test_validator_rejects(name: str) -> None:
         ContextDocument.model_validate(raw)
 
 
+@pytest.mark.parametrize("name", REJECTED_RECORDINGS)
+def test_recording_validator_rejects(name: str) -> None:
+    mutate, expected = REJECTED_RECORDINGS[name]
+    raw = make_recording()
+    mutate(raw)
+    with pytest.raises(ValidationError, match=expected):
+        ContextDocument.model_validate(raw)
+
+
+def test_two_ids_may_share_a_name() -> None:
+    raw = make_recording()
+    for speaker in raw["speakers"]:
+        speaker["name"] = "Alice"
+    assert {s.name for s in ContextDocument.model_validate(raw).speakers} == {"Alice"}
+
+
+def test_a_diarized_recording_with_no_speech_lists_no_speakers() -> None:
+    raw = make_recording()
+    raw.update(speakers=[], paragraphs=[], segments=[])
+    assert ContextDocument.model_validate(raw).transcript.diarization is not None
+
+
+def test_overlapping_speech_is_a_flag_kind() -> None:
+    raw = make_recording()
+    raw["segments"][1]["flags"] = [{"kind": "overlapping_speech", "char_start": 0, "char_end": 5, "note": "S1 too"}]
+    assert ContextDocument.model_validate(raw).segments[1].flags[0].kind == "overlapping_speech"
+
+
 def test_load_wraps_validation_errors() -> None:
     raw = make_raw()
     raw["segments"][1]["id"] = 7
@@ -418,11 +606,11 @@ def test_load_wraps_validation_errors() -> None:
 
 def test_url_paths_are_not_mistaken_for_home_paths() -> None:
     raw = make_raw()
-    raw["access"]["warnings"] = ["see https://example.com/home/user/ and ~/notes and /Users"]
-    assert ContextDocument.model_validate(raw).access.warnings
+    raw["source"]["access"]["warnings"] = ["see https://example.com/home/user/ and ~/notes and /Users"]
+    assert youtube(ContextDocument.model_validate(raw)).access.warnings
 
 
-@pytest.mark.parametrize("version", ["2.0", "0.9", "10.0"])
+@pytest.mark.parametrize("version", ["3.0", "0.9", "10.0", "1.2"])
 def test_unknown_major_is_refused(version: str) -> None:
     raw = make_raw()
     raw["schema_version"] = version
@@ -440,70 +628,107 @@ def test_malformed_version_is_refused(version: object) -> None:
 
 def test_minor_version_is_accepted_and_unknown_fields_dropped() -> None:
     raw = make_raw()
-    raw["schema_version"] = "1.7"
+    raw["schema_version"] = "2.7"
     raw["new_top_level"] = {"anything": True}
-    raw["video"]["new_field"] = 1
+    raw["source"]["new_field"] = 1
+    raw["source"]["access"]["new_access_field"] = 1
     raw["segments"][1]["flags"][0]["new_flag_field"] = "x"
     raw["segments"][1]["words"][0]["new_word_field"] = 1
     raw["transcript"]["runs"][0]["vad"] = {"kept": "free-form blobs are untouched"}
     doc = load_document(json.dumps(raw))
     assert doc.schema_version == SCHEMA_VERSION
     assert doc.transcript.runs[0].vad == {"kept": "free-form blobs are untouched"}
-    assert "new_field" not in dump_document(doc)
+    assert "new_" not in dump_document(doc)
+
+
+def test_a_newer_minor_version_prunes_each_source_kind_by_its_own_fields() -> None:
+    raw = make_recording()
+    raw["schema_version"] = "2.7"
+    raw["source"]["new_field"] = 1
+    raw["speakers"][0]["new_speaker_field"] = 1
+    raw["transcript"]["diarization"]["new_run_field"] = 1
+    doc = load_document(json.dumps(raw))
+    assert doc == ContextDocument.model_validate(make_recording())
 
 
 def test_a_newer_minor_version_drops_unknown_fields_inside_the_creator_note() -> None:
     raw = make_raw()
-    raw["schema_version"] = "1.7"
-    raw["video"]["creator_note"] = {**NOTE, "new_note_field": 1}
+    raw["schema_version"] = "2.7"
+    raw["source"]["creator_note"] = {**NOTE, "new_note_field": 1}
     doc = load_document(json.dumps(raw))
-    assert doc.video.creator_note == CreatorNote.model_validate(NOTE)
+    assert youtube(doc).creator_note == CreatorNote.model_validate(NOTE)
 
 
-def test_a_1_0_document_still_loads_and_is_reported_as_the_current_version() -> None:
+def test_a_1_0_document_is_upgraded() -> None:
     doc = load_document(V1_0_FIXTURE)
-    assert doc.schema_version == SCHEMA_VERSION == "1.1"
-    assert doc.video.creator_note is None
-    assert json.loads(dump_document(doc))["video"]["creator_note"] is None
+    assert doc.schema_version == SCHEMA_VERSION == "2.0"
+    source = youtube(doc)
+    assert source.creator_note is None and source.id == "AAAAAAAAAAA"
+    assert source.access.availability == "public"
+    assert doc.speakers == () and doc.transcript.diarization is None
+    assert doc.transcript.languages == (doc.transcript.language,)
+    assert all(s.speaker is None for s in doc.segments) and all(p.speaker is None for p in doc.paragraphs)
+    dumped = json.loads(dump_document(doc))
+    assert "video" not in dumped and "access" not in dumped
+    assert dumped["source"]["creator_note"] is None
     assert doc.segments[1].text == "Today we cover NVDA at 150 dollars."
 
 
-def test_a_1_0_document_is_still_validated_strictly() -> None:
-    raw = json.loads(V1_0_FIXTURE.read_text(encoding="utf-8"))
+def test_a_1_1_document_upgrades_to_exactly_what_2_0_writes() -> None:
+    upgraded = load_document(V1_1_FIXTURE)
+    assert youtube(upgraded).creator_note is not None
+    assert upgraded == load_document(V2_OF_V1_1)
+    assert dump_document(upgraded) == V2_OF_V1_1.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("fixture", [V1_0_FIXTURE, V1_1_FIXTURE], ids=["1.0", "1.1"])
+def test_a_1_x_document_is_still_validated_strictly(fixture: Path) -> None:
+    raw = json.loads(fixture.read_text(encoding="utf-8"))
     raw["video"]["new_field"] = 1
     with pytest.raises(ContractError, match="new_field"):
         load_document(json.dumps(raw))
-    raw = json.loads(V1_0_FIXTURE.read_text(encoding="utf-8"))
+    raw = json.loads(fixture.read_text(encoding="utf-8"))
+    raw["access"]["new_access_field"] = 1
+    with pytest.raises(ContractError, match="new_access_field"):
+        load_document(json.dumps(raw))
+    raw = json.loads(fixture.read_text(encoding="utf-8"))
     raw["segments"][1]["id"] = 7
     with pytest.raises(ContractError, match="dense"):
         load_document(json.dumps(raw))
 
 
+def test_a_1_x_document_cannot_carry_2_0_fields() -> None:
+    raw = json.loads(V1_1_FIXTURE.read_text(encoding="utf-8"))
+    raw["segments"][0]["speaker"] = "S1"
+    with pytest.raises(ContractError, match="unknown speaker"):
+        load_document(json.dumps(raw))
+
+
 def test_the_creator_note_round_trips() -> None:
     raw = make_raw()
-    raw["video"]["creator_note"] = NOTE
+    raw["source"]["creator_note"] = NOTE
     doc = ContextDocument.model_validate(raw)
-    assert doc.video.creator_note == CreatorNote.model_validate(NOTE)
+    assert youtube(doc).creator_note == CreatorNote.model_validate(NOTE)
     assert load_document(dump_document(doc)) == doc
 
 
 def test_a_creator_note_needs_all_its_fields() -> None:
     raw = make_raw()
-    raw["video"]["creator_note"] = {"text": "x", "author": "y"}
+    raw["source"]["creator_note"] = {"text": "x", "author": "y"}
     with pytest.raises(ValidationError, match="published"):
         ContextDocument.model_validate(raw)
 
 
 def test_same_version_still_rejects_unknown_fields() -> None:
     raw = make_raw()
-    raw["video"]["new_field"] = 1
+    raw["source"]["new_field"] = 1
     with pytest.raises(ContractError, match="new_field"):
         load_document(json.dumps(raw))
 
 
 def test_minor_version_still_validates_contract_rules() -> None:
     raw = make_raw()
-    raw["schema_version"] = "1.1"
+    raw["schema_version"] = "2.1"
     raw["segments"][1]["id"] = 7
     with pytest.raises(ContractError, match="dense"):
         load_document(json.dumps(raw))
@@ -513,3 +738,8 @@ def test_minor_version_still_validates_contract_rules() -> None:
 def test_non_document_input_is_refused(text: str) -> None:
     with pytest.raises(ContractError):
         load_document(text)
+
+
+def youtube(doc: ContextDocument) -> YouTubeSource:
+    assert isinstance(doc.source, YouTubeSource)
+    return doc.source

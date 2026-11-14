@@ -46,7 +46,7 @@ from ytverbatim.asr.models import METRICS_FILE, ChunkHypothesis, FileJob, Worker
 from ytverbatim.asr.protocol import EngineDef
 from ytverbatim.auth.cooldown import utcnow
 from ytverbatim.auth.source import CookieSource, resolve_source
-from ytverbatim.contract import Access, ContextDocument, LLMUsage, dump_document, load_document
+from ytverbatim.contract import Access, ContextDocument, LLMUsage, YouTubeSource, dump_document, load_document
 from ytverbatim.errors import (
     BatchStopError,
     BusyError,
@@ -65,7 +65,6 @@ from ytverbatim.llm.protocol import LLMClient
 from ytverbatim.mlx_worker import without_wav
 from ytverbatim.render import render_markdown
 from ytverbatim.stages import (
-    DocumentSource,
     SourceInfo,
     Stretch,
     Transcribed,
@@ -105,7 +104,7 @@ _PIPELINE_VERSIONS: dict[str, int] = {
     "correct": 1,
     "numeric": 1,
     "numerals": 1,
-    "context": 3,
+    "context": 4,
 }
 _GLOSSARY_MAX_TERMS = 20
 
@@ -450,13 +449,14 @@ def _run_video(session: FetchSession, planned: PlannedVideo, settings: _Settings
         with video_lock(vdir):
             document = _reusable(vdir, settings)
             if document is not None:
+                access = document.source.access if isinstance(document.source, YouTubeSource) else None
                 settings.emit(ProgressEvent(video_id, "skip", f"{CONTEXT_JSON} exists"))
                 if not (vdir / CONTEXT_MD).is_file():
                     atomic.write_text(vdir / CONTEXT_MD, render_markdown(document))
                 outcome = VideoOutcome(
                     video_id,
                     VideoStatus.OK,
-                    access=document.access,
+                    access=access,
                     chapters=len(document.chapters),
                     reused=("context",),
                 )
@@ -466,9 +466,7 @@ def _run_video(session: FetchSession, planned: PlannedVideo, settings: _Settings
                     # info is usually too old to reuse, so the earlier auth decision spares a refused anonymous try.
                     settings.emit(ProgressEvent(video_id, "fetch"))
                     began = time.monotonic()
-                    cookies_first = planned.cookies_first or (
-                        document.access is not None and document.access.cookies_used
-                    )
+                    cookies_first = planned.cookies_first or (access is not None and access.cookies_used)
                     fetched = session.fetch_video(video_id, cookies_first=cookies_first, audio=False, captions=False)
                     if fetched.status is not VideoStatus.OK:
                         return VideoResult(fetched)
@@ -708,8 +706,8 @@ class _YouTubeRun:
             # A note saved while the option was on must not reach the document or the correction prompt once it is off.
             metadata = replace(metadata, creator_note=None)
 
-        def describe(stretches: Sequence[Stretch]) -> DocumentSource:
-            return DocumentSource(stages.youtube_video(metadata, self.tags, stretches), self._latest()[1])
+        def describe(stretches: Sequence[Stretch]) -> YouTubeSource:
+            return stages.youtube_source(metadata, self.tags, self._latest()[1], stretches)
 
         prepared = _Prepared(
             info=SourceInfo(id=self.video_id, chapters=metadata.chapters, describe=describe),

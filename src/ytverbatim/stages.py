@@ -15,7 +15,7 @@ import difflib
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
-from typing import Annotated, Literal, NamedTuple
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
@@ -37,11 +37,12 @@ from ytverbatim.contract import (
     Paragraph,
     Quality,
     Segment,
+    Source,
     SourceRef,
     Transcript,
     TranscriptRun,
-    Video,
     Word,
+    YouTubeSource,
 )
 from ytverbatim.contract import CreatorNote as ContractCreatorNote
 from ytverbatim.contract import Generator as GeneratorInfo
@@ -93,13 +94,6 @@ class Transcribed(_Model):
     warnings: tuple[str, ...]
 
 
-class DocumentSource(NamedTuple):
-    """What a document says about the source of its transcript."""
-
-    video: Video
-    access: Access
-
-
 @dataclass(frozen=True)
 class SourceInfo:
     """A source as `build_document` reads it; the adapter that fetched or opened the source builds it.
@@ -110,7 +104,7 @@ class SourceInfo:
 
     id: str
     chapters: tuple[SourceChapter, ...]
-    describe: Callable[[Sequence[Stretch]], DocumentSource]
+    describe: Callable[[Sequence[Stretch]], Source]
 
 
 def run_id(definition: EngineDef) -> str:
@@ -536,20 +530,21 @@ def _build(
         )
         for index, (first, last) in enumerate(paragraph_ranges)
     )
-    described = info.describe(source.stretches)
     return ContextDocument(
         schema_version=SCHEMA_VERSION,
         generator=GeneratorInfo(name="ytverbatim", version=__version__),
         created_at=created_at,
-        video=described.video,
-        access=described.access,
+        source=info.describe(source.stretches),
         transcript=Transcript(
             language=language,
+            languages=(language,),
             script=script,
             runs=(run,),
             punctuation=_punctuation(text, language, run, llm_punctuated=llm_punctuated),
             correction_llm=correction_llm,
+            diarization=None,
         ),
+        speakers=(),
         chapters=chapter_list,
         paragraphs=paragraphs,
         segments=segments,
@@ -785,9 +780,12 @@ def _clock(seconds: float) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-def youtube_video(metadata: VideoMetadata, tags: Sequence[str], stretches: Sequence[Stretch]) -> Video:
+def youtube_source(
+    metadata: VideoMetadata, tags: Sequence[str], access: Access, stretches: Sequence[Stretch]
+) -> YouTubeSource:
     duration = metadata.duration if metadata.duration is not None else max((s.end for s in stretches), default=0.0)
-    return Video(
+    return YouTubeSource(
+        kind="youtube",
         id=metadata.video_id,
         url=ids.video_url(metadata.video_id),
         title=metadata.title,
@@ -799,6 +797,7 @@ def youtube_video(metadata: VideoMetadata, tags: Sequence[str], stretches: Seque
         language=metadata.language,
         tags=tuple(tags),
         creator_note=_creator_note(metadata.creator_note),
+        access=access,
     )
 
 
