@@ -10,16 +10,17 @@ from ytverbatim.auth.fixes import fix_for
 from ytverbatim.auth.preflight import AuthReport, preflight
 from ytverbatim.auth.source import resolve_source
 from ytverbatim.auth.state import AuthState
-from ytverbatim.cli.auth import EXIT_AUTH, IGNORE_COOLDOWN, fail_other
+from ytverbatim.cli.auth import IGNORE_COOLDOWN, fail_other
 from ytverbatim.config import LLMOptions, load_options
 from ytverbatim.errors import AuthError, YtverbatimError
 from ytverbatim.llm import chatgpt, chatgpt_auth
 from ytverbatim.ytdlp.runner import SubprocessRunner, redact
 
-EXIT_LLM = 1
+EXIT_ATTENTION = 1
 _CHATGPT_STATE: dict[chatgpt_auth.Status, str] = {
     "ready": "ok, plan permission, session ready",
     "refreshable": "ok, plan permission, refreshes automatically on the next call",
+    "refused": "needs re-sign-in: OpenAI refused to renew it, so it works only until its token expires",
     "expired": "needs re-sign-in",
     "no_plan": "signed in without ChatGPT plan permission",
     "signed_out": "not signed in",
@@ -62,13 +63,17 @@ def login_command(*, switch: bool, no_browser: bool) -> None:
         f"chatgpt: signed in{who}, but without ChatGPT plan permission; run `ytverbatim login` again and grant it",
         err=True,
     )
-    raise SystemExit(EXIT_LLM)
+    raise SystemExit(EXIT_ATTENTION)
 
 
 _LOGOUT_MESSAGES: dict[chatgpt_auth.Revocation, str] = {
     "confirmed": "signed out; OpenAI confirmed the revocation",
     "unconfirmed": "signed out; OpenAI did not confirm the revocation, so the sign-in may stay valid until it expires",
     "no_refresh_token": "signed out; there was no refresh token to revoke",
+    "unregistered": (
+        "signed out; the tokens were removed from this machine, but without a registration the refresh token could "
+        "not be revoked"
+    ),
     "not_signed_in": "not signed in; nothing to revoke",
 }
 
@@ -99,8 +104,8 @@ def status_command(*, as_json: bool, refresh: bool, ignore_cooldown: bool) -> No
     """Show the YouTube login, the ChatGPT sign-in and the LLM in use. Makes no LLM call.
 
     The YouTube check takes a cookie snapshot and makes one :ytfav request, cached for an hour. Nothing printed is a
-    cookie or a token. Exit codes: 0 all usable, 1 the configured chatgpt LLM needs a sign-in, 2 the YouTube login
-    needs a fix.
+    cookie or a token. Exit codes: 0 when everything configured is usable (no browser login, which limits YouTube to
+    public videos, counts as usable), 1 when a line says what needs attention.
     """
     try:
         options = load_options().llm
@@ -122,10 +127,14 @@ def status_command(*, as_json: bool, refresh: bool, ignore_cooldown: bool) -> No
                 _Row("LLM", llm_label(options)),
             ]
         )
-    if report is None or not report.ok:
-        raise SystemExit(EXIT_AUTH)
-    if options.provider == "chatgpt" and (session is None or not session.usable):
-        raise SystemExit(EXIT_LLM)
+    youtube_usable = report is not None and (report.ok or _anonymous(report))
+    chatgpt_usable = options.provider != "chatgpt" or (session is not None and session.usable)
+    if not (youtube_usable and chatgpt_usable):
+        raise SystemExit(EXIT_ATTENTION)
+
+
+def _anonymous(report: AuthReport) -> bool:
+    return report.state is AuthState.NO_SOURCE
 
 
 def llm_label(options: LLMOptions) -> str:
@@ -151,6 +160,8 @@ def _youtube_row(report: AuthReport | None, error: AuthError | None) -> _Row:
         assert error is not None
         state = f"{error.state.value}: {redact(error.detail)}" if error.detail else error.state.value
         return _Row("YouTube", "?", state, [f"Fix: {fix_for(error.state)}"])
+    if _anonymous(report):
+        return _Row("YouTube", "none", "public videos only (no browser login)")
     if report.ok:
         verdict = report.fix[:1].lower() + report.fix[1:]
         row = _Row("YouTube", report.source, f"ok, {verdict}{' (cached)' if report.cached else ''}")
