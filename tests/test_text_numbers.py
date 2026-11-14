@@ -583,11 +583,17 @@ def test_ji_and_shu_make_a_rough_figure(text: str, expected: list[tuple[str, str
     [
         ("指数十月份", "指数10月份"),
         ("指数10月份", "指数10月份"),
-        ("人数十号", "人数10号"),
-        ("次数十点钟", "次数10点钟"),
+        ("几十点", "几~10点"),
+        ("跌了几十点", "跌了几~10点"),
+        ("数十点", "数~10点"),
+        ("几十号", "几~10号"),
+        ("几十日", "几~10日"),
+        ("数十日", "数~10日"),
+        ("数10日", "数~10日"),
+        ("几十月", "几~10月"),
     ],
 )
-def test_a_date_or_time_after_shu_is_never_rough(text: str, value: str) -> None:
+def test_only_a_month_after_shu_is_never_rough(text: str, value: str) -> None:
     assert itn(text) == value
 
 
@@ -610,7 +616,25 @@ def test_a_lone_numeral_linked_to_a_figure_is_the_other_end_of_its_range(
     assert [(t.surface, t.value_itn) for t in quantity_tokens(text)] == expected
 
 
-@pytest.mark.parametrize("text", ["第三到五", "几到五个", "星期一到五", "三到几个", "三块五", "说到三"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "第三到五",
+        "几到五个",
+        "星期一到五",
+        "三到几个",
+        "三块五",
+        "说到三",
+        # A lone end shares the percent or magnitude of its partner, so read alone it would be a bare figure.
+        "百分之三到五",
+        "三到五万",
+        "一到三万",
+        "三万到五",
+        # 一到 before a date or a time is "as soon as".
+        "一到三月份就开始涨",
+        "一到十二点就睡",
+    ],
+)
 def test_a_lone_numeral_without_a_figure_to_anchor_it_is_no_quantity(text: str) -> None:
     assert all(len(t.surface) > 1 for t in quantity_tokens(text))
 
@@ -667,3 +691,44 @@ def test_tokens_from_one_run_tile_it_in_order() -> None:
     for token in quantity_tokens(text):
         assert text[token.char_start : token.char_end] == token.surface
     assert surfaces(text) == ["三万", "一个月", "三点", "四十"]
+
+
+def test_one_opens_a_range_before_a_date_after_cong() -> None:
+    assert [(t.surface, t.value_itn) for t in quantity_tokens("从一到三月份")] == [("一", "1"), ("三月", "3月")]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("两点零五分", [("两点", "2点"), ("零五", "05")]),
+        ("下午三点零五", [("三点", "3点"), ("零五", "05")]),
+        ("三点零五", [("三点零五", "3.05")]),
+    ],
+)
+def test_zero_minutes_are_a_clock_time_only_with_fen_or_a_time_of_day(
+    text: str, expected: list[tuple[str, str]]
+) -> None:
+    assert [(t.surface, t.value_itn) for t in quantity_tokens(text)] == expected
+
+
+def test_a_run_never_takes_the_bai_of_a_following_percent() -> None:
+    assert [(t.surface, t.value_itn) for t in quantity_tokens("百分之五百分之五")] == [
+        ("百分之五", "5%"),
+        ("百分之五", "5%"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "text", ["五十步笑百步", "三十而立", "十二生肖", "三十六计", "十一黄金周", "一号文件", "八月十五"]
+)
+def test_set_terms_with_numerals_are_not_quantities(text: str) -> None:
+    assert quantity_tokens(text) == []
+
+
+def test_the_fifteenth_of_august_is_still_a_date() -> None:
+    assert surfaces("八月十五日") == ["八月", "十五日"]
+
+
+def test_two_figures_in_wan_run_together_are_not_one_number() -> None:
+    (token,) = [t for t in quantity_tokens("四万三万五") if t.surface == "四万三万五"]
+    assert token.value_itn == "四万三万五"
