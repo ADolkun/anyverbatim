@@ -1,10 +1,12 @@
 """Language-policy and meeting ASR eval (E2/E3): ``uv run python -m evals.run_recordings_asr``.
 
 One hypothesis at a time: ``run --hyp H`` decodes AMI, AliMeeting, the ASCEND sessions and clips with it (the owner's
-recordings only with ``--corpus owner``), resuming per chunk and per finished worker folder. Each worker folder keeps a
-digest of its audio, so replaced audio under the same id is refused, not scored with the old rows. Then ``score --hyp H`` (error rate and
-translation incidents per corpus), ``compare --a H --b H`` (paired bootstrap per corpus and over the two meeting
-corpora; the recording-clustered ``decision`` interval is the one to decide on) and ``words --hyp H`` (the ``words.json`` that ``evals.run_diarization`` scores WDER with). Everything prints
+recordings only with ``--corpus owner``), resuming per chunk and per finished worker folder. Each worker folder keeps
+a digest of its audio, so replaced audio under the same id is refused, not scored with the old rows.
+
+Then ``score --hyp H`` (error rate and translation incidents per corpus), ``compare --a H --b H`` (paired bootstrap
+per corpus and over the two meeting corpora; the recording-clustered ``decision`` interval is the one to decide on)
+and ``words --hyp H`` (the ``words.json`` that ``evals.run_diarization`` scores WDER with). Everything prints
 aggregates only; the owner's disputes come from ``python -m evals.disputes``.
 
 No hypothesis gets a language hint. The two language-ID hypotheses choose within ``run_asr.ALLOWED_LANGUAGES``.
