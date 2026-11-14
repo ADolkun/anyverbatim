@@ -4,24 +4,16 @@ Everything that needs MLX happens here, never in the parent. Each file's output 
 and turns last, so a file with a turns file is done and a rerun skips it without loading the model.
 """
 
-import importlib
-import json
-import os
 import resource
 import sys
 import time
-import traceback
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol, cast
 
-from ytverbatim import atomic, sysmem
+from ytverbatim import atomic, mlx_worker
 from ytverbatim.asr.audio import Audio, load_wav
-from ytverbatim.asr.models import WorkerError
-from ytverbatim.asr.worker import MlxAllocator, bound_allocator
 from ytverbatim.diarize.protocol import (
     ERROR_FILE,
-    FINGERPRINT_FILE,
     METRICS_FILE,
     TURNS_SUFFIX,
     Diarizer,
@@ -36,14 +28,9 @@ from ytverbatim.diarize.protocol import (
 )
 from ytverbatim.diarize.registry import build_diarizer
 from ytverbatim.errors import EngineError
+from ytverbatim.mlx_worker import MlxAllocator, bound_allocator
 
-EXIT_FAILED = 1
-EXIT_BAD_REQUEST = 2
 _PROB_DIMS = 2
-
-
-class _MlxCore(Protocol):
-    def get_peak_memory(self) -> int: ...
 
 
 def run_request(
@@ -99,9 +86,9 @@ def run_request(
         load_s=session.load_s,
         diarize_s=session.diarize_s,
         audio_s=audio_s,
-        peak_memory_bytes=_peak_memory_bytes(),
+        peak_memory_bytes=mlx_worker.peak_memory_bytes(),
         max_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-        peak_footprint_bytes=_peak_footprint_bytes(),
+        peak_footprint_bytes=mlx_worker.peak_footprint_bytes(),
     )
     atomic.write_json(out / METRICS_FILE, metrics.model_dump(mode="json"))
     return metrics
@@ -148,71 +135,18 @@ class _Session:
 
 
 def _claim_output(out: Path, request: DiarizeRequest) -> None:
-    """Record which request this output directory belongs to, or refuse to resume one that belongs to another."""
-    path = out / FINGERPRINT_FILE
-    current = request.fingerprint()
-    if not path.exists():
-        if any(out.glob(f"*{TURNS_SUFFIX}")):
-            raise EngineError(
-                f"{out} holds diarization output but no {FINGERPRINT_FILE}, so what produced it is unknown; use a "
-                "fresh output directory"
-            )
-        atomic.write_json(path, current)
-        return
-    try:
-        stored: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise EngineError(f"{path} is unreadable: {exc}") from exc
-    if stored != current:
-        known = stored if isinstance(stored, dict) else {}
-        changed = sorted(key for key in current.keys() | known.keys() if current.get(key) != known.get(key))
-        raise EngineError(
-            f"{out} holds output of a different request ({', '.join(changed) or 'format'} changed); resuming would "
-            "mix the two, so use a fresh output directory"
-        )
-
-
-def _mlx_allocator() -> MlxAllocator | None:
-    # Without MLX installed no diarizer can allocate through it, and the adapter's own load reports the missing extra.
-    try:
-        return cast(MlxAllocator, importlib.import_module("mlx.core"))
-    except ImportError:
-        return None
-
-
-def _peak_footprint_bytes() -> int | None:
-    sample = sysmem.footprint(os.getpid())
-    return None if sample is None else sample.peak
-
-
-def _peak_memory_bytes() -> int | None:
-    core = sys.modules.get("mlx.core")
-    return None if core is None else cast(_MlxCore, core).get_peak_memory()
+    existing = "diarization output" if any(out.glob(f"*{TURNS_SUFFIX}")) else None
+    mlx_worker.claim_output(out, request.fingerprint(), existing=existing)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 1:
-        print("usage: python -P -m ytverbatim.diarize.worker REQUEST.json", file=sys.stderr)
-        return EXIT_BAD_REQUEST
-    try:
-        request = DiarizeRequest.model_validate_json(Path(args[0]).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        print(f"invalid diarization request: {exc}", file=sys.stderr)
-        return EXIT_BAD_REQUEST
-    if request.hf_hub_cache is not None:
-        # huggingface_hub reads this when it is first imported, which only happens inside an adapter.
-        os.environ["HF_HUB_CACHE"] = request.hf_hub_cache
-    try:
-        run_request(request, mlx=_mlx_allocator())
-    except Exception as exc:
-        error = WorkerError(type=type(exc).__name__, message=str(exc), traceback=traceback.format_exc())
-        out = Path(request.out_dir)
-        out.mkdir(parents=True, exist_ok=True)
-        atomic.write_json(out / ERROR_FILE, error.model_dump(mode="json"))
-        print(f"{error.type}: {error.message}", file=sys.stderr)
-        return EXIT_FAILED
-    return 0
+    return mlx_worker.run_child(
+        argv,
+        module="ytverbatim.diarize.worker",
+        noun="diarization",
+        parse=DiarizeRequest.model_validate_json,
+        run_request=lambda request: run_request(request, mlx=mlx_worker.mlx_allocator()),
+    )
 
 
 if __name__ == "__main__":

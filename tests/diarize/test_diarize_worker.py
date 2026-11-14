@@ -10,8 +10,7 @@ from pathlib import Path
 import pytest
 from fake_diarizer import CHANNELS, FRAME_S, definition, write_silence
 
-from ytverbatim import paths, proc
-from ytverbatim.asr import runner as asr_runner
+from ytverbatim import mlx_worker, paths, proc
 from ytverbatim.contract.models import Word
 from ytverbatim.diarize import protocol, registry, runner, worker
 from ytverbatim.diarize.attribution import assign
@@ -200,7 +199,7 @@ def test_the_worker_runs_in_its_output_folder_under_the_asr_lock_and_a_memory_wa
 
     def fake_run(argv: list[str], *, memory_watch: proc.MemoryWatch, cwd: Path, **_: object) -> proc.ProcResult:
         seen.update(argv=argv, cap=memory_watch.cap_bytes, cwd=cwd)
-        fd = os.open(paths.locks_dir() / asr_runner.LOCK_NAME, os.O_RDWR)
+        fd = os.open(paths.locks_dir() / mlx_worker.LOCK_NAME, os.O_RDWR)
         try:
             with pytest.raises(BlockingIOError):
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -208,8 +207,8 @@ def test_the_worker_runs_in_its_output_folder_under_the_asr_lock_and_a_memory_wa
             os.close(fd)
         return proc.ProcResult(1, "", "boom", 0.1)
 
-    monkeypatch.setattr(runner.proc, "run", fake_run)
-    monkeypatch.setattr("ytverbatim.asr.runner.sysmem.physical_memory_bytes", lambda: 24 * GIB)
+    monkeypatch.setattr(proc, "run", fake_run)
+    monkeypatch.setattr("ytverbatim.mlx_worker.sysmem.physical_memory_bytes", lambda: 24 * GIB)
     monkeypatch.chdir(tmp_path)
     request = make_request(tmp_path, 2.0).model_copy(update={"out_dir": "out"})
     with pytest.raises(EngineError, match="exited with 1"):
@@ -226,10 +225,10 @@ def test_a_diarizer_waits_for_an_asr_worker_and_says_so(caplog: pytest.LogCaptur
     entered = threading.Event()
 
     def take() -> None:
-        with runner.mlx_lock():
+        with mlx_worker.mlx_lock():
             entered.set()
 
-    with caplog.at_level(logging.INFO), asr_runner.worker_lock():
+    with caplog.at_level(logging.INFO), mlx_worker.mlx_lock():
         thread = threading.Thread(target=take)
         thread.start()
         assert not entered.wait(0.3)
@@ -263,7 +262,7 @@ def test_a_memory_kill_becomes_an_engine_memory_error(
             floor_percent=10,
         )
 
-    monkeypatch.setattr(runner.proc, "run", fake_run)
+    monkeypatch.setattr(proc, "run", fake_run)
     with pytest.raises(EngineMemoryError) as caught:
         runner.run_worker(make_request(tmp_path, 2.0))
     assert caught.value.trigger == trigger

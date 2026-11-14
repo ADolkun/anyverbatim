@@ -389,7 +389,7 @@ class ExternalBackend:
         self._command = list(command)
 
     def diarize(self, recording: Recording, out_dir: Path) -> Run:
-        from ytverbatim.asr.runner import default_memory_cap_bytes, worker_lock
+        from ytverbatim.mlx_worker import default_memory_cap_bytes, mlx_lock
 
         out_dir.mkdir(parents=True, exist_ok=True)
         rttm = out_dir / "output.rttm"
@@ -398,7 +398,7 @@ class ExternalBackend:
         deadline = started + EXTERNAL_TIMEOUT_FACTOR * recording.duration_s + EXTERNAL_TIMEOUT_FLOOR_S
         env = {**os.environ, **PYANNOTE_ENV}
         with (
-            worker_lock(),
+            mlx_lock(),
             proc.background(
                 argv, log=out_dir / "worker.log", memory_watch=proc.MemoryWatch(default_memory_cap_bytes()), env=env
             ) as child,

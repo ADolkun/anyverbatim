@@ -39,7 +39,7 @@ from ytverbatim.acquire.session import (
 from ytverbatim.acquire.video import ready_video
 from ytverbatim.asr import registry
 from ytverbatim.asr import runner as asr_runner
-from ytverbatim.asr.models import METRICS_FILE, ChunkHypothesis, FileJob, WorkerRequest, without_wav
+from ytverbatim.asr.models import METRICS_FILE, ChunkHypothesis, FileJob, WorkerRequest
 from ytverbatim.asr.protocol import EngineDef
 from ytverbatim.auth.cooldown import utcnow
 from ytverbatim.auth.source import CookieSource, resolve_source
@@ -59,6 +59,7 @@ from ytverbatim.errors import (
 )
 from ytverbatim.llm import check_ready, client_from_options
 from ytverbatim.llm.protocol import LLMClient
+from ytverbatim.mlx_worker import without_wav
 from ytverbatim.render import render_markdown
 from ytverbatim.stages import Stretch, Transcribed, build_document, stretch_flag, with_results
 from ytverbatim.store import StageStore, input_hash

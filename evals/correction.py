@@ -46,7 +46,6 @@ from ytverbatim import config, pipeline, proc, stages
 from ytverbatim.acquire.metadata import VideoMetadata, trim_info
 from ytverbatim.asr import registry
 from ytverbatim.asr.models import ChunkHypothesis
-from ytverbatim.asr.runner import default_memory_cap_bytes, memory_fix, worker_lock
 from ytverbatim.contract.models import Edit, Flag, LLMUsage, Word
 from ytverbatim.errors import (
     ConfigError,
@@ -58,6 +57,7 @@ from ytverbatim.errors import (
 )
 from ytverbatim.llm import OpenAICompatClient, openai_compat
 from ytverbatim.llm.protocol import LLMClient, LLMRequest, LLMResponse, Readiness, Usage
+from ytverbatim.mlx_worker import default_memory_cap_bytes, memory_fix, mlx_lock
 from ytverbatim.stages import Stretch
 from ytverbatim.store import digest
 from ytverbatim.text import clean, guards, numbers
@@ -575,7 +575,7 @@ class ServerSeams:
     free: Callable[[Path], int] = disk.free_bytes
     download: Callable[[str, str, Path], Path] = _snapshot_download
     runtime: Callable[[], None] = _require_mlx_lm
-    lock: Callable[[], AbstractContextManager[int]] = worker_lock
+    lock: Callable[[], AbstractContextManager[int]] = mlx_lock
     background: Callable[..., AbstractContextManager[proc.Background]] = proc.background
     ready: Callable[[str], Readiness] = openai_compat.readiness
     port: Callable[[], int] = _free_port

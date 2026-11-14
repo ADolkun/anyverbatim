@@ -7,12 +7,12 @@ from ytverbatim.asr import registry
 from ytverbatim.asr.chunks import Chunk
 from ytverbatim.asr.protocol import AsrContext, ChunkFlag, EngineDef
 from ytverbatim.contract.models import Word
+from ytverbatim.mlx_worker import ERROR_FILE as ERROR_FILE
+from ytverbatim.mlx_worker import FINGERPRINT_FILE as FINGERPRINT_FILE
+from ytverbatim.mlx_worker import METRICS_FILE as METRICS_FILE
+from ytverbatim.mlx_worker import REQUEST_FILE as REQUEST_FILE
 
 HYPOTHESES_FILE = "hypotheses.jsonl"
-METRICS_FILE = "metrics.json"
-ERROR_FILE = "error.json"
-REQUEST_FILE = "request.json"
-FINGERPRINT_FILE = "fingerprint.json"
 
 Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
 
@@ -131,24 +131,3 @@ class WorkerRequest(_Model):
         request decodes nothing again until a version field is added here (which moves every folder once).
         """
         return self.model_dump(mode="json", exclude={"out_dir", "hf_hub_cache", "memory_cap_bytes"})
-
-
-def without_wav(fingerprint: JsonValue) -> JsonValue:
-    """Drop the WAV paths from a fingerprint: where the audio lies says nothing about what decoding it gives."""
-    if not isinstance(fingerprint, dict):
-        return fingerprint
-    files = fingerprint.get("files")
-    if not isinstance(files, list):
-        return fingerprint
-    kept: list[JsonValue] = [
-        {k: v for k, v in job.items() if k != "wav"} if isinstance(job, dict) else job for job in files
-    ]
-    return {**fingerprint, "files": kept}
-
-
-class WorkerError(_Model):
-    """The structured failure the worker leaves in `error.json` for the parent to read."""
-
-    type: str
-    message: str
-    traceback: str

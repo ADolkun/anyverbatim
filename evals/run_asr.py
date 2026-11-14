@@ -59,10 +59,11 @@ from ytverbatim.asr.chunks import DEFAULT_MAX_CHUNK_S, Region, alignment_windows
 from ytverbatim.asr.context import context_from_metadata
 from ytverbatim.asr.models import ChunkHypothesis, FileJob, WorkerRequest
 from ytverbatim.asr.protocol import EngineDef
-from ytverbatim.asr.runner import WorkerResult, memory_cap_bytes, run_worker, worker_lock
+from ytverbatim.asr.runner import WorkerResult, memory_cap_bytes, run_worker
 from ytverbatim.contract.models import Word
 from ytverbatim.errors import ConfigError, YtverbatimError
 from ytverbatim.llm import ClaudeCLIClient
+from ytverbatim.mlx_worker import mlx_lock
 
 # E2/E3: the per-chunk language-ID hypotheses choose within this set and must not be handed the uploader language,
 # which would override detection.
@@ -290,7 +291,7 @@ def vad(files: str | None, hf_cache: Path | None) -> None:
     """Speech regions plus the shared ≤30 s chunk plan and alignment windows per file."""
     store, manifest = layout(), load_manifest()
     os.environ["HF_HUB_CACHE"] = str(hf_cache or default_hf_cache())
-    with worker_lock():
+    with mlx_lock():
         for video in videos(manifest, _files(files)):
             if load_plan(store, video.id) is not None:
                 click.echo(f"{video.id}: plan exists")

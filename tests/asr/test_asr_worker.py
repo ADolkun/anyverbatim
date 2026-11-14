@@ -7,6 +7,7 @@ import pytest
 from fake_engine import RATE, definition, write_silence
 from pydantic import JsonValue, ValidationError
 
+from ytverbatim import mlx_worker
 from ytverbatim.asr import worker
 from ytverbatim.asr.chunks import Chunk, Region
 from ytverbatim.asr.models import (
@@ -88,8 +89,8 @@ def test_the_allocator_is_bounded_before_load_and_emptied_after_every_chunk(tmp_
     req = request(tmp_path, job, engine=definition(calls_log=str(log))).model_copy(update={"memory_cap_bytes": 8 << 30})
     worker.run_request(req, mlx=FakeMlx(log))
     assert log.read_text(encoding="utf-8").splitlines() == [
-        f"cache_limit {worker.CACHE_LIMIT_BYTES}",
-        f"memory_limit {int((8 << 30) * worker.MLX_LIMIT_FRACTION)}",
+        f"cache_limit {mlx_worker.CACHE_LIMIT_BYTES}",
+        f"memory_limit {int((8 << 30) * mlx_worker.MLX_LIMIT_FRACTION)}",
         "load",
         f"transcribe {2 * RATE}",
         "clear_cache",
@@ -101,7 +102,7 @@ def test_the_allocator_is_bounded_before_load_and_emptied_after_every_chunk(tmp_
 def test_without_a_cap_only_the_cache_is_bounded(tmp_path: Path, wav: Path) -> None:
     mlx = FakeMlx()
     worker.run_request(request(tmp_path, FileJob(id="f1", wav=str(wav), chunks=(Chunk(0.0, 2.0),))), mlx=mlx)
-    assert mlx.calls == [f"cache_limit {worker.CACHE_LIMIT_BYTES}", "clear_cache"]
+    assert mlx.calls == [f"cache_limit {mlx_worker.CACHE_LIMIT_BYTES}", "clear_cache"]
 
 
 def test_main_bounds_the_mlx_allocator(tmp_path: Path, wav: Path, fake_mlx: FakeMlx) -> None:
@@ -112,8 +113,8 @@ def test_main_bounds_the_mlx_allocator(tmp_path: Path, wav: Path, fake_mlx: Fake
     req_path.write_text(req.model_dump_json(), encoding="utf-8")
     assert worker.main([str(req_path)]) == 0
     assert fake_mlx.calls == [
-        f"cache_limit {worker.CACHE_LIMIT_BYTES}",
-        f"memory_limit {int((1 << 30) * worker.MLX_LIMIT_FRACTION)}",
+        f"cache_limit {mlx_worker.CACHE_LIMIT_BYTES}",
+        f"memory_limit {int((1 << 30) * mlx_worker.MLX_LIMIT_FRACTION)}",
         "clear_cache",
     ]
     metrics = RunMetrics.model_validate_json((tmp_path / "out" / METRICS_FILE).read_text(encoding="utf-8"))
@@ -348,7 +349,7 @@ def test_main_writes_a_structured_error_and_exits_nonzero(
     req = request(tmp_path, job, engine=definition(fail_on_call=1))
     req_path = tmp_path / "req.json"
     req_path.write_text(req.model_dump_json(), encoding="utf-8")
-    assert worker.main([str(req_path)]) == worker.EXIT_FAILED
+    assert worker.main([str(req_path)]) == mlx_worker.EXIT_FAILED
     error = json.loads((tmp_path / "out" / ERROR_FILE).read_text(encoding="utf-8"))
     assert error["type"] == "EngineError"
     assert "fake decoder exploded" in error["message"]
@@ -368,10 +369,10 @@ def test_main_clears_a_stale_error_on_success(tmp_path: Path, wav: Path) -> None
 
 
 def test_main_rejects_bad_invocations(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert worker.main([]) == worker.EXIT_BAD_REQUEST
+    assert worker.main([]) == mlx_worker.EXIT_BAD_REQUEST
     bad = tmp_path / "bad.json"
     bad.write_text("{}", encoding="utf-8")
-    assert worker.main([str(bad)]) == worker.EXIT_BAD_REQUEST
+    assert worker.main([str(bad)]) == mlx_worker.EXIT_BAD_REQUEST
     assert "invalid worker request" in capsys.readouterr().err
 
 

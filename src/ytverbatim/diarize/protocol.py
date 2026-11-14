@@ -13,15 +13,15 @@ from typing import TYPE_CHECKING, Annotated, Protocol, Self
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from ytverbatim.errors import EngineError
+from ytverbatim.mlx_worker import ERROR_FILE as ERROR_FILE
+from ytverbatim.mlx_worker import FINGERPRINT_FILE as FINGERPRINT_FILE
+from ytverbatim.mlx_worker import METRICS_FILE as METRICS_FILE
+from ytverbatim.mlx_worker import REQUEST_FILE as REQUEST_FILE
 
 if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
-METRICS_FILE = "metrics.json"
-ERROR_FILE = "error.json"
-REQUEST_FILE = "request.json"
-FINGERPRINT_FILE = "fingerprint.json"
 TURNS_SUFFIX = ".turns.json"
 PROBS_SUFFIX = ".probs.f16"
 # Little-endian IEEE half floats, row-major (frames, channels). Half precision rounds a probability just above the
