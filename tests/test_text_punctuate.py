@@ -382,3 +382,42 @@ def test_a_changed_neighbour_redoes_the_batch(tmp_path: Path) -> None:
     again = FakeClient([reply((0, SPLIT_WORD[0]), (1, SPLIT_WORD[1]))])
     run([*SPLIT_WORD, "后面的话说完了。"], again, tmp_path)
     assert len(again.requests) == 1
+
+
+def test_the_english_prompt_keeps_a_continuing_segment_lowercase(tmp_path: Path) -> None:
+    client = FakeClient([reply((0, "Hello, everyone."))])
+    run(["hello everyone"], client, tmp_path, "en")
+    assert "do not capitalise its first word" in client.requests[0].system
+
+
+def test_each_neighbour_is_cut_by_its_own_script(tmp_path: Path) -> None:
+    zh = "我们把这笔钱存进了银行账户然后就去上班了真的是这样"
+    en = "so the market was pretty quiet until the fed said that it would hold rates"
+    client = FakeClient(respond=lambda request: reply(*((int(i["i"]), i["text"]) for i in asked(request))))
+    run([zh, en, zh], client, tmp_path, "zh")
+    first_zh, second_zh = asked(client.requests[0])
+    (middle,) = asked(client.requests[1])
+    assert middle["before"] == zh[-16:]
+    assert middle["after"] == zh[:16]
+    assert first_zh["after"] == "so the market was"
+    assert second_zh["before"] == "it would hold rates"
+
+
+def test_blank_neighbours_are_skipped_for_the_nearest_text(tmp_path: Path) -> None:
+    texts = [SPLIT_WORD[0], "   ", "", SPLIT_WORD[1]]
+    client = FakeClient(respond=lambda request: reply(*((int(i["i"]), i["text"]) for i in asked(request))))
+    run(texts, client, tmp_path)
+    first, second = asked(client.requests[0])
+    assert first["after"] == SPLIT_WORD[1][:16]
+    assert second["before"] == SPLIT_WORD[0][-16:]
+
+
+def test_a_reply_that_carries_the_context_text_is_rejected_and_the_original_kept(tmp_path: Path) -> None:
+    texts = [SPLIT_WORD[0], "后面的话说完了。"]
+    leaked = reply((0, SPLIT_WORD[0] + "后面的话说完了。"))
+    client = FakeClient([leaked, leaked])
+    result = run(texts, client, tmp_path)
+    assert result.texts == (texts[0], texts[1])
+    assert result.failed == (0,)
+    assert len(client.requests) == 2
+    assert 'added "后面的话说完了"' in asked(client.requests[1])[0]["problem"]
