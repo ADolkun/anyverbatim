@@ -1,9 +1,18 @@
 """Score ASR runs over the recordings corpora, pair two hypotheses, and write the words WDER needs.
 
 A recording with timed reference lines is cut into windows at pauses in the *reference*, so every hypothesis is scored
-over exactly the same windows and any two can be paired. Each window's reference and hypothesis units are the ones
-whose midpoint lies in it; a clip with only a reference text is one window. Everything here is pure computation on
-rows and references.
+over exactly the same windows and any two can be paired. The reference lines and each hypothesis row are normalized
+once, over their whole text, and the resulting units are assigned to a window by the midpoint of their time; a clip
+with only a reference text is one window. Everything here is pure computation on rows and references.
+
+Two translation-incident counts come out of the same run:
+
+- per window (``CorpusScore.window_incidents``): a 30 s stretch is mostly one script in the reference and mostly the
+  other in the hypothesis. A translated phrase inside a mostly-Chinese window does not show here;
+- per chunk (``CorpusScore.chunk_incidents``): the same test on each reference line (a clip is one chunk), against the
+  hypothesis units timed inside the line. The plan's rule 3, "translation incidents in more than 1% of mixed
+  chunks", reads ``rate_in_mixed_recordings``: incidents over the chunks whose reference is at least 70% one script
+  inside recordings whose reference holds both scripts. Overlapping lines each count the units timed inside them.
 """
 
 from __future__ import annotations
@@ -12,37 +21,35 @@ import bisect
 import itertools
 import json
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-from evals.consensus import Segment, TimedUnit, timed_units
+from evals.consensus import TimedUnit
 from evals.metrics import (
     MIN_INCIDENT_UNITS,
-    Bootstrap,
     ErrorCounts,
-    cer,
-    mer,
     paired_bootstrap,
     script_mix,
     translation_incident,
-    wer,
+    unit_error_counts,
 )
-from evals.normalize import Language, View, join_units, normalize, to_units
+from evals.normalize import View, join_units, to_units
 from evals.recordings_corpus import FOLDER_CORPORA, Item, Metric
-from evals.recordings_data import WORDS_FILE, RefUtterance
-from evals.store import hypothesis_units, row_text
+from evals.recordings_data import WORDS_FILE, RefUtterance, ordered_text
+from evals.store import hypothesis_units, row_text, row_units
 from ytverbatim import atomic
 from ytverbatim.asr.models import ChunkHypothesis
 from ytverbatim.contract.models import Word
 from ytverbatim.errors import ConfigError
 
 WINDOW_TARGET_S = 30.0
+# A cut in a shorter pause could split a phrase the two sides time slightly differently.
+MIN_CUT_GAP_S = 0.75
 MEETINGS = "meetings"
-
-_METRICS: Mapping[Metric, Callable[[str, str, Language, View], ErrorCounts]] = {"wer": wer, "cer": cer, "mer": mer}
+MIN_CLUSTERS = 2
 
 
 class _Frozen(BaseModel):
@@ -55,9 +62,27 @@ class WindowScore:
     window: int
     counts: ErrorCounts
     # The reference is long enough to judge a translation (see ``translation_incident``).
-    chunk: bool
+    judged: bool
     mixed: bool
     incident: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkScore:
+    item: str
+    index: int
+    judged: bool
+    # At least 70% of the reference's units are in one script.
+    dominated: bool
+    # The recording's whole reference holds both scripts.
+    mixed_recording: bool
+    incident: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Scored:
+    windows: list[WindowScore]
+    chunks: list[ChunkScore]
 
 
 class Incidents(_Frozen):
@@ -67,6 +92,16 @@ class Incidents(_Frozen):
     incidents_in_mixed: int
     rate: float | None
     rate_in_mixed: float | None
+
+
+class ChunkIncidents(_Frozen):
+    chunks: int
+    incidents: int
+    rate: float | None
+    # Chunks at least 70% one script inside recordings whose reference holds both scripts: the rule 3 denominator.
+    dominated_in_mixed_recordings: int
+    incidents_in_mixed_recordings: int
+    rate_in_mixed_recordings: float | None
 
 
 class CorpusScore(_Frozen):
@@ -79,23 +114,35 @@ class CorpusScore(_Frozen):
     reference_units: int
     errors: int
     rate: float | None
-    incidents: Incidents
+    window_incidents: Incidents
+    chunk_incidents: ChunkIncidents
 
 
-class PairedResult(_Frozen):
-    windows: int
-    a_rate: float
-    b_rate: float
-    difference: float
+class Interval(_Frozen):
     low: float
     high: float
     excludes_zero: bool
 
 
-def reference_cuts(utterances: Sequence[RefUtterance], target_s: float = WINDOW_TARGET_S) -> list[float]:
-    """Window start times: 0, then the middle of the first pause in the reference after each ``target_s`` of speech.
+class PairedResult(_Frozen):
+    windows: int
+    recordings: int
+    a_rate: float
+    b_rate: float
+    difference: float
+    # Resamples recordings and sums their windows: windows of one recording are correlated, so this is the figure to
+    # decide on. None below two recordings, where there is nothing to resample.
+    decision: Interval | None
+    # Resamples windows as if independent; narrower than ``decision``, shown for comparison only.
+    by_window: Interval
 
-    A window therefore never splits a reference line, and with no pause it simply runs long.
+
+def reference_cuts(
+    utterances: Sequence[RefUtterance], target_s: float = WINDOW_TARGET_S, min_gap_s: float = MIN_CUT_GAP_S
+) -> list[float]:
+    """Window start times: 0, then the middle of the first reference pause of ``min_gap_s`` after each ``target_s``.
+
+    A window therefore never splits a reference line or a short pause, and with no such pause it simply runs long.
     """
     spans: list[tuple[float, float]] = []
     for u in sorted(utterances, key=lambda u: (u.start, u.end)):
@@ -106,7 +153,7 @@ def reference_cuts(utterances: Sequence[RefUtterance], target_s: float = WINDOW_
     cuts = [0.0]
     for (_, end), (start, _) in itertools.pairwise(spans):
         middle = (end + start) / 2
-        if middle - cuts[-1] >= target_s:
+        if start - end >= min_gap_s and middle - cuts[-1] >= target_s:
             cuts.append(middle)
     return cuts
 
@@ -118,68 +165,123 @@ def _by_window(units: Sequence[TimedUnit], starts: Sequence[float]) -> list[list
     return grouped
 
 
-def _size(metric: Metric, text: str, language: Language, view: View) -> int:
-    if metric == "wer":
-        return len(normalize(text, language, view).split())
-    units = to_units(text, language, view)
-    return len(units) if metric == "mer" else len("".join(units))
+def count_units(metric: Metric, reference: Sequence[str], hypothesis: Sequence[str]) -> ErrorCounts:
+    """Count edits over normalized units; CER compares their characters. Without a reference every unit is an insertion.
+
+    ``mer``, ``cer`` and ``wer`` of ``evals.metrics`` do the same on a text (WER is the unit count for English).
+    """
+    ref, hyp = (
+        (list("".join(units)) for units in (reference, hypothesis)) if metric == "cer" else (reference, hypothesis)
+    )
+    if not ref:
+        return ErrorCounts(0, 0, len(hyp), 0)
+    return unit_error_counts(ref, hyp)
 
 
-def count_errors(metric: Metric, reference: str, hypothesis: str, language: Language, view: View) -> ErrorCounts:
-    """Edit counts under ``metric``; a reference with nothing to say makes every hypothesis unit an insertion."""
-    if _size(metric, reference, language, view) == 0:
-        return ErrorCounts(0, 0, _size(metric, hypothesis, language, view), 0)
-    return _METRICS[metric](reference, hypothesis, language, view)
-
-
-def _window(
-    item: str, index: int, reference: str, hypothesis: str, metric: Metric, language: Language, view: View
-) -> WindowScore:
-    ref_mix, hyp_mix = script_mix(reference), script_mix(hypothesis)
-    chunk = ref_mix.total >= MIN_INCIDENT_UNITS
+def _window(item: str, index: int, reference: Sequence[str], hypothesis: Sequence[str], metric: Metric) -> WindowScore:
+    ref_mix, hyp_mix = script_mix(join_units(list(reference))), script_mix(join_units(list(hypothesis)))
+    judged = ref_mix.total >= MIN_INCIDENT_UNITS
     return WindowScore(
         item,
         index,
-        count_errors(metric, reference, hypothesis, language, view),
-        chunk=chunk,
-        mixed=chunk and ref_mix.mixed,
+        count_units(metric, reference, hypothesis),
+        judged=judged,
+        mixed=judged and ref_mix.mixed,
         incident=translation_incident(ref_mix, hyp_mix),
     )
 
 
-def score_item(item: Item, rows: Sequence[ChunkHypothesis], metric: Metric, view: View) -> list[WindowScore]:
+def _chunk(item: str, index: int, reference: str, hypothesis: str, mixed_recording: bool) -> ChunkScore:
+    ref_mix, hyp_mix = script_mix(reference), script_mix(hypothesis)
+    return ChunkScore(
+        item,
+        index,
+        judged=ref_mix.total >= MIN_INCIDENT_UNITS,
+        dominated=ref_mix.mostly("han") or ref_mix.mostly("latin"),
+        mixed_recording=mixed_recording,
+        incident=translation_incident(ref_mix, hyp_mix),
+    )
+
+
+def _reference_units(item: Item, lines: Sequence[RefUtterance], view: View) -> list[TimedUnit]:
+    """Normalize the whole reference once and time each unit by the line it came from.
+
+    This is how a hypothesis row is read (``row_units``), so both sides are normalized over a whole text, not line by
+    line against row by row.
+    """
+    row = ChunkHypothesis(
+        hypothesis="reference",
+        file=item.id,
+        chunk=0,
+        start=min(u.start for u in lines),
+        end=max(u.end for u in lines),
+        text=ordered_text(lines),
+        words=tuple(Word(text=u.text, start=u.start, end=u.end) for u in lines),
+    )
+    return row_units(row, item.language, view)
+
+
+def score_item(item: Item, rows: Sequence[ChunkHypothesis], metric: Metric, view: View) -> Scored:
     reference = item.reference
     if reference is None:
         raise ConfigError(f"{item.corpus}/{item.id} has no reference to score against")
     if not reference.utterances:
-        return [_window(item.id, 0, reference.text, row_text(rows), metric, item.language, view)]
-    lines = [Segment(u.text, u.start, u.end) for u in reference.utterances if u.text.strip()]
+        wanted, heard = (to_units(t, item.language, view) for t in (reference.text, row_text(rows)))
+        mixed = script_mix(reference.text).mixed
+        return Scored(
+            [_window(item.id, 0, wanted, heard, metric)],
+            [_chunk(item.id, 0, reference.text, row_text(rows), mixed)],
+        )
+    lines = sorted((u for u in reference.utterances if u.text.strip()), key=lambda u: (u.start, u.end, u.speaker))
     starts = reference_cuts(reference.utterances)
-    # Units are split in the raw view and joined per window, so the view's normalization then reads the reference and
-    # the hypothesis over the same stretch of speech; normalizing a whole row against per-line text would not.
-    wanted = _by_window(timed_units(lines, item.language, "raw"), starts)
-    heard = _by_window(hypothesis_units(rows, item.language, "raw"), starts)
-    return [
-        _window(item.id, i, join_units(ref), join_units(hyp), metric, item.language, view)
-        for i, (ref, hyp) in enumerate(zip(wanted, heard, strict=True))
+    ref_units = _reference_units(item, lines, view) if lines else []
+    hyp_units = hypothesis_units(rows, item.language, view)
+    windows = [
+        _window(item.id, i, ref, hyp, metric)
+        for i, (ref, hyp) in enumerate(zip(_by_window(ref_units, starts), _by_window(hyp_units, starts), strict=True))
     ]
+    ordered = sorted(hyp_units, key=lambda u: u.midpoint_s)
+    midpoints = [u.midpoint_s for u in ordered]
+    mixed = script_mix(" ".join(u.text for u in lines)).mixed
+    chunks = [
+        _chunk(
+            item.id,
+            i,
+            line.text,
+            join_units(
+                [
+                    u.text
+                    for u in ordered[
+                        bisect.bisect_left(midpoints, line.start) : bisect.bisect_left(midpoints, line.end)
+                    ]
+                ]
+            ),
+            mixed,
+        )
+        for i, line in enumerate(lines)
+    ]
+    return Scored(windows, chunks)
 
 
 def score_items(
     items: Sequence[Item], rows: Mapping[str, Sequence[ChunkHypothesis]], metric: Metric, view: View
-) -> list[WindowScore]:
-    return [w for item in items for w in score_item(item, rows.get(item.id, ()), metric, view)]
+) -> Scored:
+    scored = [score_item(item, rows.get(item.id, ()), metric, view) for item in items]
+    return Scored([w for s in scored for w in s.windows], [c for s in scored for c in s.chunks])
 
 
-def summarize_corpus(
-    corpus: str, metric: Metric, view: View, items: Sequence[Item], windows: Sequence[WindowScore]
-) -> CorpusScore:
+def summarize_corpus(corpus: str, metric: Metric, view: View, items: Sequence[Item], scored: Scored) -> CorpusScore:
+    windows = scored.windows
     units = sum(w.counts.reference_units for w in windows)
     errors = sum(w.counts.errors for w in windows)
-    chunks = [w for w in windows if w.chunk]
-    mixed = [w for w in chunks if w.mixed]
-    found = sum(w.incident for w in chunks)
+    judged = [w for w in windows if w.judged]
+    mixed = [w for w in judged if w.mixed]
+    found = sum(w.incident for w in judged)
     found_mixed = sum(w.incident for w in mixed)
+    chunks = [c for c in scored.chunks if c.judged]
+    eligible = [c for c in chunks if c.dominated and c.mixed_recording]
+    chunk_found = sum(c.incident for c in chunks)
+    eligible_found = sum(c.incident for c in eligible)
     return CorpusScore(
         corpus=corpus,
         metric=metric,
@@ -190,19 +292,39 @@ def summarize_corpus(
         reference_units=units,
         errors=errors,
         rate=errors / units if units else None,
-        incidents=Incidents(
-            chunks=len(chunks),
+        window_incidents=Incidents(
+            chunks=len(judged),
             mixed_chunks=len(mixed),
             incidents=found,
             incidents_in_mixed=found_mixed,
-            rate=found / len(chunks) if chunks else None,
+            rate=found / len(judged) if judged else None,
             rate_in_mixed=found_mixed / len(mixed) if mixed else None,
+        ),
+        chunk_incidents=ChunkIncidents(
+            chunks=len(chunks),
+            incidents=chunk_found,
+            rate=chunk_found / len(chunks) if chunks else None,
+            dominated_in_mixed_recordings=len(eligible),
+            incidents_in_mixed_recordings=eligible_found,
+            rate_in_mixed_recordings=eligible_found / len(eligible) if eligible else None,
         ),
     )
 
 
+def _total(counts: Sequence[ErrorCounts]) -> ErrorCounts:
+    return ErrorCounts(
+        sum(c.substitutions for c in counts),
+        sum(c.deletions for c in counts),
+        sum(c.insertions for c in counts),
+        sum(c.hits for c in counts),
+    )
+
+
 def paired(a: Sequence[WindowScore], b: Sequence[WindowScore], seed: int = 0) -> PairedResult:
-    """Bootstrap the pooled error-rate difference ``a - b`` over windows both hypotheses were scored on."""
+    """Bootstrap the pooled error-rate difference ``a - b`` over windows both hypotheses were scored on.
+
+    The decision interval resamples whole recordings; the window-level one is reported beside it.
+    """
     by_a = {(w.item, w.window): w for w in a}
     by_b = {(w.item, w.window): w for w in b}
     if by_a.keys() != by_b.keys():
@@ -210,15 +332,26 @@ def paired(a: Sequence[WindowScore], b: Sequence[WindowScore], seed: int = 0) ->
     keys = sorted(by_a)
     left = [by_a[k].counts for k in keys]
     right = [by_b[k].counts for k in keys]
-    result: Bootstrap = paired_bootstrap(left, right, seed)
+    if _total(left).reference_units == 0:
+        raise ConfigError("the reference has no units to score against")
+    recordings = sorted({item for item, _ in keys})
+    clustered: Interval | None = None
+    if len(recordings) >= MIN_CLUSTERS:
+        grouped = [
+            (_total([by_a[k].counts for k in keys if k[0] == r]), _total([by_b[k].counts for k in keys if k[0] == r]))
+            for r in recordings
+        ]
+        result = paired_bootstrap([x for x, _ in grouped], [y for _, y in grouped], seed)
+        clustered = Interval(low=result.low, high=result.high, excludes_zero=result.excludes_zero)
+    windowed = paired_bootstrap(left, right, seed)
     return PairedResult(
         windows=len(keys),
-        a_rate=sum(c.errors for c in left) / sum(c.reference_units for c in left),
-        b_rate=sum(c.errors for c in right) / sum(c.reference_units for c in right),
-        difference=result.difference,
-        low=result.low,
-        high=result.high,
-        excludes_zero=result.excludes_zero,
+        recordings=len(recordings),
+        a_rate=_total(left).rate,
+        b_rate=_total(right).rate,
+        difference=windowed.difference,
+        decision=clustered,
+        by_window=Interval(low=windowed.low, high=windowed.high, excludes_zero=windowed.excludes_zero),
     )
 
 
