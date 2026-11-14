@@ -8,6 +8,9 @@ Two sources, both over recordings the owner supplied:
 - E2 text disputes: spots where finished ASR runs of ``evals.run_recordings_asr`` word the same speech differently,
   with a policy group where the spot is a number or a Latin-script word.
 
+``disputes.jsonl`` holds the full disputed text and unredacted lines: it is an intermediate for ``evals.questions
+build``, it stays under the recordings folder, and agents must not read it. Only ``questions.jsonl`` is for them.
+
 Per recording, at most ``MAX_EXAMPLES`` examples of each policy group and ``--limit`` single items of each kind are
 written, and the clip each one points at is cut from the local audio. Names are redacted and excerpts held to two
 sentences later, by ``evals.questions build``.
@@ -26,11 +29,11 @@ import click
 from evals.consensus import find_disputes
 from evals.diarization import Turn, align_labels, disagreement_runs, read_rttm
 from evals.questions import MAX_EXAMPLES, AttributionDispute, AttributionLine, TextDispute
-from evals.recordings_corpus import FOLDER_CORPORA, Item, asr_layout, finished_ids, load_items
+from evals.recordings_corpus import FOLDER_CORPORA, Item, asr_layout, finished_rows, load_items
 from evals.recordings_data import CLIPS, OWNER, SAMPLE_RATE, WORDS_FILE, recordings_dir
 from evals.run_diarization import load_words
 from evals.run_recordings_asr import E2_HYPOTHESES
-from evals.store import hypothesis_units, rows_by_file
+from evals.store import hypothesis_units
 from ytverbatim import atomic
 from ytverbatim.asr.models import ChunkHypothesis
 from ytverbatim.contract.models import Word
@@ -152,7 +155,11 @@ def select_text(disputes: Sequence[TextDispute], limit: int, seed: int) -> list[
 
 
 def select_attribution(disputes: Sequence[AttributionDispute], limit: int, seed: int) -> list[AttributionDispute]:
-    """Sample ``limit`` disputes at random, so a win rate weighted by duration stays unbiased."""
+    """Sample ``limit`` disputes at random (seeded).
+
+    The sample carries neither the number of disputes it came from nor their durations, so a time-weighted win rate
+    has to weight each item by its own duration.
+    """
     chosen = random.Random(seed).sample(list(disputes), min(limit, len(disputes)))
     return sorted(chosen, key=lambda d: (d.start, d.id))
 
@@ -214,11 +221,12 @@ def build_disputes(
         clip_for = clip_maker(item, clips or base / CLIPS)
         if asr_hypotheses:
             layout = asr_layout(item.corpus, base)
-            for name in asr_hypotheses:
-                if item.id not in finished_ids(layout, name):
+            rows = {name: finished_rows(layout, name, [item]) for name in asr_hypotheses}
+            for name, finished in rows.items():
+                if item.id not in finished:
                     raise ConfigError(f"{name} is not finished for {item.corpus}/{item.id}; run it first")
-            rows = {name: rows_by_file(layout, name).get(item.id, []) for name in asr_hypotheses}
-            found = text_disputes(item, rows, pivot or asr_hypotheses[0])
+            texts = {name: finished[item.id] for name, finished in rows.items()}
+            found = text_disputes(item, texts, pivot or asr_hypotheses[0])
             out += [
                 d.model_copy(update={"clip": clip_for("text", d.start, d.end)}) for d in select_text(found, limit, seed)
             ]
@@ -250,7 +258,13 @@ def main() -> None:
 @click.option("--diarizers", help="E1: comma-separated finished diarizers to compare (attribution disputes).")
 @click.option("--limit", default=DEFAULT_LIMIT, show_default=True, help="Single items kept per recording and kind.")
 @click.option("--seed", default=0, show_default=True)
-@click.option("--out", "out_path", type=click.Path(dir_okay=False, path_type=Path), default=None)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Where to write the full-text intermediate (default and only allowed place: the recordings folder).",
+)
 def build(
     corpus: str,
     recordings: str | None,
@@ -261,7 +275,10 @@ def build(
     seed: int,
     out_path: Path | None,
 ) -> None:
-    """Write disputes.jsonl (default under the recordings folder); prints counts only."""
+    """Write disputes.jsonl, a full-text intermediate that agents must not read; prints counts only.
+
+    Feed it to ``evals.questions build``; only that command's ``questions.jsonl`` is for agents.
+    """
     hypotheses = [h for h in (asr_hyps or "").split(",") if h]
     named = [d for d in (diarizers or "").split(",") if d]
     if not hypotheses and not named:
@@ -273,9 +290,11 @@ def build(
     unknown = set(hypotheses) - set(E2_HYPOTHESES)
     if unknown:
         raise click.UsageError(f"unknown ASR hypotheses: {', '.join(sorted(unknown))}")
+    path = out_path or recordings_dir() / DISPUTES_FILE
+    if not path.resolve().is_relative_to(recordings_dir().resolve()):
+        raise click.UsageError("--out must be inside the recordings folder: the file holds unredacted text")
     items = load_items(corpus, [r for r in (recordings or "").split(",") if r])
     disputes = build_disputes(items, asr_hypotheses=hypotheses, pivot=pivot, diarizers=named, limit=limit, seed=seed)
-    path = out_path or recordings_dir() / DISPUTES_FILE
     write_disputes(path, disputes)
     text = sum(isinstance(d, TextDispute) for d in disputes)
     click.echo(f"{text} text and {len(disputes) - text} attribution disputes -> {path}")
