@@ -99,7 +99,7 @@ def check_ready(options: LLMOptions, *, interactive: bool = False) -> None:
     """Fail before any work when the configured transport cannot run.
 
     That is: no ChatGPT sign-in with plan permission, no `claude` CLI, or no base URL or key. It spends no LLM quota;
-    `ytverbatim llm check --probe` makes a real call. For chatgpt it renews an access token that is due, so a dead
+    `ytverbatim llm test` makes a real call. For chatgpt it renews an access token that is due, so a dead
     refresh chain shows now rather than after hours of download and ASR. With `interactive`, an unusable chatgpt
     sign-in opens the browser to sign in again instead of raising; pass it only when a person is at the terminal.
     """

@@ -267,7 +267,7 @@ def test_a_read_that_times_out_is_the_deadline(signed_in: list[str]) -> None:
 @pytest.mark.parametrize(
     ("status", "body", "expected", "code"),
     [
-        (401, {"error": {"code": "invalid_token", "message": "secret"}}, "ytverbatim llm login", "invalid_token"),
+        (401, {"error": {"code": "invalid_token", "message": "secret"}}, "ytverbatim login", "invalid_token"),
         (429, {"error": {"code": "usage_limit_reached"}}, "rate limit", "usage_limit_reached"),
         (503, None, "OpenAI is unavailable", None),
         (400, {"error": {"type": "invalid_request_error", "message": "secret"}}, "refused", "invalid_request_error"),
@@ -287,7 +287,7 @@ def test_http_errors_raise_without_a_retry(
 
 def test_a_missing_sign_in_fails_before_any_request() -> None:
     opener = FakeOpener()
-    with pytest.raises(LLMUnavailableError, match="ytverbatim llm login") as raised:
+    with pytest.raises(LLMUnavailableError, match="ytverbatim login") as raised:
         client(opener).complete(REQUEST)
     assert raised.value.code == "not_signed_in"
     assert opener.requests == []

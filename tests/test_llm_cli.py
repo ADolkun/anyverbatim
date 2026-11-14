@@ -1,5 +1,4 @@
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -22,10 +21,9 @@ from ytverbatim.llm import (
     check_ready,
     claude_cli,
     client_from_options,
-    openai_compat,
 )
 from ytverbatim.llm.chatgpt_auth import TOKEN_URL
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Readiness, Usage
+from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 
 
 @pytest.fixture
@@ -48,63 +46,6 @@ class ProbeClient:
     def complete(self, request: LLMRequest) -> LLMResponse:
         self.requests.append(request)
         return LLMResponse(text='{"ok": true}', usage=Usage(30, 4), elapsed_s=0.5)
-
-
-def test_check_without_provider_fails(config: Path) -> None:
-    config.write_text('[llm]\nprovider = "none"\n', encoding="utf-8")
-    result = CliRunner().invoke(main, ["llm", "check"])
-    assert result.exit_code == 1
-    assert "no LLM provider configured" in result.output
-
-
-def test_check_claude_ready_sends_no_generation(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(claude_cli, "readiness", lambda: Readiness(True, "logged in through claude.ai (firstParty)"))
-    monkeypatch.setattr(llm_cli, "client_from_options", _forbidden)
-    result = CliRunner().invoke(main, ["llm", "check", "--provider", "claude-cli"])
-    assert result.exit_code == 0, result.output
-    assert result.output.strip() == "claude-cli: ready - logged in through claude.ai (firstParty)"
-
-
-def test_check_not_ready_exits_nonzero(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(claude_cli, "readiness", lambda: Readiness(False, "not logged in"))
-    result = CliRunner().invoke(main, ["llm", "check", "--provider", "claude-cli"])
-    assert result.exit_code == 1
-    assert "claude-cli: not ready - not logged in" in result.output
-
-
-def test_check_openai_uses_configured_base_url(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config.write_text('[llm]\nprovider = "openai-compat"\nbase_url = "http://127.0.0.1:9/v1"\n', encoding="utf-8")
-    seen: list[tuple[str | None, str | None]] = []
-
-    def fake(base_url: str | None, api_key_env: str | None = None) -> Readiness:
-        seen.append((base_url, api_key_env))
-        return Readiness(True, "answered")
-
-    monkeypatch.setattr(openai_compat, "readiness", fake)
-    result = CliRunner().invoke(main, ["llm", "check"])
-    assert result.exit_code == 0, result.output
-    assert seen == [("http://127.0.0.1:9/v1", None)]
-
-
-def test_probe_sends_one_json_call_and_reports_usage(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    probe = ProbeClient()
-    monkeypatch.setattr(claude_cli, "readiness", lambda: Readiness(True, "ok"))
-    monkeypatch.setattr(llm_cli, "client_from_options", lambda options, **_kwargs: probe)
-    result = CliRunner().invoke(main, ["llm", "check", "--provider", "claude-cli", "--model", "haiku", "--probe"])
-    assert result.exit_code == 0, result.output
-    assert len(probe.requests) == 1
-    assert 'probe fake:probe: {"ok":true} (1 call(s), input_tokens=30, output_tokens=4)' in result.output
-
-
-def test_probe_errors_are_reported(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(claude_cli, "readiness", lambda: Readiness(True, "ok"))
-    result = CliRunner().invoke(main, ["llm", "check", "--provider", "claude-cli", "--probe"])
-    assert result.exit_code == 1
-    assert "needs a model" in result.output
-
-
-def _forbidden(options: LLMOptions, **_kwargs: object) -> object:
-    raise AssertionError("readiness must not build a client")
 
 
 def test_client_from_options() -> None:
@@ -220,9 +161,9 @@ def test_check_ready_for_chatgpt_names_login_and_llm_none(
     with pytest.raises(ConfigError, match=detail) as raised:
         check_ready(LLMOptions())
     message = str(raised.value)
-    assert "`ytverbatim llm login`" in message and "`--llm none`" in message
+    assert "`ytverbatim login`" in message and "`--llm none`" in message
     assert '`LLMOptions(provider="none")`' in message
-    assert "ytverbatim llm login" in raised.value.fix and "--llm none" in raised.value.fix
+    assert "ytverbatim login" in raised.value.fix and "--llm none" in raised.value.fix
 
 
 def test_check_ready_accepts_a_ready_account_without_a_request(config: Path) -> None:
@@ -269,7 +210,7 @@ def test_check_ready_raises_when_not_interactive_and_signs_in_when_interactive(
     token_endpoint(monkeypatch, http_error(400, {"error": "invalid_grant"}))
     sign_ins = SignIns()
     monkeypatch.setattr(chatgpt_auth, "interactive_login", sign_ins)
-    with pytest.raises(ConfigError, match="ytverbatim llm login"):
+    with pytest.raises(ConfigError, match="ytverbatim login"):
         check_ready(LLMOptions())
     assert sign_ins.reasons == []
 
@@ -328,7 +269,7 @@ class Terminal:
 
 
 @pytest.mark.parametrize("tty", [True, False])
-def test_run_and_probe_pass_the_terminals_interactivity(
+def test_run_and_llm_test_pass_the_terminals_interactivity(
     config: Path, monkeypatch: pytest.MonkeyPatch, tty: bool
 ) -> None:
     seen: dict[str, object] = {}
@@ -346,13 +287,17 @@ def test_run_and_probe_pass_the_terminals_interactivity(
     probe = ProbeClient()
 
     def build(options: LLMOptions, *, interactive: bool = False) -> ProbeClient:
-        seen["probe"] = interactive
+        seen["client"] = interactive
         return probe
 
+    def ready(options: LLMOptions, *, interactive: bool = False) -> None:
+        seen["check_ready"] = interactive
+
     monkeypatch.setattr(llm_cli, "interactive", lambda: tty)
+    monkeypatch.setattr(llm_cli, "check_ready", ready)
     monkeypatch.setattr(llm_cli, "client_from_options", build)
-    assert CliRunner().invoke(main, ["llm", "check", "--probe"]).exit_code == 0
-    assert seen == {"run": tty, "probe": tty}
+    assert CliRunner().invoke(main, ["llm", "test"]).exit_code == 0
+    assert seen == {"run": tty, "check_ready": tty, "client": tty}
 
 
 def test_library_calls_default_to_non_interactive() -> None:
@@ -364,29 +309,7 @@ def test_library_calls_default_to_non_interactive() -> None:
         assert inspect.signature(function).parameters["interactive"].default is False
 
 
-def test_check_reports_chatgpt_status_without_contacting_openai(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(llm_cli, "client_from_options", _forbidden)
-    runner = CliRunner()
-    signed_out = runner.invoke(main, ["llm", "check"])
-    assert signed_out.exit_code == 1
-    assert signed_out.output.strip() == "chatgpt: not ready - not signed in; run `ytverbatim llm login`"
-
-    store_account(scopes=("openid",))
-    no_plan = runner.invoke(main, ["llm", "check"])
-    assert no_plan.exit_code == 1 and "without ChatGPT plan permission" in no_plan.output
-
-    store_account(expires_at=time.time() - 1, refresh="")
-    assert "the ChatGPT sign-in expired" in runner.invoke(main, ["llm", "check"]).output
-
-    store_account()
-    ready = runner.invoke(main, ["llm", "check", "--effort", "xhigh"])
-    assert ready.exit_code == 0, ready.output
-    assert ready.output.strip() == "chatgpt: ready - signed in with ChatGPT plan permission"
-    assert "access-1" not in ready.output
-
-
-def test_check_probe_goes_through_the_chatgpt_client(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    store_account()
+def test_llm_test_sends_one_call_with_the_overrides(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     probe = ProbeClient()
     built: list[LLMOptions] = []
 
@@ -394,89 +317,53 @@ def test_check_probe_goes_through_the_chatgpt_client(config: Path, monkeypatch: 
         built.append(options)
         return probe
 
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda _name: "/usr/local/bin/claude")
     monkeypatch.setattr(llm_cli, "client_from_options", build)
-    result = CliRunner().invoke(main, ["llm", "check", "--probe", "--effort", "high"])
+    result = CliRunner().invoke(
+        main, ["llm", "test", "--provider", "claude-cli", "--model", "claude-haiku-5-5", "--effort", "low"]
+    )
     assert result.exit_code == 0, result.output
-    assert (built[0].provider, built[0].effort) == ("chatgpt", "high")
+    assert (built[0].provider, built[0].model, built[0].effort) == ("claude-cli", "claude-haiku-5-5", "low")
     assert len(probe.requests) == 1
+    assert result.output.strip() == 'fake:probe: {"ok":true} (1 call(s), input_tokens=30, output_tokens=4)'
 
 
-def test_check_validates_effort_per_provider(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(openai_compat, "readiness", lambda *_a, **_k: Readiness(True, "answered"))
-    result = CliRunner().invoke(main, ["llm", "check", "--provider", "openai-compat", "--effort", "low"])
-    assert result.exit_code == 1
-    assert "effort does not apply to openai-compat" in result.output
-    unknown = CliRunner().invoke(main, ["llm", "check", "--effort", "minimal"])
-    assert unknown.exit_code == 2
+def test_llm_test_uses_the_chatgpt_default_and_its_effort_override(
+    config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_account(expires_at=time.time() + 3600)
+    built: list[LLMOptions] = []
 
+    def build(options: LLMOptions, **_kwargs: object) -> ProbeClient:
+        built.append(options)
+        return ProbeClient()
 
-@dataclass
-class FakeLogin:
-    plan: bool = True
-    urls: list[str] = field(default_factory=list)
-
-    def __call__(self, *, open_url: Callable[[str], object]) -> chatgpt_auth.LoginResult:
-        url = "https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client"
-        self.urls.append(url)
-        assert open_url(url) is not False
-        return chatgpt_auth.LoginResult(EMAIL, plan=self.plan)
-
-
-def test_login_prints_the_url_and_opens_the_browser(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    opened: list[str] = []
-    monkeypatch.setattr(chatgpt_auth, "login", FakeLogin())
-    monkeypatch.setattr(llm_cli.webbrowser, "open", lambda url: opened.append(url) or True)
-    result = CliRunner().invoke(main, ["llm", "login"])
+    monkeypatch.setattr(llm_cli, "client_from_options", build)
+    result = CliRunner().invoke(main, ["llm", "test", "--effort", "xhigh"])
     assert result.exit_code == 0, result.output
-    assert "https://auth.openai.com/api/accounts/authorize" in result.output
-    assert opened == ["https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client"]
-    assert f"chatgpt: signed in as {EMAIL}" in result.output
+    assert (built[0].provider, built[0].model, built[0].effort) == ("chatgpt", None, "xhigh")
 
 
-def test_login_no_browser_only_prints_the_url(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(chatgpt_auth, "login", FakeLogin())
-    monkeypatch.setattr(llm_cli.webbrowser, "open", lambda _url: pytest.fail("opened a browser"))
-    result = CliRunner().invoke(main, ["llm", "login", "--no-browser"])
-    assert result.exit_code == 0, result.output
-    assert "https://auth.openai.com/api/accounts/authorize" in result.output
-
-
-def test_login_without_plan_permission_exits_nonzero(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(chatgpt_auth, "login", FakeLogin(plan=False))
-    result = CliRunner().invoke(main, ["llm", "login", "--no-browser"])
+def test_llm_test_stops_before_a_call_when_the_llm_is_not_ready(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(llm_cli, "client_from_options", lambda *_a, **_k: pytest.fail("built a client"))
+    result = CliRunner().invoke(main, ["llm", "test"])
     assert result.exit_code == 1
-    assert "without ChatGPT plan permission" in result.output
-
-
-def test_login_failures_are_reported(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fail(**_kwargs: object) -> object:
-        raise chatgpt_auth.ChatGPTAuthError("sign-in timed out after 300s; the stored sign-in was kept", code="timeout")
-
-    monkeypatch.setattr(chatgpt_auth, "login", fail)
-    result = CliRunner().invoke(main, ["llm", "login", "--no-browser"])
-    assert result.exit_code == 1 and "sign-in timed out" in result.output
+    assert "not signed in" in result.output and "`ytverbatim login`" in result.output
 
 
 @pytest.mark.parametrize(
-    ("outcome", "said"),
+    ("args", "code", "said"),
     [
-        ("confirmed", "chatgpt: signed out; OpenAI confirmed the revocation"),
-        ("unconfirmed", "chatgpt: signed out; OpenAI did not confirm the revocation"),
-        ("no_refresh_token", "chatgpt: signed out; there was no refresh token to revoke"),
-        ("not_signed_in", "chatgpt: not signed in; nothing to revoke"),
+        (["--provider", "openai-compat", "--effort", "low"], 1, "effort does not apply to openai-compat"),
+        (["--effort", "minimal"], 2, "Invalid value for '--effort'"),
     ],
 )
-def test_logout_reports_what_happened_to_the_revocation(
-    config: Path, monkeypatch: pytest.MonkeyPatch, outcome: str, said: str
-) -> None:
-    monkeypatch.setattr(chatgpt_auth, "logout", lambda: outcome)
-    result = CliRunner().invoke(main, ["llm", "logout"])
-    assert result.exit_code == 0, result.output
-    assert result.output.startswith(said)
+def test_llm_test_validates_effort_per_provider(config: Path, args: list[str], code: int, said: str) -> None:
+    result = CliRunner().invoke(main, ["llm", "test", *args])
+    assert result.exit_code == code and said in result.output
 
 
-def test_check_creates_no_directory(config: Path, tmp_path: Path) -> None:
-    assert CliRunner().invoke(main, ["llm", "check"]).exit_code == 1
-    with pytest.raises(ConfigError):
-        check_ready(LLMOptions())
-    assert not (tmp_path / "state").exists()
+def test_llm_test_without_a_provider_fails(config: Path) -> None:
+    config.write_text('[llm]\nprovider = "none"\n', encoding="utf-8")
+    result = CliRunner().invoke(main, ["llm", "test"])
+    assert result.exit_code == 1 and "no LLM provider configured" in result.output
