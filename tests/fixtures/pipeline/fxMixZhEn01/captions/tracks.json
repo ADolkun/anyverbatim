@@ -1,0 +1,11 @@
+{
+  "tracks": [
+    {
+      "language": "zh-orig",
+      "kind": "auto",
+      "format": "json3",
+      "word_timings": true,
+      "segments": 4
+    }
+  ]
+}

@@ -1,0 +1,109 @@
+{
+  "stage_version": "2+stages-v1",
+  "input_hash": "770f1116eb597e408baad7b8f217f6348a7ade8935664b50c0b7fefffe4ff395",
+  "output": {
+    "run": {
+      "id": "asr:w-prod",
+      "kind": "asr",
+      "engine": "w-prod",
+      "model_repo": "mlx-community/whisper-large-v3-mlx",
+      "model_revision": "49e6aa286ad60c14352c404340ded53710378a11",
+      "params": {
+        "language": "pass",
+        "language_hint": "zh",
+        "mode": "whole_file",
+        "sample_rate": 16000
+      },
+      "vad": null,
+      "chunking": null,
+      "aligner": null
+    },
+    "language": "zh",
+    "stretches": [
+      {
+        "text": "大家好欢迎回来",
+        "start": 0.0,
+        "end": 4.0,
+        "words": [
+          {
+            "text": "大家好欢迎回来",
+            "start": 0.0,
+            "end": 4.0,
+            "conf": 0.6
+          }
+        ],
+        "word_timed": true,
+        "flags": [],
+        "edits": []
+      },
+      {
+        "text": "今天聊聊ETF和GAP利润",
+        "start": 5.0,
+        "end": 9.0,
+        "words": [
+          {
+            "text": "今天聊聊ETF和GAP利润",
+            "start": 5.0,
+            "end": 9.0,
+            "conf": 0.65
+          }
+        ],
+        "word_timed": true,
+        "flags": [],
+        "edits": []
+      },
+      {
+        "text": "上周涨了十五个百分点",
+        "start": 10.0,
+        "end": 14.0,
+        "words": [
+          {
+            "text": "上周涨了十五个百分点",
+            "start": 10.0,
+            "end": 14.0,
+            "conf": 0.7
+          }
+        ],
+        "word_timed": true,
+        "flags": [],
+        "edits": []
+      },
+      {
+        "text": "收入三万五千美元",
+        "start": 20.0,
+        "end": 24.0,
+        "words": [
+          {
+            "text": "收入三万五千美元",
+            "start": 20.0,
+            "end": 24.0,
+            "conf": 0.6
+          }
+        ],
+        "word_timed": true,
+        "flags": [],
+        "edits": []
+      },
+      {
+        "text": "really strong quarter",
+        "start": 25.0,
+        "end": 29.0,
+        "words": [
+          {
+            "text": "really strong quarter",
+            "start": 25.0,
+            "end": 29.0,
+            "conf": 0.65
+          }
+        ],
+        "word_timed": true,
+        "flags": [],
+        "edits": []
+      }
+    ],
+    "speech_seconds": null,
+    "decoder_anomalies": 0,
+    "chunk_flags": {},
+    "warnings": []
+  }
+}

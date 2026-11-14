@@ -1,0 +1,37 @@
+{
+  "stage_version": "1+correction-v6+stages-v1+numbers-v2+guards-v1",
+  "input_hash": "be07d6e98963a48669cfe9350f77c466c9749edf76a6995a7b91cf32e45cb519",
+  "output": {
+    "stretches": [
+      {
+        "text": "so today we look at fifteen funds Markets rose twelve percent.",
+        "start": 0.0,
+        "end": 10.0,
+        "words": [],
+        "word_timed": false,
+        "flags": [],
+        "edits": []
+      },
+      {
+        "text": "Then they fell sharply.",
+        "start": 12.0,
+        "end": 16.0,
+        "words": [],
+        "word_timed": false,
+        "flags": [],
+        "edits": []
+      }
+    ],
+    "usage": [
+      {
+        "stage": "correction",
+        "client": "fake:fixture-model",
+        "calls": 1,
+        "input_tokens": 100,
+        "output_tokens": 20
+      }
+    ],
+    "notices": [],
+    "llm_punctuated": false
+  }
+}

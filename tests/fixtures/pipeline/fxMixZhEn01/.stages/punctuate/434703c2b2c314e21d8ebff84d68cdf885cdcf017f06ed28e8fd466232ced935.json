@@ -1,0 +1,29 @@
+{
+  "items": [
+    {
+      "i": 0,
+      "text": "大家好欢迎回来。"
+    },
+    {
+      "i": 1,
+      "text": "今天聊聊ETF和GAP利润。"
+    },
+    {
+      "i": 2,
+      "text": "上周涨了十五个百分点。"
+    },
+    {
+      "i": 3,
+      "text": "收入三万五千美元。"
+    }
+  ],
+  "usage": [
+    {
+      "stage": "punctuation",
+      "client": "fake:fixture-model",
+      "calls": 1,
+      "input_tokens": 100,
+      "output_tokens": 20
+    }
+  ]
+}

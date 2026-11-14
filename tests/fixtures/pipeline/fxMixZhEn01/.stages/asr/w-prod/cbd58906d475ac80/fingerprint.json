@@ -1,0 +1,30 @@
+{
+  "engine": {
+    "spec": {
+      "id": "w-prod",
+      "family": "whisper",
+      "repo": "mlx-community/whisper-large-v3-mlx",
+      "revision": "49e6aa286ad60c14352c404340ded53710378a11",
+      "max_chunk_s": null,
+      "native_timestamps": true,
+      "emits_punctuation": true,
+      "supports_context": false,
+      "sample_rate": 16000
+    },
+    "factory": "ytverbatim.asr.engines.whisper_mlx.create",
+    "variant": {
+      "mode": "whole_file",
+      "language": "pass"
+    }
+  },
+  "files": [
+    {
+      "id": "fxMixZhEn01",
+      "wav": "/fixture/audio.wav",
+      "language": "zh",
+      "context": null,
+      "chunks": null
+    }
+  ],
+  "quality_guard": true
+}

@@ -1,0 +1,21 @@
+{
+  "reply": {
+    "verdicts": [
+      {
+        "id": 0,
+        "value": "五十个百分点",
+        "confidence": "high",
+        "reason": "context"
+      }
+    ]
+  },
+  "usage": [
+    {
+      "stage": "numeric",
+      "client": "fake:fixture-model",
+      "calls": 1,
+      "input_tokens": 100,
+      "output_tokens": 20
+    }
+  ]
+}

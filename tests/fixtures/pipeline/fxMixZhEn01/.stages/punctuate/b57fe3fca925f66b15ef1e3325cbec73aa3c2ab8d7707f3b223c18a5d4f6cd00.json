@@ -1,0 +1,17 @@
+{
+  "items": [
+    {
+      "i": 0,
+      "text": "Really strong quarter."
+    }
+  ],
+  "usage": [
+    {
+      "stage": "punctuation",
+      "client": "fake:fixture-model",
+      "calls": 1,
+      "input_tokens": 100,
+      "output_tokens": 20
+    }
+  ]
+}

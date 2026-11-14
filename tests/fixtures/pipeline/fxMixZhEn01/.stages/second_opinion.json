@@ -1,0 +1,21 @@
+{
+  "stage_version": "1+numeric-v5+numbers-v2",
+  "input_hash": "e33f284c64a61156eed1916bbdcb344df067687dc4faa47bfb2e331ff74c1cb7",
+  "output": {
+    "opinion": {
+      "engine": "w-vad",
+      "pieces": [
+        {
+          "text": "上周涨了五十个百分点",
+          "start": 4.5,
+          "end": 14.5
+        },
+        {
+          "text": "上周涨了五十个百分点",
+          "start": 19.5,
+          "end": 24.5
+        }
+      ]
+    }
+  }
+}

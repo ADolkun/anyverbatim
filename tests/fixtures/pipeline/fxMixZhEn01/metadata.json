@@ -1,0 +1,32 @@
+{
+  "video_id": "fxMixZhEn01",
+  "title": "合成标题 Synthetic title",
+  "channel": "Synthetic channel",
+  "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx",
+  "upload_date": "20291231",
+  "duration": 40.0,
+  "description": "A made-up description for a test fixture.",
+  "language": "zh",
+  "availability": "public",
+  "live_status": null,
+  "chapters": [
+    {
+      "title": "开场",
+      "start": 0.0,
+      "end": 16.0
+    },
+    {
+      "title": "Numbers",
+      "start": 16.0,
+      "end": 40.0
+    }
+  ],
+  "subtitle_langs": [],
+  "auto_caption_lang": "zh-orig",
+  "creator_note": {
+    "text": "更正：GAAP 利润以财报为准。",
+    "author": "@synthetic-channel",
+    "like_count": 7,
+    "published": "1 day ago"
+  }
+}
