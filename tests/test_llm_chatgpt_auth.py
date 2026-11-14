@@ -335,17 +335,14 @@ def test_a_refresh_without_a_new_refresh_token_is_refused_and_keeps_the_old_one(
 
 
 @pytest.mark.parametrize("code", ["invalid_grant", "refresh_token_reused", "refresh_token_expired"])
-def test_a_terminal_refresh_error_clears_the_tokens(code: str) -> None:
-    store_account(expires_at=NOW)
+def test_a_terminal_refresh_error_keeps_the_stored_sign_in(code: str) -> None:
+    stored = store_account(expires_at=NOW)
     opener = FakeOpener({f"POST {TOKEN_URL}": http_error(400, {"error": code, "error_description": "secret detail"})})
     with pytest.raises(ChatGPTAuthError, match="ytverbatim llm login") as raised:
         chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
-    assert raised.value.code == code
+    assert raised.value.code == code and raised.value.needs_sign_in
     assert "secret detail" not in str(raised.value)
-    state = stored_state()
-    assert state.account is not None and state.account.access_token == state.account.refresh_token == ""
-    assert state.client_id == CLIENT_ID
-    assert chatgpt_auth.status(clock=lambda: NOW) == "signed_out"
+    assert stored_state() == stored, "only a new sign-in or an explicit logout changes the stored session"
 
 
 def test_a_transient_refresh_failure_keeps_the_tokens() -> None:
@@ -531,27 +528,101 @@ def test_a_peer_that_trickles_bytes_cannot_hold_login_past_its_deadline() -> Non
     assert time.monotonic() - started < 3.0
 
 
-def test_a_refresh_refused_for_its_client_resets_the_registration() -> None:
-    store_account(expires_at=NOW)
+def test_a_refresh_refused_for_its_client_forgets_only_the_client() -> None:
+    stored = store_account(expires_at=NOW + 200, earliest_refresh_at=NOW - 1)
     opener = FakeOpener({f"POST {TOKEN_URL}": http_error(401, {"error": "invalid_client"})})
-    with pytest.raises(ChatGPTAuthError, match="ytverbatim llm login") as raised:
-        chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
-    assert raised.value.code == "invalid_client"
+    assert chatgpt_auth.access_token(opener=opener, clock=lambda: NOW) == "access-1"
     state = stored_state()
     assert state.client_id is None
-    assert state.account is not None and state.account.access_token == state.account.refresh_token == ""
+    assert state.account == stored.account
+    assert chatgpt_auth.status(clock=lambda: NOW + 150) == "ready", "the token still works for 50 s"
+    assert chatgpt_auth.access_token(opener=opener, clock=lambda: NOW + 150) == "access-1"
+    assert len(opener.requests) == 1, "no refresh is attempted without a registration"
+    assert chatgpt_auth.status(clock=lambda: NOW + 180) == "expired"
+    with pytest.raises(ChatGPTAuthError) as raised:
+        chatgpt_auth.access_token(opener=opener, clock=lambda: NOW + 180)
+    assert raised.value.code == "expired" and raised.value.needs_sign_in
+    assert stored_state().account == stored.account
 
 
-def test_an_exchange_refused_for_its_client_resets_the_registration() -> None:
-    browser = Browser(approve)
-    with pytest.raises(ChatGPTAuthError, match="reset") as raised:
-        login(browser, FakeOpener({f"POST {TOKEN_URL}": http_error(401, {"error": "invalid_client"})}))
-    assert raised.value.code == "invalid_client"
-    assert stored_state().client_id is None
+@pytest.mark.parametrize(
+    "route",
+    [
+        http_error(400, {"error": "invalid_grant"}),
+        http_error(401, {"error": "invalid_client"}),
+        http_error(503),
+        json_response({"access_token": "half"}),
+    ],
+)
+def test_a_failed_refresh_with_time_left_returns_the_current_token(route: Route) -> None:
+    store_account(expires_at=NOW + 31, earliest_refresh_at=NOW - 1)
+    opener = FakeOpener({f"POST {TOKEN_URL}": route})
+    assert chatgpt_auth.access_token(opener=opener, clock=lambda: NOW) == "access-1"
+    assert len(opener.requests) == 1
+    account = stored_state().account
+    assert account is not None and account.refresh_token == "refresh-1"
 
-    again = Browser(approve)
-    login(again, token_endpoint(again))
-    assert again.query["client_id"] == chatgpt_auth.DYNAMIC_CLIENT
+
+def test_a_failed_refresh_raises_once_the_token_is_nearly_gone() -> None:
+    store_account(expires_at=NOW + 29, earliest_refresh_at=NOW - 1)
+    opener = FakeOpener({f"POST {TOKEN_URL}": http_error(503)})
+    with pytest.raises(ChatGPTAuthError) as raised:
+        chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
+    assert raised.value.code == "request_failed" and not raised.value.needs_sign_in
+
+
+NEW_CLIENT = "app_new_client"
+
+
+def scripted_token_endpoint(browsers: "Browsers", *outcomes: object) -> FakeOpener:
+    """Token responses in turn: an error code string refuses, None issues tokens for the client that asked."""
+    queue = list(outcomes)
+
+    def route(request: urllib.request.Request) -> FakeResponse:
+        outcome = queue.pop(0)
+        if isinstance(outcome, str):
+            return http_error(401 if outcome == "invalid_client" else 400, {"error": outcome})(request)
+        client = form(request)["client_id"]
+        token = id_token(aud=client, nonce=browsers.rounds[-1].query["nonce"])
+        return FakeResponse(body=json.dumps(token_payload(id_token=token)).encode())
+
+    return FakeOpener({f"POST {TOKEN_URL}": route})
+
+
+def issue(query: dict[str, str]) -> list[dict[str, str]]:
+    client = NEW_CLIENT if query["client_id"] == chatgpt_auth.DYNAMIC_CLIENT else query["client_id"]
+    return [{"code": "auth-code", "state": query["state"], "client_id": client}]
+
+
+def test_an_exchange_refused_for_its_client_registers_afresh_within_one_login() -> None:
+    store_account()
+    browsers = Browsers(issue)
+    login(browsers, scripted_token_endpoint(browsers, "invalid_client", None))  # type: ignore[arg-type]
+    first, second = (b.query for b in browsers.rounds)
+    assert first["client_id"] == CLIENT_ID
+    assert second["client_id"] == chatgpt_auth.DYNAMIC_CLIENT and second["agent_name_hint"] == "ytverbatim"
+    assert stored_state().client_id == NEW_CLIENT
+    assert chatgpt_auth.status(clock=lambda: NOW) == "ready"
+
+
+@pytest.mark.parametrize(
+    ("outcomes", "rounds", "code"),
+    [
+        (("invalid_client", "invalid_client"), 2, "invalid_client"),
+        (("invalid_grant", "invalid_grant"), 2, "invalid_grant"),
+        (("invalid_grant", "invalid_client", "invalid_grant"), 3, "invalid_grant"),
+        (("invalid_client", "invalid_grant", "invalid_client"), 3, "invalid_client"),
+    ],
+)
+def test_each_sign_in_fallback_runs_at_most_once(outcomes: tuple[str, ...], rounds: int, code: str) -> None:
+    store_account()
+    browsers = Browsers(issue)
+    with pytest.raises(ChatGPTAuthError) as raised:
+        login(browsers, scripted_token_endpoint(browsers, *outcomes))  # type: ignore[arg-type]
+    assert raised.value.code == code
+    assert len(browsers.rounds) == rounds
+    account = stored_state().account
+    assert account is not None and account.access_token == "access-1", "a failed sign-in keeps the old session"
 
 
 def test_logout_clears_the_tokens_even_when_revocation_fails_unexpectedly() -> None:
