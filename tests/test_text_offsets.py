@@ -69,3 +69,8 @@ def test_a_flag_inside_or_around_a_replacement_takes_its_edges() -> None:
     moved = replace_under_flags((inner, around), [(2, 7, "50%")])
     assert spans("涨了50%分", moved) == ["50%", "了50%分"]
     assert spans("涨了50%分", replace_under_flags((after_only,), [(2, 7, "50%")])) == ["分"]
+
+
+def test_a_decimal_is_one_unit_of_an_edit() -> None:
+    assert changed_runs("收入3.5万美元", "收入3万美元") == [ChangedRun(2, 3, "3.5", "3")]
+    assert changed_runs("成交1,500手", "成交2,500手") == [ChangedRun(2, 7, "1,500", "2,500")]

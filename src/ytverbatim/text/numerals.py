@@ -293,14 +293,15 @@ def _value_preserving(text: str, changes: list[Conversion]) -> list[Conversion]:
     """
     if not changes:
         return changes
-    reference = _readings(text)
-    if _readings(apply(text, changes)) == reference:
+    reference = readings(text)
+    if readings(apply(text, changes)) == reference:
         return changes
-    kept = [change for change in changes if _readings(apply(text, [change])) == reference]
-    return kept if _readings(apply(text, kept)) == reference else []
+    kept = [change for change in changes if readings(apply(text, [change])) == reference]
+    return kept if readings(apply(text, kept)) == reference else []
 
 
-def _readings(text: str) -> list[tuple[str, str]]:
+def readings(text: str) -> list[tuple[str, str]]:
+    """Return the quantities of `text` as (kind, `value_itn`), the way a rewrite must leave them."""
     # A rewritten Chinese numeral is read as a digit number, so those two kinds are one.
     return [
         ("number" if token.kind == "cjk_quantity" else token.kind, token.value_itn)

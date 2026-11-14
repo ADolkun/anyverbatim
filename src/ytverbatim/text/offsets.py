@@ -12,10 +12,11 @@ from difflib import SequenceMatcher
 
 from ytverbatim.contract.models import Flag
 
-# A Latin word or number, a run of spaces, or any other single character (CJK, punctuation). CJK: Extension A, the
-# unified block, the compatibility ideographs, and Extension B onward with the compatibility supplement.
+# A number with its decimal point or thousands separators (3.5, 1,500: an edit to 3.5 is one change), a Latin word or
+# number, a run of spaces, or any other single character (CJK, punctuation). CJK: Extension A, the unified block, the
+# compatibility ideographs, and Extension B onward with the compatibility supplement.
 _CJK = "\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U0003134f"
-_UNIT = re.compile(rf"[^\W_{_CJK}]+|\s+|.", re.DOTALL)
+_UNIT = re.compile(rf"[0-9]+(?:[.,][0-9]+)+|[^\W_{_CJK}]+|\s+|.", re.DOTALL)
 
 
 @dataclass(frozen=True, slots=True)

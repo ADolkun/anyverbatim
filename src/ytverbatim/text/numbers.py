@@ -765,8 +765,8 @@ def _with_range_ends(text: str, found: list[_Quantity], lone: list[tuple[int, in
 
     Only a figure with a value anchors a range, so 第三到五 (an ordinal) and 几到五 stay as they are. Neither does a
     percent or a figure in 万 or 亿, whose unit the lone end shares (百分之三到五, 三到五万): read alone it would be a
-    bare 5, a value nobody said, so it stays no quantity at all. 一 before a date or a time is "as soon as"
-    (一到三月份就涨), unless 从 opens the range.
+    bare 5, a value nobody said, so it stays no quantity at all. 一到 before a date or a time is "as soon as"
+    (一到三月份就涨), unless 从 opens the range; 一至三月 is a range.
     """
     anchors: dict[tuple[str, int], str] = {
         edge: quantity.unit
@@ -779,7 +779,8 @@ def _with_range_ends(text: str, found: list[_Quantity], lone: list[tuple[int, in
         added = False
         for start, end in list(lone):
             right = anchors.get(("start", end + 1)) if text[end : end + 1] in _RANGE_LINKS else None
-            if right in _CALENDAR_UNITS and text[start] == "一" and text[start - 1 : start] != "从":
+            as_soon_as = text[start] == "一" and text[end : end + 1] == "到" and text[start - 1 : start] != "从"
+            if right in _CALENDAR_UNITS and as_soon_as:
                 right = None
             left = text[start - 1 : start] in _RANGE_LINKS and ("end", start - 1) in anchors
             quantity = (
