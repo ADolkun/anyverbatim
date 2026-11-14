@@ -13,6 +13,7 @@ from pipeline_fixture import (
     FakeLLM,
     comparable,
     fixture_files,
+    generate,
     isolated,
     run,
 )
@@ -22,6 +23,10 @@ from ytverbatim.asr import runner as asr_runner
 from ytverbatim.store import STAGES_DIR
 from ytverbatim.ytdlp.types import YtDlpResult
 
+EVENTS = {
+    MIXED: ["fetch", "asr", "second_opinion", "normalize", "punctuate", "correct", "numeric", "numerals", "write"],
+    CAPTIONED: ["fetch", "captions", "normalize", "punctuate", "correct", "numeric", "write"],
+}
 STAGES = {
     MIXED: {"asr", "second_opinion", "normalize", "punctuate", "correct", "numeric", "numerals"},
     CAPTIONED: {"captions", "normalize", "punctuate", "correct", "numeric"},
@@ -83,3 +88,12 @@ def test_rebuilding_the_document_reuses_every_stage_and_reproduces_every_file(ou
     assert llm.requests == []
     assert stage_keys(vdir) == stage_keys(FIXTURE_ROOT / video_id)
     assert files(vdir) == files(FIXTURE_ROOT / video_id)
+
+
+def test_regenerating_computes_every_stage_into_the_committed_keys_and_bytes(tmp_path: Path) -> None:
+    regen = tmp_path / "regen"
+    events = generate(regen)
+    for video_id in (MIXED, CAPTIONED):
+        assert [e.stage for e in events[video_id]] == EVENTS[video_id]
+        assert stage_keys(regen / video_id) == stage_keys(FIXTURE_ROOT / video_id)
+        assert files(regen / video_id) == files(FIXTURE_ROOT / video_id)

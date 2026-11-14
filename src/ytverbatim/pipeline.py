@@ -563,15 +563,16 @@ class _Trace:
 class _Prepared:
     """A source ready to transcribe, whatever it came from.
 
-    `ensure_wav` puts the 16 kHz WAV at `dir / WAV_NAME`, or raises `_Unavailable`; it is called only when a stage
-    still has audio to decode, so a rerun over stored stages needs no audio at all.
+    `ensure_wav` puts the 16 kHz WAV at `dir / WAV_NAME`, or raises an error its adapter handles; it is called only when
+    a stage still has audio to decode, so a rerun over stored stages needs no audio at all. `correction` is read only
+    when correction runs, after any `ensure_wav`, since getting the audio may refresh what the context is made from.
     """
 
     info: SourceInfo
     dir: Path
     language: str | None
     captions: tuple[CaptionTrack, ...]
-    correction: CorrectionContext
+    correction: Callable[[], CorrectionContext]
     ensure_wav: Callable[[], None]
 
     @property
@@ -685,8 +686,9 @@ class _YouTubeRun:
     settings: _Settings
     trace: _Trace
     # The latest successful fetch: the document records its access, and the run's outcome is it.
-    outcome: VideoOutcome | None = None
-    access: Access | None = None
+    fetched: tuple[VideoOutcome, Access] | None = None
+    # Read again after a fetch, which may have refreshed the saved extraction they come from.
+    tags: tuple[str, ...] = ()
 
     @property
     def video_id(self) -> str:
@@ -705,19 +707,16 @@ class _YouTubeRun:
         if not settings.creator_note:
             # A note saved while the option was on must not reach the document or the correction prompt once it is off.
             metadata = replace(metadata, creator_note=None)
-        tags = _tags(self.vdir)
 
         def describe(stretches: Sequence[Stretch]) -> DocumentSource:
-            if self.access is None:
-                raise AssertionError("described before a successful fetch")
-            return DocumentSource(stages.youtube_video(metadata, tags, stretches), self.access)
+            return DocumentSource(stages.youtube_video(metadata, self.tags, stretches), self._latest()[1])
 
         prepared = _Prepared(
             info=SourceInfo(id=self.video_id, chapters=metadata.chapters, describe=describe),
             dir=self.vdir,
             language=metadata.language,
             captions=saved_captions(self.vdir),
-            correction=correction_context(metadata, tags),
+            correction=lambda: correction_context(metadata, self.tags),
             ensure_wav=self._ensure_wav,
         )
         transcription = _Transcription(prepared, settings, self.trace)
@@ -726,7 +725,7 @@ class _YouTubeRun:
         except _Unavailable as exc:
             return VideoResult(exc.outcome)
         return VideoResult(
-            self.outcome or outcome,
+            self._latest()[0],
             document,
             self.vdir / CONTEXT_MD,
             notices=tuple(transcription.notices),
@@ -736,8 +735,14 @@ class _YouTubeRun:
     def _accept(self, outcome: VideoOutcome) -> bool:
         if outcome.status is not VideoStatus.OK or outcome.access is None:
             return False
-        self.outcome, self.access = outcome, outcome.access
+        self.fetched = (outcome, outcome.access)
+        self.tags = _tags(self.vdir)
         return True
+
+    def _latest(self) -> tuple[VideoOutcome, Access]:
+        # `run` prepares the source only after accepting a fetch, and a failed later fetch never clears it.
+        assert self.fetched is not None
+        return self.fetched
 
     def _ensure_wav(self) -> None:
         if (self.vdir / WAV_NAME).is_file():
@@ -932,7 +937,7 @@ class _Transcription:
         llm = self.settings.llm if self.settings.text.correct else None
         if llm is None:
             return _TextResult(stretches=previous.stretches), None
-        context = self.prepared.correction
+        context = self.prepared.correction()
         inputs: dict[str, JsonValue] = {
             "text": _text_key(previous.stretches),
             "llm": self.settings.llm_id,

@@ -1,16 +1,16 @@
 {
   "stage_version": "1+stages-v1",
-  "input_hash": "24c5818d764ae223c436efb4dc7c22169ec636d3fc2ec2fa9454509dd4aef94e",
+  "input_hash": "c3b24807b59c722881261d096602d3eb0a8f6e3881c64fbe587db35330e982a2",
   "output": {
     "run": {
-      "id": "caption_manual:en",
+      "id": "caption_manual:en-US",
       "kind": "caption_manual",
       "engine": null,
       "model_repo": null,
       "model_revision": null,
       "params": {
         "format": "json3",
-        "language": "en"
+        "language": "en-US"
       },
       "vad": null,
       "chunking": null,

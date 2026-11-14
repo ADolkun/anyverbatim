@@ -1,7 +1,7 @@
 {
   "tracks": [
     {
-      "language": "en",
+      "language": "en-US",
       "kind": "manual",
       "format": "json3",
       "word_timings": false,

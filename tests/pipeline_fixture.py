@@ -11,13 +11,13 @@ import os
 import shutil
 import sys
 import tempfile
-from collections.abc import Generator, Iterator, Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
-from ytverbatim import config, proc
+from ytverbatim import config, proc, stages
 from ytverbatim.asr import registry
 from ytverbatim.asr import runner as asr_runner
 from ytverbatim.asr.models import (
@@ -32,7 +32,7 @@ from ytverbatim.asr.runner import WorkerResult
 from ytverbatim.asr.worker import _claim_output as claim_output
 from ytverbatim.contract import Word
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
-from ytverbatim.pipeline import VideoResult, process_many
+from ytverbatim.pipeline import ProgressEvent, VideoResult, process_many
 from ytverbatim.store import LOCK_NAME
 from ytverbatim.ytdlp import jsruntime, version
 from ytverbatim.ytdlp.types import YtDlpResult, YtDlpRunner
@@ -42,6 +42,8 @@ NOW = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
 DURATION = 40.0
 # The fixture's worker folders hold this WAV path in place of the temporary one they were made with.
 PLACEHOLDER_WAV = "/fixture/audio.wav"
+# `generator.version` in context.json: the package's own would change the fixture with every release.
+GENERATOR_VERSION = "0.0.0-fixture"
 
 # Mandarin with English terms, decoded by ASR: the run with a second opinion, a creator note, chapters and tags.
 MIXED = "fxMixZhEn01"
@@ -84,7 +86,8 @@ def _json3(phrases: Sequence[str], starts_ms: Sequence[int]) -> str:
 _TRACKS: Mapping[str, Mapping[str, str]] = {
     MIXED: {"zh-orig": _json3(MIXED_AUTO_PHRASES, (0, 5000, 10000, 20000))},
     CAPTIONED: {
-        "en": _json3(CAPTIONED_MANUAL, (0, 6000, 12000)),
+        # A regional track under a bare declared language: the transcript's language must come from the declaration.
+        "en-US": _json3(CAPTIONED_MANUAL, (0, 6000, 12000)),
         "en-orig": _json3(CAPTIONED_MANUAL, (0, 6000, 12000)),
     },
 }
@@ -257,7 +260,7 @@ def _punctuated(text: str) -> str:
 
 
 @contextlib.contextmanager
-def isolated(home: Path) -> Iterator[None]:
+def isolated(home: Path) -> Generator[None]:
     """Point every config, state and auth location at `home`, so no real setting or cooldown leaks in."""
     names = ("HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "YTVERBATIM_HOME", "YTVERBATIM_AUTH")
     saved = {name: os.environ.get(name) for name in names}
@@ -269,6 +272,7 @@ def isolated(home: Path) -> Iterator[None]:
             mock.patch.object(version, "installed", lambda: version.YtDlpVersion("2099.01.01", NOW.date())),
             mock.patch.object(jsruntime, "detect", lambda: jsruntime.JsRuntime("deno", (), None)),
             mock.patch.object(registry, "find_spec", lambda _name: object()),
+            mock.patch.object(stages, "__version__", GENERATOR_VERSION),
         ):
             yield
     finally:
@@ -279,8 +283,11 @@ def isolated(home: Path) -> Iterator[None]:
                 os.environ[name] = value
 
 
-def run(video_id: str, out: Path, llm: FakeLLM, yt: YtDlpRunner) -> VideoResult:
+def run(
+    video_id: str, out: Path, llm: FakeLLM, yt: YtDlpRunner, progress: list[ProgressEvent] | None = None
+) -> VideoResult:
     results: list[VideoResult] = []
+    events: list[ProgressEvent] = [] if progress is None else progress
     process_many(
         [video_id],
         options(video_id),
@@ -290,6 +297,7 @@ def run(video_id: str, out: Path, llm: FakeLLM, yt: YtDlpRunner) -> VideoResult:
         sleep=lambda _s: None,
         clock=lambda: NOW,
         on_video=results.append,
+        progress=events.append,
     )
     (result,) = results
     return result
@@ -314,7 +322,9 @@ def comparable(path: Path) -> bytes:
     return without_wav_path(path) if path.name == FINGERPRINT_FILE else path.read_bytes()
 
 
-def generate(target: Path) -> None:
+def generate(target: Path) -> dict[str, list[ProgressEvent]]:
+    """Write the fixture to `target`; return each video's progress events."""
+    events: dict[str, list[ProgressEvent]] = {}
     with tempfile.TemporaryDirectory() as tmp:
         home = Path(tmp) / "home"
         home.mkdir()
@@ -323,7 +333,7 @@ def generate(target: Path) -> None:
             worker = FakeWorker()
             with mock.patch.object(asr_runner, "run_worker", worker):
                 for video_id in (MIXED, CAPTIONED):
-                    result = run(video_id, out, FakeLLM(), FakeYtDlp())
+                    result = run(video_id, out, FakeLLM(), FakeYtDlp(), events.setdefault(video_id, []))
                     if result.document is None:
                         raise SystemExit(f"{video_id} failed: {result.outcome}")
         shutil.rmtree(target, ignore_errors=True)
@@ -336,6 +346,7 @@ def generate(target: Path) -> None:
         leaked = [p for p in target.rglob("*") if p.is_file() and tmp.encode() in p.read_bytes()]
         if leaked:
             raise SystemExit(f"temporary paths leaked into {leaked}")
+    return events
 
 
 if __name__ == "__main__":
