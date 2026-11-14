@@ -61,7 +61,7 @@ from ytverbatim import atomic, config
 from ytverbatim.asr import registry
 from ytverbatim.asr.runner import memory_cap_bytes
 from ytverbatim.errors import ConfigError, YtverbatimError
-from ytverbatim.llm import ClaudeCLIClient, apply_spec, claude_cli, client_from_options
+from ytverbatim.llm import ClaudeCLIClient, apply_spec, check_ready, claude_cli, client_from_options
 from ytverbatim.llm.protocol import LLMClient, Readiness
 
 DEFAULT_PUNCTUATION_LLM = "claude-cli:claude-sonnet-5-5"
@@ -121,11 +121,20 @@ def external_client(candidate: Candidate) -> LLMClient:
     return client
 
 
+def native_client(candidate: Candidate) -> LLMClient:
+    """Build a candidate served by one of ytverbatim's own providers, refusing early when it is not ready."""
+    options = config.LLMOptions(provider=candidate.provider or "none", model=candidate.model, effort=candidate.effort)
+    check_ready(options)
+    return client_from_options(options)
+
+
 def open_client(store: Layout, candidate: Candidate, cache: Path) -> AbstractContextManager[LLMClient]:
     if candidate.local:
         click.echo(f"{candidate.id}: starting the local server (waits for the MLX worker lock if another one is held)")
         cap = memory_cap_bytes(config.load_options().asr.memory_cap_gib)
         return local_server(candidate, cache, run_dir(store, candidate), memory_cap=cap)
+    if candidate.provider is not None:
+        return contextlib.nullcontext(native_client(candidate))
     if candidate.external:
         return contextlib.nullcontext(external_client(candidate))
     _require_ready(claude_cli.readiness())
