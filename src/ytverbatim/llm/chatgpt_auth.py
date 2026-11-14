@@ -74,12 +74,15 @@ _KNOWN_ERRORS = _TERMINAL_REFRESH_ERRORS | {"invalid_client", "access_denied"}
 # Failures only a new browser sign-in can mend; a network error, a refused request or an early refresh never count.
 _NEEDS_SIGN_IN = _TERMINAL_REFRESH_ERRORS | {"not_signed_in", "expired", "plan_disabled", "invalid_client"}
 
-Status = Literal["signed_out", "no_plan", "ready", "refreshable", "expired"]
+Status = Literal["signed_out", "no_plan", "ready", "refreshable", "refused", "expired"]
 STATUS_DETAIL: dict[Status, str] = {
     "signed_out": f"not signed in; run `{LOGIN_COMMAND}`",
     "no_plan": f"signed in without ChatGPT plan permission; run `{LOGIN_COMMAND}` and grant it",
     "ready": "signed in with ChatGPT plan permission",
     "refreshable": "signed in with ChatGPT plan permission; the access token renews on the next call",
+    "refused": (
+        f"OpenAI refused to renew the ChatGPT sign-in, which works only until its token expires; run `{LOGIN_COMMAND}`"
+    ),
     "expired": f"the ChatGPT sign-in expired; run `{LOGIN_COMMAND}`",
 }
 
@@ -105,6 +108,12 @@ class Account:
     scopes: tuple[str, ...] = ()
     expires_at: float = 0.0
     earliest_refresh_at: float = 0.0
+    # Set when OpenAI terminally refused the refresh token. The tokens stay, since only a sign-in or a logout changes
+    # the stored session, but the refused token is not sent again and the account needs a new sign-in.
+    refresh_refused: bool = False
+
+    def renewable(self, *, registered: bool) -> bool:
+        return bool(self.refresh_token) and registered and not self.refresh_refused
 
     def status(self, now: float, *, registered: bool = True) -> Status:
         """Classify the account; without `registered` (OpenAI dropped the client) the token works but cannot renew."""
@@ -112,11 +121,12 @@ class Account:
             return "signed_out"
         if PLAN_SCOPE not in self.scopes:
             return "no_plan"
-        if self.expires_at > now + _REFRESH_MARGIN_S:
-            return "ready"
-        if self.refresh_token and registered:
-            return "refreshable"
-        return "ready" if self.usable(now) else "expired"
+        if not self.renewable(registered=registered):
+            if not self.usable(now):
+                return "expired"
+            # A dead registration is mended by the next sign-in on its own; a refused refresh token is not.
+            return "refused" if self.refresh_refused else "ready"
+        return "ready" if self.expires_at > now + _REFRESH_MARGIN_S else "refreshable"
 
     def usable(self, now: float) -> bool:
         return self.expires_at > now + _USABLE_MARGIN_S
@@ -126,6 +136,8 @@ class Account:
 
         Refresh tokens rotate, so renewing as early as allowed keeps the chain as fresh as each use permits.
         """
+        if self.refresh_refused:
+            return False
         opened = self.earliest_refresh_at > 0 and now >= self.earliest_refresh_at
         return opened or self.expires_at <= now + _REFRESH_MARGIN_S
 
@@ -262,33 +274,36 @@ def access_token(*, opener: Opener = https_open, clock: Callable[[], float] = ti
         if PLAN_SCOPE not in account.scopes:
             raise ChatGPTAuthError(STATUS_DETAIL["no_plan"], code="plan_disabled")
         now = clock()
-        if not account.refresh_due(now):
-            return account.access_token
-        if now < account.earliest_refresh_at:
-            if account.expires_at > now:
-                return account.access_token
-            raise ChatGPTAuthError("the ChatGPT token cannot be refreshed yet; retry later", code="refresh_not_yet")
-        if not account.refresh_token or state.client_id is None:
+        client_id = state.client_id
+        if client_id is None or not account.renewable(registered=True):
             if account.usable(now):
                 return account.access_token
             raise ChatGPTAuthError(STATUS_DETAIL["expired"], code="expired")
+        if not account.refresh_due(now):
+            return account.access_token
+        if now < account.earliest_refresh_at:
+            if account.usable(now):
+                return account.access_token
+            raise ChatGPTAuthError("the ChatGPT token cannot be refreshed yet; retry later", code="refresh_not_yet")
         try:
             payload = _post_form(
                 TOKEN_URL,
                 {
                     "grant_type": "refresh_token",
-                    "client_id": state.client_id,
+                    "client_id": client_id,
                     "refresh_token": account.refresh_token,
                     "resource": RESOURCE,
                 },
                 opener,
             )
-            renewed = _credentials(payload, state.client_id, clock(), previous=account)
+            renewed = _credentials(payload, client_id, clock(), previous=account)
         except ChatGPTAuthError as exc:
             # The stored sign-in is never cleared here: only a new sign-in or an explicit logout changes it. A dead
             # registration is forgotten so the next sign-in registers afresh, and the account and tokens stay.
             if exc.code == "invalid_client":
                 _save(_unregistered(state))
+            elif exc.code in _TERMINAL_REFRESH_ERRORS:
+                _save(replace(state, account=replace(account, refresh_refused=True)))
             # Refresh starts minutes before expiry, so a failed one leaves a token that still works for now.
             if account.usable(clock()):
                 return account.access_token
@@ -299,7 +314,7 @@ def access_token(*, opener: Opener = https_open, clock: Callable[[], float] = ti
     return renewed.access_token
 
 
-Revocation = Literal["confirmed", "unconfirmed", "no_refresh_token", "not_signed_in"]
+Revocation = Literal["confirmed", "unconfirmed", "no_refresh_token", "unregistered", "not_signed_in"]
 
 
 def logout(*, opener: Opener = https_open) -> Revocation:
@@ -311,7 +326,7 @@ def logout(*, opener: Opener = https_open) -> Revocation:
         account = state.account
         if account is None or not account.access_token:
             return "not_signed_in"
-        outcome: Revocation = "no_refresh_token"
+        outcome: Revocation = "no_refresh_token" if not account.refresh_token else "unregistered"
         try:
             if account.refresh_token and state.client_id is not None:
                 try:
@@ -417,6 +432,7 @@ def _save(state: State) -> None:
             "scopes": list(account.scopes),
             "expires_at": account.expires_at,
             "earliest_refresh_at": account.earliest_refresh_at,
+            "refresh_refused": account.refresh_refused,
         },
     }
     root = paths.chatgpt_auth_dir()
@@ -455,6 +471,7 @@ def _decode(value: object) -> State:
         scopes=tuple(cast("list[str]", scopes)),
         expires_at=_number(fields, "expires_at"),
         earliest_refresh_at=_number(fields, "earliest_refresh_at"),
+        refresh_refused=_flag(fields, "refresh_refused"),
     )
     return State(host_id, client_id, account)
 
@@ -464,6 +481,14 @@ def _string(value: dict[str, object], key: str, *, allow_empty: bool = False) ->
     if not isinstance(result, str) or (not allow_empty and not result):
         raise ValueError(key)
     return result
+
+
+def _flag(value: dict[str, object], key: str) -> bool:
+    """Read an optional boolean; a store written before the field existed lacks it, which reads as false."""
+    flag = value.get(key, False)
+    if not isinstance(flag, bool):
+        raise ValueError(key)
+    return flag
 
 
 def _number(value: dict[str, object], key: str) -> float:
@@ -603,6 +628,9 @@ def _credentials(
         if not isinstance(email, str) or not email.isprintable():
             raise ValueError("email")
         earliest = _number(payload, "earliest_refresh_at") if "earliest_refresh_at" in payload else 0.0
+        # A window that does not open between issue and expiry is meaningless; refresh then follows expiry alone.
+        if not now < earliest < now + expires_in:
+            earliest = 0.0
     except (ValueError, TypeError):
         raise ChatGPTAuthError(
             "OpenAI returned unusable credentials; the stored sign-in was kept", code="invalid_credentials"

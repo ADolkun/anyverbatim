@@ -151,6 +151,7 @@ def test_chatgpt_options_it_would_ignore_are_rejected(options: LLMOptions, messa
         ({}, "not signed in"),
         ({"scopes": ("openid", "offline_access")}, "without ChatGPT plan permission"),
         ({"expires_at": time.time() - 1, "refresh": ""}, "expired"),
+        ({"refresh_refused": True}, "refused to renew"),
     ],
 )
 def test_check_ready_for_chatgpt_names_login_and_llm_none(
