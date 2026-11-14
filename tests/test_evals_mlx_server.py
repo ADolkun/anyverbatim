@@ -13,8 +13,8 @@ import pytest
 from test_proc import _gone
 
 from evals import mlx_server
-from ytverbatim.asr.worker import MLX_LIMIT_FRACTION
 from ytverbatim.errors import DependencyError
+from ytverbatim.mlx_worker import MLX_LIMIT_FRACTION
 
 CAP = 12 << 30
 

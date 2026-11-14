@@ -4,32 +4,25 @@ Everything that needs MLX happens here, never in the parent. `-P` keeps the work
 checkout in the current directory cannot shadow the installed package.
 """
 
-import importlib
-import json
 import math
-import os
 import resource
 import sys
 import time
-import traceback
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
 
-from ytverbatim import atomic, sysmem
+from ytverbatim import atomic, mlx_worker
 from ytverbatim.asr.audio import Audio, frame_energy, load_wav
 from ytverbatim.asr.chunks import Chunk, plan_chunks
 from ytverbatim.asr.guard import QualityGuard
 from ytverbatim.asr.models import (
     ERROR_FILE,
-    FINGERPRINT_FILE,
     HYPOTHESES_FILE,
     METRICS_FILE,
     ChunkHypothesis,
     FileJob,
     RunMetrics,
-    WorkerError,
     WorkerRequest,
 )
 from ytverbatim.asr.protocol import (
@@ -46,16 +39,9 @@ from ytverbatim.asr.registry import build_engine
 from ytverbatim.asr.vad import speech_regions
 from ytverbatim.contract.models import Word
 from ytverbatim.errors import EngineError
+from ytverbatim.mlx_worker import MlxAllocator, bound_allocator
 
-EXIT_FAILED = 1
-EXIT_BAD_REQUEST = 2
 _PLAN_TOLERANCE_S = 1e-3
-# Measured on f-aed: a 1 or 2 GiB freed-buffer cache decoded no faster than none (about 9.6-9.8 s per chunk either
-# way) and only added its own size to the footprint.
-CACHE_LIMIT_BYTES = 0
-# The process footprint always exceeds MLX's own active memory (Python, weights being read, Metal bookkeeping), so a
-# limit equal to the cap would never come into play before the parent kills the worker.
-MLX_LIMIT_FRACTION = 0.85
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,16 +51,6 @@ class DecodeUnit:
     chunk: Chunk
     language: str | None = None
     language_prob: float | None = None
-
-
-class _MlxCore(Protocol):
-    def get_peak_memory(self) -> int: ...
-
-
-class MlxAllocator(Protocol):
-    def set_memory_limit(self, limit: int) -> int: ...
-    def set_cache_limit(self, limit: int) -> int: ...
-    def clear_cache(self) -> None: ...
 
 
 def run_request(
@@ -137,9 +113,9 @@ def run_request(
         load_s=session.load_s,
         decode_s=session.decode_s,
         audio_s=audio_s,
-        peak_memory_bytes=_peak_memory_bytes(),
+        peak_memory_bytes=mlx_worker.peak_memory_bytes(),
         max_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
-        peak_footprint_bytes=_peak_footprint_bytes(),
+        peak_footprint_bytes=mlx_worker.peak_footprint_bytes(),
     )
     atomic.write_json(out / METRICS_FILE, metrics.model_dump(mode="json"))
     return metrics
@@ -320,29 +296,9 @@ def default_guard(request: WorkerRequest) -> Guard | None:
 
 
 def _claim_output(out: Path, request: WorkerRequest) -> None:
-    """Record which request this output directory belongs to, or refuse to resume one that belongs to another."""
-    path = out / FINGERPRINT_FILE
-    current = request.fingerprint()
-    if not path.exists():
-        hypotheses = out / HYPOTHESES_FILE
-        if hypotheses.exists() and hypotheses.stat().st_size > 0:
-            raise EngineError(
-                f"{out} holds {HYPOTHESES_FILE} but no {FINGERPRINT_FILE}, so what produced it is unknown; use a fresh "
-                "output directory"
-            )
-        atomic.write_json(path, current)
-        return
-    try:
-        stored: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise EngineError(f"{path} is unreadable: {exc}") from exc
-    if stored != current:
-        known = stored if isinstance(stored, dict) else {}
-        changed = sorted(key for key in current.keys() | known.keys() if current.get(key) != known.get(key))
-        raise EngineError(
-            f"{out} holds output of a different request ({', '.join(changed) or 'format'} changed); resuming would "
-            "mix the two, so use a fresh output directory"
-        )
+    hypotheses = out / HYPOTHESES_FILE
+    existing = HYPOTHESES_FILE if hypotheses.exists() and hypotheses.stat().st_size > 0 else None
+    mlx_worker.claim_output(out, request.fingerprint(), existing=existing)
 
 
 def _read_done(path: Path, hypothesis: str) -> dict[tuple[str, int], ChunkHypothesis]:
@@ -377,63 +333,14 @@ def _require_same_chunk(existing: ChunkHypothesis, chunk: Chunk) -> None:
         )
 
 
-def bound_allocator(
-    mlx: MlxAllocator, memory_cap_bytes: int | None, *, cache_limit_bytes: int = CACHE_LIMIT_BYTES
-) -> None:
-    """Keep MLX's freed-buffer cache small and steer its scheduling under the cap.
-
-    MLX defaults both limits to about the whole of RAM, so without this the cache alone can grow until the machine
-    stops. The memory limit is a soft scheduling guideline: past it MLX waits for queued work to finish before it
-    allocates more, but it still allocates. The parent's watch is the hard stop.
-    """
-    mlx.set_cache_limit(cache_limit_bytes)
-    if memory_cap_bytes is not None:
-        mlx.set_memory_limit(int(memory_cap_bytes * MLX_LIMIT_FRACTION))
-
-
-def _mlx_allocator() -> MlxAllocator | None:
-    # Without MLX installed no engine can allocate through it, and the engine's own load reports the missing extra.
-    try:
-        return cast(MlxAllocator, importlib.import_module("mlx.core"))
-    except ImportError:
-        return None
-
-
-def _peak_footprint_bytes() -> int | None:
-    sample = sysmem.footprint(os.getpid())
-    return None if sample is None else sample.peak
-
-
-def _peak_memory_bytes() -> int | None:
-    # The module is loaded only where MLX is installed and `main` bounded it or an engine used it; importing it here
-    # would fail an in-process run without MLX, which has no peak to report.
-    core = sys.modules.get("mlx.core")
-    return None if core is None else cast(_MlxCore, core).get_peak_memory()
-
-
 def main(argv: Sequence[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    if len(args) != 1:
-        print("usage: python -P -m ytverbatim.asr.worker REQUEST.json", file=sys.stderr)
-        return EXIT_BAD_REQUEST
-    try:
-        request = WorkerRequest.model_validate_json(Path(args[0]).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        print(f"invalid worker request: {exc}", file=sys.stderr)
-        return EXIT_BAD_REQUEST
-    if request.hf_hub_cache is not None:
-        # huggingface_hub reads this when it is first imported, which only happens inside an adapter.
-        os.environ["HF_HUB_CACHE"] = request.hf_hub_cache
-    try:
-        run_request(request, guard=default_guard(request), mlx=_mlx_allocator())
-    except Exception as exc:
-        error = WorkerError(type=type(exc).__name__, message=str(exc), traceback=traceback.format_exc())
-        out = Path(request.out_dir)
-        out.mkdir(parents=True, exist_ok=True)
-        atomic.write_json(out / ERROR_FILE, error.model_dump(mode="json"))
-        print(f"{error.type}: {error.message}", file=sys.stderr)
-        return EXIT_FAILED
-    return 0
+    return mlx_worker.run_child(
+        argv,
+        module="ytverbatim.asr.worker",
+        noun="worker",
+        parse=WorkerRequest.model_validate_json,
+        run_request=lambda request: run_request(request, guard=default_guard(request), mlx=mlx_worker.mlx_allocator()),
+    )
 
 
 if __name__ == "__main__":

@@ -8,11 +8,12 @@ from ytverbatim import store
 from ytverbatim.asr import registry, worker
 from ytverbatim.asr.chunks import Chunk
 from ytverbatim.asr.guard import QualityGuard
-from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, FileJob, WorkerRequest, without_wav
+from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, FileJob, WorkerRequest
 from ytverbatim.asr.protocol import AsrContext, EngineDef, RawChunk
 from ytverbatim.asr.worker import DecodeUnit, pick_language, plan_runs
 from ytverbatim.contract.models import Word
 from ytverbatim.errors import EngineError
+from ytverbatim.mlx_worker import without_wav
 
 ZH = {"zh": 0.6, "en": 0.3, "ja": 0.1}
 EN = {"zh": 0.2, "en": 0.7, "ja": 0.1}

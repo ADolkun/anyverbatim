@@ -32,7 +32,6 @@ from evals.manifest import Manifest
 from evals.store import Layout, write_rows
 from ytverbatim import paths, pipeline, stages
 from ytverbatim.acquire.metadata import trim_info
-from ytverbatim.asr.runner import worker_lock
 from ytverbatim.contract.models import Flag
 from ytverbatim.errors import (
     ConfigError,
@@ -44,6 +43,7 @@ from ytverbatim.errors import (
 )
 from ytverbatim.llm import ClaudeCLIClient
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Readiness, Usage
+from ytverbatim.mlx_worker import mlx_lock
 from ytverbatim.text import correct as correct_module
 from ytverbatim.text import punctuate as punctuate_module
 from ytverbatim.text.correct import CorrectionContext, CorrectionResult
@@ -630,7 +630,7 @@ def test_the_worker_lock_is_not_shared_with_a_second_holder(rig: Rig) -> None:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         finally:
             os.close(fd)
-    with worker_lock():
+    with mlx_lock():
         pass
 
 

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from fake_engine import definition, write_silence
 
-from ytverbatim import config, paths, proc
+from ytverbatim import config, mlx_worker, paths, proc
 from ytverbatim.asr import runner
 from ytverbatim.asr.chunks import Chunk
 from ytverbatim.asr.models import (
@@ -47,7 +47,7 @@ def make_request(tmp_path: Path, *, seconds: float = 6.0, **variant: object) -> 
 
 
 def test_worker_argv_isolates_the_working_directory() -> None:
-    argv = runner.worker_argv(Path("/tmp/req.json"))
+    argv = mlx_worker.worker_argv(runner.WORKER_MODULE, Path("/tmp/req.json"))
     assert argv == [sys.executable, "-P", "-m", "ytverbatim.asr.worker", "/tmp/req.json"]
 
 
@@ -135,11 +135,35 @@ def test_the_request_is_written_only_once_the_lock_is_held(tmp_path: Path, monke
         seen.append(request_path.exists())
         return proc.ProcResult(1, "", "", 0.0)
 
-    monkeypatch.setattr(runner, "worker_lock", spy_lock)
-    monkeypatch.setattr(runner.proc, "run", fake_run)
+    monkeypatch.setattr(mlx_worker, "mlx_lock", spy_lock)
+    monkeypatch.setattr(proc, "run", fake_run)
     with pytest.raises(EngineError):
         runner.run_worker(request)
     assert seen == [False, True]
+
+
+def test_the_worker_runs_in_its_output_folder_given_an_absolute_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(argv: list[str], *, cwd: Path, **_: object) -> proc.ProcResult:
+        seen["cwd"] = cwd
+        return proc.ProcResult(1, "", "", 0.0)
+
+    monkeypatch.setattr(proc, "run", fake_run)
+    monkeypatch.chdir(tmp_path)
+    absolute = make_request(tmp_path)
+    job = absolute.files[0].model_copy(update={"wav": "-dash.wav"})
+    relative = absolute.model_copy(update={"out_dir": "out", "files": (job,), "hf_hub_cache": "hub"})
+    with pytest.raises(EngineError):
+        runner.run_worker(relative)
+    assert seen["cwd"] == tmp_path / "out"
+    written = WorkerRequest.model_validate_json((tmp_path / "out" / REQUEST_FILE).read_text(encoding="utf-8"))
+    assert written.out_dir == str(tmp_path / "out")
+    assert written.hf_hub_cache == str(tmp_path / "hub")
+    assert [job.wav for job in written.files] == [str(tmp_path / "-dash.wav")]
+    assert written.fingerprint() == absolute.fingerprint()
 
 
 def test_a_worker_that_dies_without_a_report_still_raises(tmp_path: Path) -> None:
@@ -159,14 +183,14 @@ def test_a_clean_exit_without_metrics_raises(tmp_path: Path) -> None:
 
 
 def test_timeout_is_three_times_the_audio_plus_half_an_hour(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    assert runner.timeout_s(100.0) == 2100.0
+    assert mlx_worker.timeout_s(100.0) == 2100.0
     seen: list[float] = []
 
     def fake_run(argv: list[str], *, timeout_s: float, **_: object) -> proc.ProcResult:
         seen.append(timeout_s)
         return proc.ProcResult(1, "", "", 0.0)
 
-    monkeypatch.setattr(runner.proc, "run", fake_run)
+    monkeypatch.setattr(proc, "run", fake_run)
     with pytest.raises(EngineError):
         runner.run_worker(make_request(tmp_path, seconds=10.0))
     assert seen == [pytest.approx(3 * 10.0 + 1800.0)]
@@ -184,7 +208,7 @@ def test_every_worker_runs_under_a_memory_watch_defaulting_to_half_the_ram(
         watches.append(memory_watch)
         return proc.ProcResult(1, "", "", 0.0)
 
-    monkeypatch.setattr(runner.proc, "run", fake_run)
+    monkeypatch.setattr(proc, "run", fake_run)
     monkeypatch.setattr(runner.sysmem, "physical_memory_bytes", lambda: 24 * GIB)
     with pytest.raises(EngineError):
         runner.run_worker(make_request(tmp_path))
@@ -212,7 +236,7 @@ def test_a_memory_kill_becomes_an_engine_memory_error_with_the_fix(
             floor_percent=10,
         )
 
-    monkeypatch.setattr(runner.proc, "run", fake_run)
+    monkeypatch.setattr(proc, "run", fake_run)
     with pytest.raises(EngineMemoryError) as caught:
         runner.run_worker(make_request(tmp_path))
     assert caught.value.trigger == trigger
@@ -266,32 +290,32 @@ def test_an_unreadable_wav_is_refused_before_spawning(tmp_path: Path) -> None:
 
 
 def test_the_lock_is_exclusive_while_held() -> None:
-    with runner.worker_lock():
-        other = os.open(paths.locks_dir() / runner.LOCK_NAME, os.O_RDWR)
+    with mlx_worker.mlx_lock():
+        other = os.open(paths.locks_dir() / mlx_worker.LOCK_NAME, os.O_RDWR)
         try:
             with pytest.raises(BlockingIOError):
                 fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
         finally:
             os.close(other)
-    with runner.worker_lock():
+    with mlx_worker.mlx_lock():
         pass
 
 
 def test_a_waiting_worker_says_so_and_proceeds_when_the_lock_frees(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.INFO, logger=runner.log.name)
+    caplog.set_level(logging.INFO, logger=mlx_worker.log.name)
     entered = threading.Event()
 
     def contend() -> None:
-        with runner.worker_lock():
+        with mlx_worker.mlx_lock():
             entered.set()
 
-    with runner.worker_lock():
+    with mlx_worker.mlx_lock():
         thread = threading.Thread(target=contend)
         thread.start()
         assert not entered.wait(0.3)
     thread.join(timeout=10)
     assert entered.is_set()
-    assert "waiting for another ASR worker" in caplog.text
+    assert "waiting for another MLX worker" in caplog.text
 
 
 def test_the_parent_imports_neither_mlx_nor_numpy_nor_an_engine_adapter() -> None:
