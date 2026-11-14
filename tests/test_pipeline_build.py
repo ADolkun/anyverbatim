@@ -14,7 +14,7 @@ from ytverbatim.asr.protocol import ChunkFlag
 from ytverbatim.contract import Access, ContextDocument, Word, dump_document, load_document
 from ytverbatim.errors import ContractError
 from ytverbatim.render import render_markdown
-from ytverbatim.stages import build_document, from_asr_rows
+from ytverbatim.stages import DocumentSource, SourceInfo, Stretch, build_document, from_asr_rows, youtube_video
 
 ACCESS = Access(
     auth_source="none",
@@ -88,11 +88,13 @@ def build(
     meta: VideoMetadata | None = None,
 ) -> ContextDocument:
     meta = meta or metadata()
-    source = from_asr_rows(rows, registry.get(engine), meta)
+    source = from_asr_rows(rows, registry.get(engine), meta.language)
+
+    def describe(stretches: Sequence[Stretch]) -> DocumentSource:
+        return DocumentSource(youtube_video(meta, ("synthetic",), stretches), ACCESS)
+
     return build_document(
-        metadata=meta,
-        tags=("synthetic",),
-        access=ACCESS,
+        info=SourceInfo(meta.video_id, meta.chapters, describe),
         source=source,
         stretches=source.stretches,
         chapters=chapters,

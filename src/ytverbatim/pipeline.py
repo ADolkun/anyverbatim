@@ -6,6 +6,9 @@ numerals (Mandarin only) → segment, chapters and assemble (`stages.build_docum
 numerals is checkpointed in the video's `StageStore`, keyed by what it read, so a rerun with changed options
 recomputes only the stages those options reach, and an interrupted run resumes where it stopped. The 16 kHz WAV is
 deleted once the ASR output is stored; the compressed audio stays.
+
+`_YouTubeRun` is the YouTube adapter: it fetches, then hands a `_Prepared` source to `_Transcription`, which runs
+everything from asr to the written files and knows nothing of where the source came from.
 """
 
 import hashlib
@@ -43,7 +46,7 @@ from ytverbatim.asr.models import METRICS_FILE, ChunkHypothesis, FileJob, Worker
 from ytverbatim.asr.protocol import EngineDef
 from ytverbatim.auth.cooldown import utcnow
 from ytverbatim.auth.source import CookieSource, resolve_source
-from ytverbatim.contract import ContextDocument, LLMUsage, dump_document, load_document
+from ytverbatim.contract import Access, ContextDocument, LLMUsage, dump_document, load_document
 from ytverbatim.errors import (
     BatchStopError,
     BusyError,
@@ -61,7 +64,15 @@ from ytverbatim.llm import check_ready, client_from_options
 from ytverbatim.llm.protocol import LLMClient
 from ytverbatim.mlx_worker import without_wav
 from ytverbatim.render import render_markdown
-from ytverbatim.stages import Stretch, Transcribed, build_document, stretch_flag, with_results
+from ytverbatim.stages import (
+    DocumentSource,
+    SourceInfo,
+    Stretch,
+    Transcribed,
+    build_document,
+    stretch_flag,
+    with_results,
+)
 from ytverbatim.store import StageStore, input_hash
 from ytverbatim.store import lock as video_lock
 from ytverbatim.text import clean, guards, numbers, numerals, numeric
@@ -466,7 +477,7 @@ def _run_video(session: FetchSession, planned: PlannedVideo, settings: _Settings
                 return VideoResult(outcome, document, vdir / CONTEXT_MD, timings=timings)
             if settings.force:
                 StageStore(vdir).clear()
-            return _VideoRun(session, planned, vdir, settings).run()
+            return _YouTubeRun(session, planned, vdir, settings, _Trace(video_id, settings.emit)).run()
     except (BatchStopError, DependencyError, EngineMemoryError):
         raise
     except (YtverbatimError, ValueError, OSError) as exc:
@@ -528,62 +539,272 @@ class _Opinion(BaseModel):
     opinion: numeric.SecondOpinion | None
 
 
+class _Unavailable(Exception):  # noqa: N818
+    """The source could not give the audio a stage still needs; `outcome` is the adapter's record of why."""
+
+    def __init__(self, outcome: VideoOutcome) -> None:
+        super().__init__(outcome.video_id)
+        self.outcome = outcome
+
+
 @dataclass
-class _VideoRun:
+class _Trace:
+    """One source's progress events and stage timings, shared by its adapter and its transcription."""
+
+    source_id: str
+    emit_event: Callable[[ProgressEvent], None]
+    timings: list[StageTiming] = field(default_factory=list[StageTiming])
+
+    def emit(self, stage: str, detail: str = "") -> None:
+        self.emit_event(ProgressEvent(self.source_id, stage, detail))
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """A source ready to transcribe, whatever it came from.
+
+    `ensure_wav` puts the 16 kHz WAV at `dir / WAV_NAME`, or raises `_Unavailable`; it is called only when a stage
+    still has audio to decode, so a rerun over stored stages needs no audio at all.
+    """
+
+    info: SourceInfo
+    dir: Path
+    language: str | None
+    captions: tuple[CaptionTrack, ...]
+    correction: CorrectionContext
+    ensure_wav: Callable[[], None]
+
+    @property
+    def id(self) -> str:
+        return self.info.id
+
+
+def _key(stage: str, inputs: dict[str, JsonValue]) -> str:
+    return input_hash(stage, stage_versions()[stage], inputs)
+
+
+@dataclass(frozen=True)
+class _Decoding:
+    """The worker requests a source's audio would be decoded with, and whether their output is stored already.
+
+    Separate from `_Transcription`, because an adapter asks `needs_audio` before it has prepared the source: the YouTube
+    adapter then fetches the audio in the same request as the metadata.
+    """
+
+    settings: _Settings
+    source_id: str
+    dir: Path
+    language: str | None
+
+    @property
+    def store(self) -> StageStore:
+        return StageStore(self.dir)
+
+    def placed(self, stage: str, request: WorkerRequest) -> WorkerRequest:
+        """Point `request` at its worker folder in `stage`'s working directory.
+
+        The folder is keyed by what the decode depends on and never by a stage version: a change to what the pipeline
+        makes of the rows must not decode the audio again. The worker refuses a folder holding another request's
+        output, and an interrupted run of the same request resumes in the same folder.
+        """
+        decode = without_wav(request.fingerprint())
+        out_dir = self.store.work_dir(stage) / request.engine.spec.id / store.digest(decode)[:16]
+        _adopt(out_dir, decode)
+        placed = request.model_copy(update={"out_dir": str(out_dir)})
+        asr_runner.follow_moved_audio(placed)
+        return placed
+
+    def asr_request(self) -> WorkerRequest:
+        request = WorkerRequest(
+            engine=self.settings.definition,
+            out_dir=str(self.store.work_dir("asr")),
+            files=(FileJob(id=self.source_id, wav=str(self.dir / WAV_NAME), language=self.language),),
+            memory_cap_bytes=self.settings.memory_cap_bytes,
+        )
+        return self.placed("asr", request)
+
+    def asr_key(self, request: WorkerRequest) -> str:
+        # The worker's own fingerprint, minus the WAV path: the source id already names the audio.
+        return _key("asr", {"request": without_wav(request.fingerprint())})
+
+    def transcribed(self, hypotheses: Path) -> Transcribed:
+        rows = _read_rows(hypotheses, self.source_id)
+        return stages.from_asr_rows(rows, self.settings.definition, self.language)
+
+    def needs_audio(self) -> bool:
+        """Whether an ASR stage still has audio to decode; stored stages and finished worker folders need none."""
+        request = self.asr_request()
+        source = self.store.load("asr", stage_versions()["asr"], self.asr_key(request), Transcribed)
+        if source is None:
+            hypotheses = asr_runner.finished(request)
+            if hypotheses is None:
+                return True
+            source = self.transcribed(hypotheses)
+        if self.settings.second_opinion is None:
+            return False
+        key = _key("second_opinion", self.second_inputs(source))
+        if self.store.load("second_opinion", stage_versions()["second_opinion"], key, _Opinion) is not None:
+            return False
+        second = self.second_request(source)
+        return second is not None and asr_runner.finished(second) is None
+
+    def second_inputs(self, source: Transcribed) -> dict[str, JsonValue]:
+        second = self.settings.second_opinion
+        return {
+            "source": store.digest(source),
+            "engine": _engine_key(second) if second else None,
+            "language": self.language,
+        }
+
+    def second_request(self, source: Transcribed) -> WorkerRequest | None:
+        second = self.settings.second_opinion
+        if second is None:
+            return None
+        request = numeric.second_opinion_request(
+            _timed(source.stretches),
+            engine=second,
+            file_id=self.source_id,
+            wav=self.dir / WAV_NAME,
+            out_dir=self.store.work_dir("second_opinion"),
+            language=self.language,
+            words=[word for stretch in source.stretches for word in stretch.words],
+        )
+        if request is None:
+            return None
+        request = request.model_copy(update={"memory_cap_bytes": self.settings.memory_cap_bytes})
+        return self.placed("second_opinion", request)
+
+
+@dataclass
+class _YouTubeRun:
+    """One video's run: fetch its metadata, captions and audio, then hand the prepared video to `_Transcription`."""
+
     session: FetchSession
     planned: PlannedVideo
     vdir: Path
     settings: _Settings
-    timings: list[StageTiming] = field(default_factory=list[StageTiming])
-    notices: list[str] = field(default_factory=list[str])
+    trace: _Trace
+    # The latest successful fetch: the document records its access, and the run's outcome is it.
+    outcome: VideoOutcome | None = None
+    access: Access | None = None
 
     @property
     def video_id(self) -> str:
         return self.planned.video_id
 
-    @property
-    def store(self) -> StageStore:
-        return StageStore(self.vdir)
-
     def run(self) -> VideoResult:
         settings = self.settings
         cached = self._local_metadata()
-        need_audio = settings.source == "asr" and (cached is None or self._needs_audio(cached))
+        need_audio = settings.source == "asr" and (
+            cached is None or _Decoding(settings, self.video_id, self.vdir, cached.language).needs_audio()
+        )
         outcome = self._fetch(audio=need_audio)
-        if outcome.status is not VideoStatus.OK or outcome.access is None:
+        if not self._accept(outcome):
             return VideoResult(outcome)
         metadata = load_metadata(self.vdir)
         if not settings.creator_note:
             # A note saved while the option was on must not reach the document or the correction prompt once it is off.
             metadata = replace(metadata, creator_note=None)
-        tracks = saved_captions(self.vdir)
+        tags = _tags(self.vdir)
 
+        def describe(stretches: Sequence[Stretch]) -> DocumentSource:
+            if self.access is None:
+                raise AssertionError("described before a successful fetch")
+            return DocumentSource(stages.youtube_video(metadata, tags, stretches), self.access)
+
+        prepared = _Prepared(
+            info=SourceInfo(id=self.video_id, chapters=metadata.chapters, describe=describe),
+            dir=self.vdir,
+            language=metadata.language,
+            captions=saved_captions(self.vdir),
+            correction=correction_context(metadata, tags),
+            ensure_wav=self._ensure_wav,
+        )
+        transcription = _Transcription(prepared, settings, self.trace)
+        try:
+            document = transcription.run()
+        except _Unavailable as exc:
+            return VideoResult(exc.outcome)
+        return VideoResult(
+            self.outcome or outcome,
+            document,
+            self.vdir / CONTEXT_MD,
+            notices=tuple(transcription.notices),
+            timings=tuple(self.trace.timings),
+        )
+
+    def _accept(self, outcome: VideoOutcome) -> bool:
+        if outcome.status is not VideoStatus.OK or outcome.access is None:
+            return False
+        self.outcome, self.access = outcome, outcome.access
+        return True
+
+    def _ensure_wav(self) -> None:
+        if (self.vdir / WAV_NAME).is_file():
+            return
+        outcome = self._fetch(audio=True)
+        if not self._accept(outcome):
+            raise _Unavailable(outcome)
+
+    def _fetch(self, *, audio: bool) -> VideoOutcome:
+        self.trace.emit("fetch")
+        began = time.monotonic()
+        outcome = self.session.fetch_video(self.video_id, cookies_first=self.planned.cookies_first, audio=audio)
+        self.trace.timings.append(StageTiming("fetch", time.monotonic() - began, reused=False))
+        return outcome
+
+    def _local_metadata(self) -> VideoMetadata | None:
+        try:
+            return load_metadata(self.vdir)
+        except (OSError, ValueError, YtDlpError):
+            return None
+
+
+@dataclass
+class _Transcription:
+    """The source-agnostic part of a run, from the audio or a manual caption track to `context.json` and `context.md`.
+
+    asr (or manual captions) → second opinion → normalize → punctuate → correct → numeric → numerals → build → write.
+    """
+
+    prepared: _Prepared
+    settings: _Settings
+    trace: _Trace
+    notices: list[str] = field(default_factory=list[str])
+
+    @property
+    def store(self) -> StageStore:
+        return StageStore(self.prepared.dir)
+
+    @property
+    def decoding(self) -> _Decoding:
+        return _Decoding(self.settings, self.prepared.id, self.prepared.dir, self.prepared.language)
+
+    def run(self) -> ContextDocument:
+        settings = self.settings
+        prepared = self.prepared
         source: Transcribed | None = None
         if settings.source == "captions":
-            source = self._from_captions(tracks, metadata)
+            source = self._from_captions()
         if source is None:
-            if self._needs_audio(metadata) and not (self.vdir / WAV_NAME).is_file():
-                outcome = self._fetch(audio=True)
-                if outcome.status is not VideoStatus.OK or outcome.access is None:
-                    return VideoResult(outcome)
-            source = self._asr(metadata)
-        second = self._second_opinion(source, metadata) if source.run.kind == "asr" else None
-        (self.vdir / WAV_NAME).unlink(missing_ok=True)
+            if self.decoding.needs_audio():
+                prepared.ensure_wav()
+            source = self._asr()
+        second = self._second_opinion(source) if source.run.kind == "asr" else None
+        (prepared.dir / WAV_NAME).unlink(missing_ok=True)
 
         language = source.language
         normalized = self._normalize(source)
         punctuated = self._punctuate(normalized, language)
-        corrected, correction_llm = self._correct(punctuated, language, metadata)
-        verified = self._numeric(corrected, source, tracks, second)
+        corrected, correction_llm = self._correct(punctuated, language)
+        verified = self._numeric(corrected, source, second)
         displayed = self._numerals(verified.stretches, language)
         self.notices += [*punctuated.notices, *verified.notices]
 
-        self._emit("write")
+        self.trace.emit("write")
         began = time.monotonic()
         document = build_document(
-            metadata=metadata,
-            tags=_tags(self.vdir),
-            access=outcome.access,
+            info=prepared.info,
             source=source,
             stretches=displayed,
             chapters=settings.text.chapters != "none",
@@ -596,24 +817,12 @@ class _VideoRun:
         dumped = dump_document(document)
         # The record goes first and comes back last, so it never vouches for a half-written pair of files.
         self.store.discard("context")
-        atomic.write_text(self.vdir / CONTEXT_MD, render_markdown(document))
-        atomic.write_text(self.vdir / CONTEXT_JSON, dumped)
+        atomic.write_text(prepared.dir / CONTEXT_MD, render_markdown(document))
+        atomic.write_text(prepared.dir / CONTEXT_JSON, dumped)
         sha = hashlib.sha256(dumped.encode("utf-8")).hexdigest()
         self.store.save("context", stage_versions()["context"], settings.run_key(), _ContextMark(sha256=sha))
-        self.timings.append(StageTiming("write", time.monotonic() - began, reused=False))
-        return VideoResult(
-            outcome,
-            document,
-            self.vdir / CONTEXT_MD,
-            notices=tuple(self.notices),
-            timings=tuple(self.timings),
-        )
-
-    def _emit(self, stage: str, detail: str = "") -> None:
-        self.settings.emit(ProgressEvent(self.video_id, stage, detail))
-
-    def _key(self, stage: str, inputs: dict[str, JsonValue]) -> str:
-        return input_hash(stage, stage_versions()[stage], inputs)
+        self.trace.timings.append(StageTiming("write", time.monotonic() - began, reused=False))
+        return document
 
     def _stage[M: BaseModel](
         self,
@@ -629,125 +838,42 @@ class _VideoRun:
         began = time.monotonic()
 
         def announced() -> M:
-            self._emit(stage, detail)
+            self.trace.emit(stage, detail)
             return compute()
 
         output, reused = self.store.run(stage, stage_versions()[stage], key, model, announced)
         if keep is not None and not reused:
             _prune(self.store.work_dir(stage), keep)
-        self.timings.append(StageTiming(stage, time.monotonic() - began, reused))
+        self.trace.timings.append(StageTiming(stage, time.monotonic() - began, reused))
         return output
 
-    def _fetch(self, *, audio: bool) -> VideoOutcome:
-        self._emit("fetch")
-        began = time.monotonic()
-        outcome = self.session.fetch_video(self.video_id, cookies_first=self.planned.cookies_first, audio=audio)
-        self.timings.append(StageTiming("fetch", time.monotonic() - began, reused=False))
-        return outcome
-
-    def _local_metadata(self) -> VideoMetadata | None:
-        try:
-            return load_metadata(self.vdir)
-        except (OSError, ValueError, YtDlpError):
-            return None
-
-    def _placed(self, stage: str, request: WorkerRequest) -> WorkerRequest:
-        """Point `request` at its worker folder in `stage`'s working directory.
-
-        The folder is keyed by what the decode depends on and never by a stage version: a change to what the pipeline
-        makes of the rows must not decode the audio again. The worker refuses a folder holding another request's
-        output, and an interrupted run of the same request resumes in the same folder.
-        """
-        decode = without_wav(request.fingerprint())
-        out_dir = self.store.work_dir(stage) / request.engine.spec.id / store.digest(decode)[:16]
-        _adopt(out_dir, decode)
-        placed = request.model_copy(update={"out_dir": str(out_dir)})
-        asr_runner.follow_moved_audio(placed)
-        return placed
-
-    def _asr_request(self, metadata: VideoMetadata) -> WorkerRequest:
-        request = WorkerRequest(
-            engine=self.settings.definition,
-            out_dir=str(self.store.work_dir("asr")),
-            files=(FileJob(id=self.video_id, wav=str(self.vdir / WAV_NAME), language=metadata.language),),
-            memory_cap_bytes=self.settings.memory_cap_bytes,
-        )
-        return self._placed("asr", request)
-
-    def _asr_key(self, request: WorkerRequest) -> str:
-        # The worker's own fingerprint, minus the WAV path: the video id already names the audio.
-        return self._key("asr", {"request": without_wav(request.fingerprint())})
-
-    def _transcribed(self, hypotheses: Path, metadata: VideoMetadata) -> Transcribed:
-        return stages.from_asr_rows(_read_rows(hypotheses, self.video_id), self.settings.definition, metadata)
-
-    def _needs_audio(self, metadata: VideoMetadata) -> bool:
-        """Whether an ASR stage still has audio to decode; stored stages and finished worker folders need none."""
-        request = self._asr_request(metadata)
-        source = self.store.load("asr", stage_versions()["asr"], self._asr_key(request), Transcribed)
-        if source is None:
-            hypotheses = asr_runner.finished(request)
-            if hypotheses is None:
-                return True
-            source = self._transcribed(hypotheses, metadata)
-        if self.settings.second_opinion is None:
-            return False
-        key = self._key("second_opinion", self._second_inputs(source, metadata))
-        if self.store.load("second_opinion", stage_versions()["second_opinion"], key, _Opinion) is not None:
-            return False
-        second = self._second_request(source, metadata)
-        return second is not None and asr_runner.finished(second) is None
-
-    def _asr(self, metadata: VideoMetadata) -> Transcribed:
-        request = self._asr_request(metadata)
+    def _asr(self) -> Transcribed:
+        decoding = self.decoding
+        request = decoding.asr_request()
 
         def compute() -> Transcribed:
             hypotheses = asr_runner.finished(request) or asr_runner.run_worker(request).hypotheses
-            return self._transcribed(hypotheses, metadata)
+            return decoding.transcribed(hypotheses)
 
         engine = request.engine.spec.id
-        return self._stage("asr", self._asr_key(request), Transcribed, compute, engine, keep=Path(request.out_dir))
+        return self._stage("asr", decoding.asr_key(request), Transcribed, compute, engine, keep=Path(request.out_dir))
 
-    def _from_captions(self, tracks: Sequence[CaptionTrack], metadata: VideoMetadata) -> Transcribed | None:
-        track, missing = _manual_track(tracks, metadata.language)
+    def _from_captions(self) -> Transcribed | None:
+        language = self.prepared.language
+        track, missing = _manual_track(self.prepared.captions, language)
         if track is None:
             self.notices.append(f"{missing}; transcribed with ASR instead")
             return None
-        key = self._key("captions", {"track": _track_key(track), "language": metadata.language})
-        return self._stage("captions", key, Transcribed, lambda: stages.from_captions(track, metadata), track.language)
+        key = _key("captions", {"track": _track_key(track), "language": language})
+        return self._stage("captions", key, Transcribed, lambda: stages.from_captions(track, language), track.language)
 
-    def _second_inputs(self, source: Transcribed, metadata: VideoMetadata) -> dict[str, JsonValue]:
-        second = self.settings.second_opinion
-        return {
-            "source": store.digest(source),
-            "engine": _engine_key(second) if second else None,
-            "language": metadata.language,
-        }
-
-    def _second_request(self, source: Transcribed, metadata: VideoMetadata) -> WorkerRequest | None:
+    def _second_opinion(self, source: Transcribed) -> numeric.SecondOpinion | None:
         second = self.settings.second_opinion
         if second is None:
             return None
-        request = numeric.second_opinion_request(
-            _timed(source.stretches),
-            engine=second,
-            file_id=self.video_id,
-            wav=self.vdir / WAV_NAME,
-            out_dir=self.store.work_dir("second_opinion"),
-            language=metadata.language,
-            words=[word for stretch in source.stretches for word in stretch.words],
-        )
-        if request is None:
-            return None
-        request = request.model_copy(update={"memory_cap_bytes": self.settings.memory_cap_bytes})
-        return self._placed("second_opinion", request)
-
-    def _second_opinion(self, source: Transcribed, metadata: VideoMetadata) -> numeric.SecondOpinion | None:
-        second = self.settings.second_opinion
-        if second is None:
-            return None
-        key = self._key("second_opinion", self._second_inputs(source, metadata))
-        request = self._second_request(source, metadata)
+        decoding = self.decoding
+        key = _key("second_opinion", decoding.second_inputs(source))
+        request = decoding.second_request(source)
 
         def compute() -> _Opinion:
             if request is None:
@@ -755,14 +881,15 @@ class _VideoRun:
                 _remove(self.store.work_dir("second_opinion") / second.spec.id)
                 return _Opinion(opinion=None)
             hypotheses = asr_runner.finished(request) or asr_runner.run_worker(request).hypotheses
-            return _Opinion(opinion=numeric.SecondOpinion.from_hypotheses(_read_rows(hypotheses, self.video_id)))
+            rows = _read_rows(hypotheses, self.prepared.id)
+            return _Opinion(opinion=numeric.SecondOpinion.from_hypotheses(rows))
 
         keep = Path(request.out_dir) if request is not None else None
         return self._stage("second_opinion", key, _Opinion, compute, second.spec.id, keep=keep).opinion
 
     def _normalize(self, source: Transcribed) -> _Stretches:
         text = self.settings.text
-        key = self._key("normalize", {"source": store.digest(source), "script": text.script, "fillers": text.fillers})
+        key = _key("normalize", {"source": store.digest(source), "script": text.script, "fillers": text.fillers})
 
         def compute() -> _Stretches:
             normalized = stages.normalize(source.stretches, source.language, script=text.script, fillers=text.fillers)
@@ -772,7 +899,7 @@ class _VideoRun:
 
     def _punctuate(self, previous: _Stretches, language: str) -> _TextResult:
         llm = self.settings.llm
-        key = self._key("punctuate", {"text": _text_key(previous.stretches), "llm": self.settings.llm_id})
+        key = _key("punctuate", {"text": _text_key(previous.stretches), "llm": self.settings.llm_id})
 
         def compute() -> _TextResult:
             stretches = previous.stretches
@@ -801,11 +928,11 @@ class _VideoRun:
 
         return self._stage("punctuate", key, _TextResult, compute, self.settings.llm_id or "")
 
-    def _correct(self, previous: _TextResult, language: str, metadata: VideoMetadata) -> tuple[_TextResult, str | None]:
+    def _correct(self, previous: _TextResult, language: str) -> tuple[_TextResult, str | None]:
         llm = self.settings.llm if self.settings.text.correct else None
         if llm is None:
             return _TextResult(stretches=previous.stretches), None
-        context = correction_context(metadata, _tags(self.vdir))
+        context = self.prepared.correction
         inputs: dict[str, JsonValue] = {
             "text": _text_key(previous.stretches),
             "llm": self.settings.llm_id,
@@ -827,17 +954,11 @@ class _VideoRun:
                 stretches=with_results(stretches, result.texts, result.edits, result.flags), usage=result.usage
             )
 
-        return self._stage("correct", self._key("correct", inputs), _TextResult, compute, llm.id), llm.id
+        return self._stage("correct", _key("correct", inputs), _TextResult, compute, llm.id), llm.id
 
-    def _numeric(
-        self,
-        previous: _TextResult,
-        source: Transcribed,
-        tracks: Sequence[CaptionTrack],
-        second: numeric.SecondOpinion | None,
-    ) -> _TextResult:
+    def _numeric(self, previous: _TextResult, source: Transcribed, second: numeric.SecondOpinion | None) -> _TextResult:
         llm = self.settings.llm
-        evidence_tracks = _evidence_tracks(tracks, source)
+        evidence_tracks = _evidence_tracks(self.prepared.captions, source)
         inputs: dict[str, JsonValue] = {
             "text": _text_key(previous.stretches),
             "captions": [_track_key(track) for track in evidence_tracks],
@@ -878,14 +999,14 @@ class _VideoRun:
                 notices=tuple(notices),
             )
 
-        return self._stage("numeric", self._key("numeric", inputs), _TextResult, compute, self.settings.llm_id or "")
+        return self._stage("numeric", _key("numeric", inputs), _TextResult, compute, self.settings.llm_id or "")
 
     def _numerals(self, previous: Sequence[Stretch], language: str) -> tuple[Stretch, ...]:
         # Display only: the stages before it read the text as recognized, so a rule change never repeats an LLM call.
         style = self.settings.text.numerals
         if style == "keep" or not seg.is_zh(language):
             return tuple(previous)
-        key = self._key("numerals", {"text": _text_key(previous), "numerals": style})
+        key = _key("numerals", {"text": _text_key(previous), "numerals": style})
 
         def compute() -> _Stretches:
             return _Stretches(stretches=stages.numerals(previous, language))

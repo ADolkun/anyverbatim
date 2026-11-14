@@ -12,16 +12,17 @@ sentence that holds it. Nothing here performs I/O.
 
 import collections
 import difflib
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from ytverbatim import __version__, ids
 from ytverbatim.acquire.captions import CaptionTrack
 from ytverbatim.acquire.creator_note import CreatorNote
+from ytverbatim.acquire.metadata import Chapter as SourceChapter
 from ytverbatim.acquire.metadata import VideoMetadata
 from ytverbatim.asr import chunks
 from ytverbatim.asr.models import ChunkHypothesis
@@ -92,14 +93,34 @@ class Transcribed(_Model):
     warnings: tuple[str, ...]
 
 
+class DocumentSource(NamedTuple):
+    """What a document says about the source of its transcript."""
+
+    video: Video
+    access: Access
+
+
+@dataclass(frozen=True)
+class SourceInfo:
+    """A source as `build_document` reads it; the adapter that fetched or opened the source builds it.
+
+    `describe` gets the source transcript's stretches, so a source that knows no duration of its own can take the
+    transcript's end.
+    """
+
+    id: str
+    chapters: tuple[SourceChapter, ...]
+    describe: Callable[[Sequence[Stretch]], DocumentSource]
+
+
 def run_id(definition: EngineDef) -> str:
     return f"asr:{definition.spec.id}"
 
 
-def from_asr_rows(rows: Sequence[ChunkHypothesis], definition: EngineDef, metadata: VideoMetadata) -> Transcribed:
-    """Turn one engine's chunk rows (sorted by chunk) into stretches; no I/O."""
+def from_asr_rows(rows: Sequence[ChunkHypothesis], definition: EngineDef, language_hint: str | None) -> Transcribed:
+    """Turn one engine's chunk rows (sorted by chunk) into stretches; `language_hint` is the source's declared one."""
     spec = definition.spec
-    language = _language(rows, metadata.language)
+    language = _language(rows, language_hint)
     tokens, warnings = _tokens(rows, language)
     sentences = seg.segment_tokens(tokens, language)
     worded = {row.chunk for row in rows if any(word.text.strip() for word in row.words)}
@@ -125,7 +146,7 @@ def from_asr_rows(rows: Sequence[ChunkHypothesis], definition: EngineDef, metada
         engine=spec.id,
         model_repo=spec.repo,
         model_revision=spec.revision,
-        params={**definition.variant, "language_hint": metadata.language, "sample_rate": spec.sample_rate},
+        params={**definition.variant, "language_hint": language_hint, "sample_rate": spec.sample_rate},
         vad=_vad_info() if spec.max_chunk_s is not None else None,
         chunking=_chunking_info(spec.max_chunk_s, rows),
         aligner=None,
@@ -151,9 +172,9 @@ def caption_run_id(track: CaptionTrack) -> str:
     return f"{CAPTION_MANUAL}:{track.language}"
 
 
-def from_captions(track: CaptionTrack, metadata: VideoMetadata) -> Transcribed:
+def from_captions(track: CaptionTrack, language_hint: str | None) -> Transcribed:
     """Turn a manual caption track into stretches; cue times are spread over each cue's characters."""
-    language = metadata.language or track.language.split("-")[0]
+    language = language_hint or track.language.split("-")[0]
     zh = seg.uses_zh_rules(" ".join(cue.text for cue in track.segments), language)
     tokens: list[seg.Token] = []
     for index, cue in enumerate(track.segments):
@@ -374,11 +395,9 @@ def stretch_flag(stretch: Stretch, kind: str, note: str) -> Flag:
     return Flag.model_validate({"kind": kind, "char_start": 0, "char_end": len(stretch.text), "note": note})
 
 
-def build_document(  # noqa: PLR0913
+def build_document(
     *,
-    metadata: VideoMetadata,
-    tags: Sequence[str],
-    access: Access,
+    info: SourceInfo,
     source: Transcribed,
     stretches: Sequence[Stretch],
     chapters: bool,
@@ -394,9 +413,7 @@ def build_document(  # noqa: PLR0913
     """
     try:
         return _build(
-            metadata,
-            tags,
-            access,
+            info,
             source,
             stretches,
             chapters=chapters,
@@ -407,7 +424,7 @@ def build_document(  # noqa: PLR0913
             llm_usage=llm_usage,
         )
     except ValidationError as exc:
-        raise ContractError(f"{metadata.video_id}: the transcript does not fit the contract:\n{exc}") from exc
+        raise ContractError(f"{info.id}: the transcript does not fit the contract:\n{exc}") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -455,10 +472,8 @@ class _Layout:
         return tokens[-1].sentence
 
 
-def _build(  # noqa: PLR0913
-    metadata: VideoMetadata,
-    tags: Sequence[str],
-    access: Access,
+def _build(
+    info: SourceInfo,
     source: Transcribed,
     stretches: Sequence[Stretch],
     *,
@@ -494,7 +509,7 @@ def _build(  # noqa: PLR0913
         for k, edit in _placed_edits(layout, index, stretch.edits):
             edits[k].append(edit)
 
-    chapter_of, chapter_list = _chapters(metadata, sentences, enabled=chapters)
+    chapter_of, chapter_list = _chapters(info.chapters, sentences, enabled=chapters)
     paragraph_ranges = seg.split_paragraphs([s.start for s in sentences], [s.end for s in sentences], chapter_of)
     paragraph_of = [index for index, (first, last) in enumerate(paragraph_ranges) for _ in range(first, last + 1)]
     run = source.run
@@ -521,12 +536,13 @@ def _build(  # noqa: PLR0913
         )
         for index, (first, last) in enumerate(paragraph_ranges)
     )
+    described = info.describe(source.stretches)
     return ContextDocument(
         schema_version=SCHEMA_VERSION,
         generator=GeneratorInfo(name="ytverbatim", version=__version__),
         created_at=created_at,
-        video=_video(metadata, tags, source.stretches),
-        access=access,
+        video=described.video,
+        access=described.access,
         transcript=Transcript(
             language=language,
             script=script,
@@ -700,12 +716,12 @@ def _script(language: str, text: str) -> Literal["zh-Hans", "zh-Hant", "n/a"]:
 
 
 def _chapters(
-    metadata: VideoMetadata, sentences: Sequence[seg.Sentence], *, enabled: bool
+    source_chapters: Sequence[SourceChapter], sentences: Sequence[seg.Sentence], *, enabled: bool
 ) -> tuple[list[int | None], tuple[Chapter, ...]]:
     """Map sentences to YouTube chapters by start time, dropping chapters that no sentence starts in."""
-    if not enabled or not metadata.chapters or not sentences:
+    if not enabled or not source_chapters or not sentences:
         return [None] * len(sentences), ()
-    youtube = sorted(metadata.chapters, key=lambda c: c.start)
+    youtube = sorted(source_chapters, key=lambda c: c.start)
     raw = seg.chapter_indexes([s.start for s in sentences], [c.start for c in youtube])
     order = list(dict.fromkeys(raw))
     compact = {old: new for new, old in enumerate(order)}
@@ -769,7 +785,7 @@ def _clock(seconds: float) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-def _video(metadata: VideoMetadata, tags: Sequence[str], stretches: Sequence[Stretch]) -> Video:
+def youtube_video(metadata: VideoMetadata, tags: Sequence[str], stretches: Sequence[Stretch]) -> Video:
     duration = metadata.duration if metadata.duration is not None else max((s.end for s in stretches), default=0.0)
     return Video(
         id=metadata.video_id,

@@ -343,7 +343,7 @@ def build_base(
                 f"run `python -m evals.run_asr asr --hyp {hypothesis}` first"
             )
         _, metadata = _metadata(store, video)
-        transcribed = stages.from_asr_rows(rows, definition, metadata)
+        transcribed = stages.from_asr_rows(rows, definition, metadata.language)
         normalized = stages.normalize(
             transcribed.stretches, transcribed.language, script=text.script, fillers=text.fillers
         )
