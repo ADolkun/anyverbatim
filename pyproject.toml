@@ -55,6 +55,8 @@ dev = [
 ]
 eval = [
     "jiwer>=4.0",
+    "pyannote-metrics>=4.2",
+    "pyarrow>=26.0.1",
     "whisper-normalizer>=1.0.1",
 ]
 # The correction eval's local candidate behind mlx_lm.server. Exact pin: the eval relies on server details read from
