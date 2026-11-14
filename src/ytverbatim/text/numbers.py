@@ -168,6 +168,12 @@ _IDIOMS = (
     "十万八千里",
     "百度",
     "进一步",
+    "五十步笑百步",
+    "三十而立",
+    "十二生肖",
+    "三十六计",
+    "十一黄金周",
+    "一号文件",
     "一步一步",
 )
 _IDIOM_PATTERNS = (
@@ -177,6 +183,8 @@ _IDIOM_PATTERNS = (
     r"一点(?![〇零一二两兩三四五六七八九十钟半])",
     # Weekdays, not 周1; 每周一次 is "once a week".
     r"(?:周|星期|礼拜)[一二三四五六日天](?![次回遍趟])",
+    # 中秋, which GB/T 15835 4.2.3 names; 八月十五日 and 八月十五号 are dates.
+    r"八月十五(?![日号])",
 )
 
 
@@ -244,6 +252,8 @@ _NUMBER = rf"(?:{_DIGIT}+(?:,{_DIGIT}{{3}}(?!{_DIGIT}))*(?:\.{_DIGIT}+)?|\.{_DIG
 _NO_ALNUM_BEFORE = r"(?<![A-Za-z0-9])"
 _NO_ALNUM_AFTER = r"(?![A-Za-z0-9])"
 
+_RUN = rf"(?:(?!百分之)[{_NUMERALS}])"
+
 _TOKEN = re.compile(
     "|".join(
         (
@@ -251,7 +261,8 @@ _TOKEN = re.compile(
             # 百分之 on its own is a percent; 三分之一 and 千分之五 are fractions.
             rf"(?P<fraction>(?!百分之)(?P<denominator>[{_NUMERALS}]+)分之(?P<numerator>[{_NUMERALS}]+))",
             # A percent takes no measure word: the 支 of 百分之六十支持 starts the next word.
-            rf"(?P<cjk>(?P<pct>百分之)?(?P<ord>第)?(?P<run>[{_NUMERALS}]+(?:点[{_NUMERALS}]+)?)"
+            # A run never takes the 百 of a following 百分之: 百分之五百分之五 is two percents.
+            rf"(?P<cjk>(?P<pct>百分之)?(?P<ord>第)?(?P<run>{_RUN}+(?:点{_RUN}+)?)"
             rf"(?(pct)|(?P<unit>{_alternation((*_MEASURE_WORDS, '%'))})?))",
             rf"(?P<cashtag>\$[A-Z]{{1,6}}(?:\.[A-Z]{{1,2}})?{_NO_ALNUM_AFTER})",
             rf"(?P<exchange>(?i:\b(?:NYSE|NASDAQ|AMEX|NYSEARCA|NYSEAMERICAN|BATS|OTC|OTCQX|OTCQB))\s*:\s*"
@@ -305,6 +316,9 @@ _ROUND_DIGITS_BEFORE_MAGNITUDE = frozenset({"10", "100", "1000"})
 # Marks the value of a rough figure, so 二十几 and 20几 agree with each other but not with 二十.
 _ROUGH = "~"
 _SHORTHAND_AFTER_UNIT = re.compile("[万亿][一二三四五六七八九]$")
+_ZERO_MINUTE = re.compile("[零〇][一二三四五六七八九]")
+# Words that make X点 a clock time.
+TIMES_OF_DAY = ("上午", "下午", "晚上", "早上", "凌晨", "中午", "傍晚", "夜里")
 # A lone numeral joined to a figure by one of these is that range's other end: the 三 of 三到五个.
 _RANGE_LINKS = frozenset("到至～~-—、")
 _LINKABLE = frozenset("一二两三四五六七八九十")
@@ -366,6 +380,9 @@ def _integer_value(integer: str) -> str | None:
         # Digit by digit, keeping leading zeros as the digit path keeps 0700: 零零后 is 00后.
         return "".join(_COUNTING_DIGITS[ch] for ch in integer)
     value: Decimal | None
+    # 万 as a unit of its own appears once in a number: 四万三万五 is two figures run together, not 400035000.
+    if integer.replace("万亿", "").count("万") > 1:
+        return None
     if shorthand := _YI_SHORTHAND.fullmatch(integer):
         # cn2an's speaking mode has no unit below 亿, so the trailing digit of 一亿五 is placed here: 千万, or 千亿
         # after 万亿.
@@ -462,9 +479,14 @@ def _is_approximation(text: str, prefix: str, run: tuple[int, int], numerals: st
 
     A run of place words alone after 数 may be rough (数十亿) or exact after a noun ending in 数 (人数十万), so it
     is read as rough either way, as the digit form 人数10万 is; a digit in the run makes it exact (人数十五万). A date
-    or time is never rough: the 十月 of 指数十月份 is October.
+    is never rough after 数: the 十月 of 指数十月份 is October, while 几十号 and 数十点 stay rough.
     """
-    if not prefix and _ji_or_shu_before(text, run[0]) and set(numerals) <= _PLACE_WORDS and unit not in _CALENDAR_UNITS:
+    if (
+        not prefix
+        and _ji_or_shu_before(text, run[0])
+        and set(numerals) <= _PLACE_WORDS
+        and not _month_after_shu(text, run[0], unit)
+    ):
         return True
     return _ji_after(text, run[1])
 
@@ -476,6 +498,10 @@ def _with_leading_one(numerals: str) -> str:
 
 def _ji_or_shu_before(text: str, start: int) -> bool:
     return text[start - 1 : start] in ("几", "数")
+
+
+def _month_after_shu(text: str, start: int, unit: str) -> bool:
+    return unit == "月" and text[start - 1 : start] == "数"
 
 
 def _ji_after(text: str, end: int) -> bool:
@@ -522,7 +548,7 @@ def _clock_split(text: str, match: re.Match[str]) -> int | None:
         return None
     start, end = match.span("run")
     dot = text.find("点", start, end)
-    if dot < 0 or not _TENS & set(text[dot + 1 : end]):
+    if dot < 0 or not (_TENS & set(text[dot + 1 : end]) or _zero_minutes(text, start, dot, end)):
         return None
     hour, minute = _normalized(text[start:dot]), _normalized(text[dot + 1 : end])
     hour_value = _integer_value(hour) if _is_quantity(hour, "点") else None
@@ -530,6 +556,13 @@ def _clock_split(text: str, match: re.Match[str]) -> int | None:
     if hour_value is None or minute_value is None:
         return None
     return dot if Decimal(hour_value) <= _LAST_HOUR and Decimal(minute_value) <= _LAST_MINUTE else None
+
+
+def _zero_minutes(text: str, start: int, dot: int, end: int) -> bool:
+    """两点零五 is 2.05 unless it is plainly a time: 分 after it (两点零五分) or a time of day before (下午三点零五)."""
+    if not _ZERO_MINUTE.fullmatch(text, dot + 1, end):
+        return False
+    return text[end : end + 1] == "分" or text[:start].endswith(TIMES_OF_DAY)
 
 
 def _cjk_quantities(text: str, match: re.Match[str]) -> list[_Quantity]:
@@ -572,7 +605,10 @@ def _number_quantity(match: re.Match[str]) -> _Quantity:
     written = _ascii_digits(match.group("digits"))
     round_figure = written == _ROUND_DIGITS or (bool(magnitude) and written in _ROUND_DIGITS_BEFORE_MAGNITUDE)
     rough = (
-        _ji_or_shu_before(text, match.start()) and not sign and round_figure and measure not in _CALENDAR_UNITS
+        _ji_or_shu_before(text, match.start())
+        and not sign
+        and round_figure
+        and not _month_after_shu(text, match.start(), measure)
     ) or _ji_after(text, match.end())
     if rough:
         itn = _ROUGH + itn
@@ -727,26 +763,32 @@ def _quantities(text: str) -> list[_Quantity]:
 def _with_range_ends(text: str, found: list[_Quantity], lone: list[tuple[int, int]]) -> list[_Quantity]:
     """Add each lone numeral that a range link joins to a figure: 三到五个 is 3 to 5个, and 三到五到七个 chains.
 
-    Only a figure with a value anchors a range, so 第三到五 (an ordinal) and 几到五 stay as they are.
+    Only a figure with a value anchors a range, so 第三到五 (an ordinal) and 几到五 stay as they are. Neither does a
+    percent or a figure in 万 or 亿, whose unit the lone end shares (百分之三到五, 三到五万): read alone it would be a
+    bare 5, a value nobody said, so it stays no quantity at all. 一 before a date or a time is "as soon as"
+    (一到三月份就涨), unless 从 opens the range.
     """
-    anchors = {
-        edge
+    anchors: dict[tuple[str, int], str] = {
+        edge: quantity.unit
         for quantity in found
-        if quantity.value is not None and quantity.prefix != "第"
+        if quantity.value is not None and quantity.prefix not in ("第", "百分之") and not quantity.magnitude
         for edge in (("end", quantity.token.char_end), ("start", quantity.token.char_start))
     }
     added = True
     while added:
         added = False
         for start, end in list(lone):
-            linked = (text[start - 1 : start] in _RANGE_LINKS and ("end", start - 1) in anchors) or (
-                text[end : end + 1] in _RANGE_LINKS and ("start", end + 1) in anchors
+            right = anchors.get(("start", end + 1)) if text[end : end + 1] in _RANGE_LINKS else None
+            if right in _CALENDAR_UNITS and text[start] == "一" and text[start - 1 : start] != "从":
+                right = None
+            left = text[start - 1 : start] in _RANGE_LINKS and ("end", start - 1) in anchors
+            quantity = (
+                _cjk_quantity(text, start, "", (start, end), "", lone=True) if left or right is not None else None
             )
-            quantity = _cjk_quantity(text, start, "", (start, end), "", lone=True) if linked else None
             if quantity is None or quantity.value is None:
                 continue
             found.append(quantity)
-            anchors |= {("end", end), ("start", start)}
+            anchors |= {("end", end): "", ("start", start): ""}
             lone.remove((start, end))
             added = True
     return sorted(found, key=lambda quantity: quantity.token.char_start)

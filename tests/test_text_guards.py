@@ -110,6 +110,9 @@ def test_safe_fix_is_accepted(original: str, fixed: str) -> None:
         ("价格100块", "价格100元", "quantities"),
         # 数十个 is a rough figure, so a fix that makes it a count states a quantity the speaker did not.
         ("公司有数十个项目", "公司有是十个项目", "cjk_numerals"),
+        # 几十点 and 数十点 are rough, so a fix that leaves an exact 十点 states a figure the speaker did not.
+        ("今天大盘跌了几十点然后反弹", "今天大盘跌了十点然后反弹", "cjk_numerals"),
+        ("指数下跌了数十点然后反弹", "指数下跌了是十点然后反弹", "cjk_numerals"),
         ("we do not buy shares", "we do buy shares", "negation"),
         ("这个地方不是毛利率", "这个地方是毛利率", "negation"),
         ("这个不行那个行", "这个行那个不行", "negation"),
