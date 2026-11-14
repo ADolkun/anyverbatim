@@ -693,8 +693,9 @@ def test_tokens_from_one_run_tile_it_in_order() -> None:
     assert surfaces(text) == ["三万", "一个月", "三点", "四十"]
 
 
-def test_one_opens_a_range_before_a_date_after_cong() -> None:
-    assert [(t.surface, t.value_itn) for t in quantity_tokens("从一到三月份")] == [("一", "1"), ("三月", "3月")]
+@pytest.mark.parametrize("text", ["从一到三月份", "一至三月份", "一～三月份", "一-三月份"])
+def test_one_opens_a_range_before_a_date_after_cong_or_with_another_link(text: str) -> None:
+    assert [(t.surface, t.value_itn) for t in quantity_tokens(text)] == [("一", "1"), ("三月", "3月")]
 
 
 @pytest.mark.parametrize(

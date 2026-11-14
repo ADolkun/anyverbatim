@@ -22,7 +22,7 @@ from ytverbatim.stages import (
     word_confidence,
 )
 from ytverbatim.text.numbers import quantity_tokens
-from ytverbatim.text.numerals import apply, conversions
+from ytverbatim.text.numerals import apply, conversions, readings
 
 ACCESS = Access(
     auth_source="none",
@@ -419,3 +419,66 @@ def test_the_stage_never_adds_interpolation_or_loses_a_flag_however_words_split(
         assert interpolated[1] <= interpolated[0], text
         assert len(shown[0].flags) == len(flags), text
         assert all(a.start <= b.start for s in shown for a, b in itertools.pairwise(s.words)), text
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "shown_before", "shown_after"),
+    [
+        ("收入三万五美元", "收入三万美元", "收入3.5万美元", "收入3万美元"),
+        ("涨了三十五个百分点", "涨了三十个百分点", "涨了35个百分点", "涨了30个百分点"),
+        ("一百五十块", "一百块", "150块", "100块"),
+        ("跌了十五点", "跌了五点", "跌了15点", "跌了5点"),
+        ("百分之三十五", "百分之三十", "35%", "30%"),
+        ("两点十五分", "两点十分", "2点15分", "2点10分"),
+        ("三万五千", "三万", "3.5万", "3万"),
+        # The final text's 300 would fuse with the 5 the edit removed, so the earlier text keeps its own form.
+        ("5三百块", "，三百块", "5三百块", "，300块"),
+    ],
+)
+def test_a_figure_the_edit_changed_reads_its_own_value_in_the_rewritten_edit(
+    before: str, after: str, shown_before: str, shown_after: str
+) -> None:
+    stretch = Stretch(
+        text=after, start=0.0, end=1.0, edits=(Edit(stage="numeric", before=before, after=after, llm=LLM),)
+    )
+    (shown,) = numerals((stretch,), "zh")
+    (edit,) = shown.edits
+    assert (edit.before, edit.after) == (shown_before, shown_after)
+    assert readings(edit.before) == readings(before) and edit.after == shown.text
+
+
+def test_rewrites_carried_along_a_chain_of_edits_keep_every_text_reading_its_values() -> None:
+    chain = ["指数张了两点，收入三万五", "指数涨了两点，收入三万五", "指数涨了两点，收入三万"]
+    edits = tuple(
+        Edit(stage=stage, before=chain[i], after=chain[i + 1], llm=LLM)
+        for i, stage in enumerate(("correction", "numeric"))
+    )
+    (shown,) = numerals((Stretch(text=chain[-1], start=0.0, end=1.0, edits=edits),), "zh")
+    assert [(e.before, e.after) for e in shown.edits] == [
+        ("指数张了2点，收入3.5万", "指数涨了2点，收入3.5万"),
+        ("指数涨了2点，收入3.5万", "指数涨了2点，收入3万"),
+    ]
+    assert [readings(e.before) for e in shown.edits] == [readings(text) for text in chain[:-1]]
+
+
+@pytest.mark.parametrize(
+    ("spoken", "fixed", "figure", "footnote"),
+    [
+        ("营收增长了三十五个百分点。", "营收增长了三十个百分点。", "三十个百分点", "; was 35"),
+        ("收入三万五美元。", "收入三万美元。", "三万美元", "; was 3.5"),
+        ("指数跌了十五点。", "指数跌了五点。", "五点", "; was 15"),
+    ],
+)
+def test_a_numeric_fix_that_shortens_a_figure_shows_the_figure_it_replaced(
+    spoken: str, fixed: str, figure: str, footnote: str
+) -> None:
+    source = source_of([row(spoken, 0.0, 5.0)])
+    (stretch,) = source.stretches
+    verified = with_results(
+        (stretch,),
+        [fixed],
+        [[Edit(stage="numeric", before=stretch.text, after=fixed, llm=LLM)]],
+        [[flag_on(fixed, figure, "numeric_fixed")]],
+    )
+    doc = document(source, numerals(verified, "zh"))
+    assert footnote in render_markdown(doc)
