@@ -24,6 +24,7 @@ _HAN_UNIT = re.compile(rf"[{_HAN}]")
 _ZH_FILLER = re.compile(rf"(?<!\S)(?:{'|'.join(_ZH_FILLERS)})+(?!\S)")
 _EN_FILLER = re.compile(rf"\b(?:{'|'.join(_EN_FILLERS)})\b", re.IGNORECASE)
 _LETTER_DOT = re.compile(r"(?<=[A-Za-z])\.(?=[A-Za-z])")
+_LATIN_LETTER = re.compile(r"[A-Za-z]")
 
 
 @cache
@@ -91,3 +92,11 @@ def to_units(text: str, language: Language, view: View) -> list[str]:
 
 def normalize(text: str, language: Language, view: View) -> str:
     return join_units(to_units(text, language, view))
+
+
+def script_counts(text: str) -> tuple[int, int]:
+    """Count the Han units and the Latin units of ``text``; digit-only units and other scripts count for neither."""
+    units = to_units(text, "zh", "raw")
+    han = sum(_HAN_UNIT.fullmatch(u) is not None for u in units)
+    latin = sum(_HAN_UNIT.fullmatch(u) is None and _LATIN_LETTER.search(u) is not None for u in units)
+    return han, latin
