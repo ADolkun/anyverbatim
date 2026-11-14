@@ -1,3 +1,4 @@
+import webbrowser
 from typing import Literal
 
 import click
@@ -9,11 +10,16 @@ from ytverbatim.llm import (
     LLMRequest,
     Readiness,
     UsageMeter,
+    chatgpt,
+    chatgpt_auth,
+    check_effort,
     claude_cli,
     client_from_options,
     complete_json,
     openai_compat,
 )
+
+_EFFORTS = sorted({*chatgpt.EFFORTS, *claude_cli.EFFORTS})
 
 
 class _Probe(BaseModel):
@@ -22,20 +28,62 @@ class _Probe(BaseModel):
 
 @click.group()
 def llm() -> None:
-    """Check the configured LLM transport."""
+    """Sign in to ChatGPT and check the configured LLM transport."""
 
 
 @llm.command()
-@click.option("--provider", type=click.Choice(["claude-cli", "openai-compat"]), help="Override [llm] provider.")
+@click.option("--no-browser", is_flag=True, help="Only print the sign-in URL; open it in a browser yourself.")
+def login(*, no_browser: bool) -> None:
+    """Sign in with your ChatGPT plan for the default chatgpt LLM.
+
+    Opens OpenAI's sign-in page and waits up to five minutes for it to return to this machine. Signing in again
+    replaces the stored account.
+    """
+
+    def open_url(url: str) -> object:
+        click.echo(f"Sign in to ChatGPT at:\n  {url}", err=True)
+        return None if no_browser else webbrowser.open(url)
+
+    try:
+        result = chatgpt_auth.login(open_url=open_url)
+    except YtverbatimError as exc:
+        raise click.ClickException(str(exc)) from exc
+    who = f" as {result.email}" if result.email else ""
+    if result.plan:
+        click.echo(f"chatgpt: signed in{who}")
+        return
+    click.echo(
+        f"chatgpt: signed in{who}, but without ChatGPT plan permission; run `ytverbatim llm login` again and grant it",
+        err=True,
+    )
+    raise SystemExit(1)
+
+
+@llm.command()
+def logout() -> None:
+    """Revoke the ChatGPT sign-in and remove its tokens from this machine."""
+    try:
+        confirmed = chatgpt_auth.logout()
+    except YtverbatimError as exc:
+        raise click.ClickException(str(exc)) from exc
+    revoked = "OpenAI confirmed the revocation" if confirmed else "OpenAI did not confirm the revocation"
+    click.echo(f"chatgpt: signed out; {revoked}")
+
+
+@llm.command()
+@click.option(
+    "--provider", type=click.Choice(["chatgpt", "claude-cli", "openai-compat"]), help="Override [llm] provider."
+)
 @click.option("--model", help="Override [llm] model.")
-@click.option("--effort", type=click.Choice(claude_cli.EFFORTS), help="Override [llm] effort (claude-cli only).")
+@click.option("--effort", type=click.Choice(_EFFORTS), help="Override [llm] effort (chatgpt and claude-cli).")
 @click.option("--probe", is_flag=True, help='Also send one tiny generation asking for {"ok": true}; this spends quota.')
 def check(provider: str | None, model: str | None, effort: str | None, *, probe: bool) -> None:
-    """Report whether the LLM transport is ready. Sends no generation unless --probe is given."""
+    """Report whether the LLM transport is ready. Contacts no provider unless --probe is given."""
     try:
         options = load_options(overrides={"llm": {"provider": provider, "model": model, "effort": effort}}).llm
         if options.provider == "none":
             raise click.ClickException("no LLM provider configured; set [llm] provider or pass --provider")
+        check_effort(options)
         status = _readiness(options)
         click.echo(f"{options.provider}: {'ready' if status.ready else 'not ready'} - {status.detail}")
         if not status.ready:
@@ -47,6 +95,8 @@ def check(provider: str | None, model: str | None, effort: str | None, *, probe:
 
 
 def _readiness(options: LLMOptions) -> Readiness:
+    if options.provider == "chatgpt":
+        return chatgpt_auth.readiness()
     if options.provider == "claude-cli":
         return claude_cli.readiness()
     return openai_compat.readiness(options.base_url, options.api_key_env)

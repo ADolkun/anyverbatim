@@ -861,9 +861,26 @@ def test_a_missing_claude_cli_fails_before_any_request(session_kit, worker, monk
     assert yt.calls == [] and worker.calls == []
 
 
+def test_the_default_llm_without_a_chatgpt_sign_in_fails_before_any_request(session_kit, worker) -> None:
+    (session_kit.home / ".config" / "ytverbatim" / "config.toml").unlink()
+    yt = zh_yt(session_kit)
+    with pytest.raises(ConfigError, match=r"not signed in.*`ytverbatim llm login`.*`--llm none`"):
+        run(session_kit, yt)
+    assert yt.calls == [] and worker.calls == []
+
+
+def test_cli_default_llm_without_a_sign_in_names_login_and_llm_none(session_kit, worker, monkeypatch) -> None:
+    (session_kit.home / ".config" / "ytverbatim" / "config.toml").unlink()
+    refused = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH)
+    assert refused.exit_code == 1
+    assert "ytverbatim llm login" in refused.output and "--llm none" in refused.output
+    without = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH, "--llm", "none")
+    assert without.exit_code == 0, without.output
+    assert worker.calls != []
+
+
 def test_cli_llm_spec_switches_provider_over_the_configured_one(session_kit, worker, monkeypatch) -> None:
     config_file = session_kit.home / ".config" / "ytverbatim" / "config.toml"
-    config_file.parent.mkdir(parents=True)
     config_file.write_text('[llm]\nprovider = "openai-compat"\nmodel = "m"\nbase_url = "http://127.0.0.1:8080/v1"\n')
     built: list[config.LLMOptions] = []
 

@@ -129,13 +129,17 @@ class LLMError(YtverbatimError):
     """A failed LLM call.
 
     `responded` is True when a reply arrived, and was billed, but could not be used, for example when it was cut off
-    at the token limit; `usage` then holds its tokens, or None when the transport did not report them.
+    at the token limit; `usage` then holds its tokens, or None when the transport did not report them. `code` is the
+    provider's own error code (`server_is_overloaded`, say) when it reported one.
     """
 
-    def __init__(self, message: str, *, responded: bool = False, usage: "Usage | None" = None) -> None:
+    def __init__(
+        self, message: str, *, responded: bool = False, usage: "Usage | None" = None, code: str | None = None
+    ) -> None:
         super().__init__(message)
         self.responded = responded
         self.usage = usage
+        self.code = code
 
 
 class LLMUnavailableError(LLMError):
