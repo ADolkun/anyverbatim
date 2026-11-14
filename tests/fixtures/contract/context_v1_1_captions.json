@@ -1,0 +1,132 @@
+{
+  "schema_version": "1.1",
+  "generator": {
+    "name": "ytverbatim",
+    "version": "0.0.0-fixture"
+  },
+  "created_at": "2030-01-01T12:00:00Z",
+  "video": {
+    "id": "fxCaptEn001",
+    "url": "https://www.youtube.com/watch?v=fxCaptEn001",
+    "title": "Synthetic captions title",
+    "channel": "Synthetic channel",
+    "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx",
+    "upload_date": "2029-12-31",
+    "duration_s": 40.0,
+    "description": "A made-up description for a test fixture.",
+    "language": "en",
+    "tags": [
+      "GAAP",
+      "ETF",
+      "合成标签"
+    ],
+    "creator_note": null
+  },
+  "access": {
+    "auth_source": "none",
+    "cookies_used": false,
+    "logged_in": null,
+    "premium": null,
+    "member": null,
+    "availability": "public",
+    "ytdlp_version": "2099.01.01",
+    "warnings": []
+  },
+  "transcript": {
+    "language": "en",
+    "script": "n/a",
+    "runs": [
+      {
+        "id": "caption_manual:en-US",
+        "kind": "caption_manual",
+        "engine": null,
+        "model_repo": null,
+        "model_revision": null,
+        "params": {
+          "format": "json3",
+          "language": "en-US"
+        },
+        "vad": null,
+        "chunking": null,
+        "aligner": null
+      }
+    ],
+    "punctuation": "caption",
+    "correction_llm": "fake:fixture-model"
+  },
+  "chapters": [
+    {
+      "index": 0,
+      "title": "开场",
+      "start": 0.0,
+      "end": 16.0,
+      "source": "youtube",
+      "first_segment": 0,
+      "last_segment": 1
+    }
+  ],
+  "paragraphs": [
+    {
+      "index": 0,
+      "start": 0.0,
+      "end": 10.0,
+      "first_segment": 0,
+      "last_segment": 0
+    },
+    {
+      "index": 1,
+      "start": 12.0,
+      "end": 16.0,
+      "first_segment": 1,
+      "last_segment": 1
+    }
+  ],
+  "segments": [
+    {
+      "id": 0,
+      "start": 0.0,
+      "end": 10.0,
+      "text": "so today we look at fifteen funds Markets rose twelve percent.",
+      "words": null,
+      "source": {
+        "kind": "caption_manual",
+        "run": "caption_manual:en-US"
+      },
+      "edits": [],
+      "flags": [],
+      "paragraph": 0,
+      "chapter": 0
+    },
+    {
+      "id": 1,
+      "start": 12.0,
+      "end": 16.0,
+      "text": "Then they fell sharply.",
+      "words": null,
+      "source": {
+        "kind": "caption_manual",
+        "run": "caption_manual:en-US"
+      },
+      "edits": [],
+      "flags": [],
+      "paragraph": 1,
+      "chapter": 0
+    }
+  ],
+  "quality": {
+    "speech_seconds": 14.0,
+    "transcribed_seconds": 14.0,
+    "decoder_anomalies": 0,
+    "flags_by_kind": {},
+    "warnings": []
+  },
+  "llm_usage": [
+    {
+      "stage": "correction",
+      "client": "fake:fixture-model",
+      "calls": 1,
+      "input_tokens": 100,
+      "output_tokens": 20
+    }
+  ]
+}

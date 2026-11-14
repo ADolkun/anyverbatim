@@ -173,13 +173,44 @@ def test_zh_segments_join_without_separator_and_en_with_a_space(make_doc, seg) -
     ("left", "right", "joined"),
     [
         ("Really strong quarter.", "Next we look at margins.", "Really strong quarter. Next we look at margins."),
+        ("He said “stop.”", "Then he left.", "He said “stop.” Then he left."),
+        ("It fell (sharply).", '"Why?" she asked.', 'It fell (sharply). "Why?" she asked.'),
         ("收入3.5万美元。", "Really strong quarter.", "收入3.5万美元。Really strong quarter."),
-        ("Really strong quarter.", "大家好。", "Really strong quarter. 大家好。"),
+        ("Really strong quarter.", "大家好。", "Really strong quarter.大家好。"),
         ("大家好欢迎回来", "今天聊聊ETF", "大家好欢迎回来今天聊聊ETF"),
-        ("今天聊聊利润", "really strong", "今天聊聊利润 really strong"),
+        ("今天聊聊利润", "really strong", "今天聊聊利润really strong"),
         ("引用", "「原话」", "引用「原话」"),
+        ("“走吧。”", "然后", "“走吧。”然后"),
+        ("我想想……", "好吧。", "我想想……好吧。"),
+        ("好的!", "我们", "好的!我们"),
+        ("好的？", "我们", "好的？我们"),
+        ("就这样——", "下一个", "就这样——下一个"),
+        ("增长了5%", "然后", "增长了5%然后"),
+        ("今年", "2025年", "今年2025年"),
+        ("到了2025", "年底", "到了2025年底"),
+        ("他说‘好’", "我同意", "他说‘好’我同意"),
+        ("Revenue grew 5%", "then fell.", "Revenue grew 5% then fell."),
     ],
-    ids=["end.Next", "cjk-stop-latin", "latin-stop-cjk", "cjk-cjk", "cjk-latin", "cjk-bracket"],
+    ids=[
+        "end.Next",
+        "latin-closer-latin",
+        "latin-quote-opener",
+        "cjk-stop-latin",
+        "latin-stop-cjk",
+        "cjk-cjk",
+        "cjk-latin",
+        "cjk-bracket",
+        "cjk-quote-closer",
+        "cjk-ellipsis",
+        "cjk-ascii-bang",
+        "cjk-fullwidth-question",
+        "cjk-dash",
+        "percent-cjk",
+        "cjk-digit",
+        "digit-cjk",
+        "cjk-single-quote",
+        "percent-latin",
+    ],
 )
 def test_segments_join_by_the_script_at_each_boundary(make_doc, seg, left: str, right: str, joined: str) -> None:
     doc = make_doc([seg(left, 0.0, 1.0), seg(right, 1.0, 2.0)], language="zh")
@@ -187,9 +218,9 @@ def test_segments_join_by_the_script_at_each_boundary(make_doc, seg, left: str, 
 
 
 def test_the_joiner_reads_the_text_not_the_footnote_marker(make_doc, seg, flag) -> None:
-    text = "Prices rose 12"
-    doc = make_doc([seg(text, 0.0, 1.0, flags=[flag("low_confidence", text, "12")]), seg("今天。", 1.0, 2.0)])
-    assert "Prices rose 12[^1] 今天。" in render_markdown(doc)
+    text = "价格涨到12"
+    doc = make_doc([seg(text, 0.0, 1.0, flags=[flag("low_confidence", text, "12")]), seg("today.", 1.0, 2.0)])
+    assert "价格涨到12[^1] today." in render_markdown(doc)
 
 
 def recording(**fields: object) -> dict[str, object]:
@@ -248,6 +279,38 @@ def test_ids_sharing_a_name_are_one_person(make_doc, seg) -> None:
         "[00:09] **Bob:** Still me.",
         "[00:10] **Alice:** Bye.",
     ]
+
+
+def test_ids_sharing_a_name_stay_apart_across_a_long_pause(make_doc, seg) -> None:
+    doc = make_doc(
+        [
+            seg("Hi.", 0.0, 1.0, paragraph=0, speaker="S1"),
+            seg("Hello.", 1.0, 2.0, paragraph=1, speaker="S2"),
+            seg("A minute later.", 62.0, 63.0, paragraph=2, speaker="S3"),
+        ],
+        source=recording(),
+        speakers={"S1": ("Alice", 1.0), "S2": ("Bob", 1.0), "S3": ("Bob", 1.0)},
+    )
+    paragraphs = [line for line in render_markdown(doc).splitlines() if line.startswith("[")]
+    assert paragraphs == ["[00:00] **Alice:** Hi.", "[00:01] **Bob:** Hello.", "[01:02] **Bob:** A minute later."]
+
+
+def test_ids_sharing_a_name_join_only_within_the_paragraph_size_limit(make_doc, seg) -> None:
+    # Four sentences and three make seven, past the splitter's six.
+    first = [seg(f"One {n}.", float(n), n + 1.0, paragraph=0, speaker="S1") for n in range(4)]
+    second = [seg(f"Two {n}.", 4.0 + n, 5.0 + n, paragraph=1, speaker="S2") for n in range(3)]
+    doc = make_doc(
+        [*first, *second, seg("Hi.", 8.0, 9.0, paragraph=2, speaker="S3")],
+        source=recording(),
+        speakers={"S1": ("Bob", 4.0), "S2": ("Bob", 3.0), "S3": ("Alice", 1.0)},
+    )
+    paragraphs = [line for line in render_markdown(doc).splitlines() if line.startswith("[")]
+    assert [line.split("** ")[0] for line in paragraphs] == ["[00:00] **Bob:", "[00:04] **Bob:", "[00:08] **Alice:"]
+
+
+def test_an_untitled_recording_is_headed_by_its_file_name(make_doc, seg) -> None:
+    doc = make_doc([seg("x", 0.0, 1.0)], source=recording(title="  ", file_name="Memo 3.m4a"))
+    assert render_markdown(doc).startswith("# Memo 3.m4a\n")
 
 
 def test_ids_that_all_share_one_name_get_no_labels(make_doc, seg) -> None:

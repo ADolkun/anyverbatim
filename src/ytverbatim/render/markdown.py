@@ -5,6 +5,7 @@ from datetime import datetime
 from itertools import groupby
 
 from ytverbatim.contract import ContextDocument, Flag, RecordingSource, Segment, YouTubeSource
+from ytverbatim.text import segment as seg
 
 _HOUR = 3600
 _WATCH_URL = "https://youtu.be/"
@@ -24,9 +25,12 @@ _BEFORE_STAGE = {"entity_corrected": "correction", "numeric_fixed": "numeric"}
 # Timing and overlap provenance for programs; they say nothing a reader of the text can act on.
 _JSON_ONLY = frozenset({"timing_interpolated", "overlapping_speech"})
 _ORIGIN = {"voice_memos": "Voice Memos"}
-_IDEOGRAPH = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
-# CJK symbols and punctuation, and fullwidth forms: they carry their own spacing.
-_CJK_PUNCTUATION = re.compile(r"[\u3000-\u303f\uff00-\uffef]")
+# Ideographs, CJK symbols and punctuation, and fullwidth forms: a boundary next to one takes no space.
+_CJK = re.compile(r"[\u3000-\u303f\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef]")
+# What a segment may end with after its last word (closers, and General Punctuation such as … — ” ’) or start with
+# before its first (openers); the boundary is judged by the characters beyond them.
+_TRAILING = re.compile(r"[\u2000-\u206f\"')）】」』》〕\]]+$")
+_LEADING = re.compile(r"^[\u2000-\u206f\"'(（「『《【〔\[]+")
 
 
 def render_markdown(doc: ContextDocument) -> str:
@@ -38,7 +42,7 @@ class _Renderer:
         self._doc = doc
         self._hours = doc.source.duration_s >= _HOUR
         self._footnotes: list[str] = []
-        self._names = {s.id: s.name or f"Speaker {s.id.removeprefix('S')}" for s in doc.speakers}
+        self._names = {speaker.id: speaker.label for speaker in doc.speakers}
         # Ids that share a name are one person, so a document whose speakers all share one name needs no labels.
         self._labelled = len(set(self._names.values())) > 1
 
@@ -59,7 +63,8 @@ class _Renderer:
             facts += [self._clock(source.duration_s), f"{_WATCH_URL}{source.id}"]
         else:
             facts = self._recording_facts(source)
-        return [f"# {_escape(source.title)}", " · ".join(facts), self._provenance()]
+        title = source.title if isinstance(source, YouTubeSource) else source.title.strip() or source.file_name
+        return [f"# {_escape(title)}", " · ".join(facts), self._provenance()]
 
     def _recording_facts(self, source: RecordingSource) -> list[str]:
         facts: list[str] = []
@@ -122,28 +127,30 @@ class _Renderer:
         return blocks
 
     def _blocks(self) -> list[list[Segment]]:
-        """Group the segments into rendered paragraphs: one per paragraph and chapter, people's turns joined.
+        """Group the segments into rendered paragraphs: one per paragraph and chapter, one person's turns joined.
 
-        Paragraphs of two ids that share a name join, since they are one person; a pause inside one id's turn, and a
-        chapter start, still break.
+        Paragraphs of two ids that share a name are one person's, so they join where the paragraph splitter itself
+        would not have broken them: no chapter start, a short pause, and the joined block within its size limits.
         """
         blocks: list[list[Segment]] = []
         for _, group in groupby(self._doc.segments, key=lambda s: (s.paragraph, s.chapter)):
             segments = list(group)
-            if blocks and self._same_person(blocks[-1][-1], segments[0]):
+            if blocks and self._same_person(blocks[-1], segments):
                 blocks[-1] += segments
             else:
                 blocks.append(segments)
         return blocks
 
-    def _same_person(self, last: Segment, first: Segment) -> bool:
+    def _same_person(self, block: list[Segment], following: list[Segment]) -> bool:
+        last, first = block[-1], following[0]
         before, after = last.speaker, first.speaker
+        if before is None or after is None or before == after or self._names[before] != self._names[after]:
+            return False
         return (
-            before is not None
-            and after is not None
-            and before != after
-            and last.chapter == first.chapter
-            and self._names[before] == self._names[after]
+            last.chapter == first.chapter
+            and first.start - last.end < seg.PARAGRAPH_PAUSE_S
+            and len(block) + len(following) <= seg.PARAGRAPH_MAX_SENTENCES
+            and following[-1].end - block[0].start < seg.PARAGRAPH_MAX_S
         )
 
     def _paragraph(self, segments: list[Segment]) -> str:
@@ -205,24 +212,19 @@ def _recorded(moment: datetime) -> str:
 
 
 def _joined(segments: Sequence[Segment], rendered: Sequence[str]) -> str:
-    """Join rendered segments with a space, except where CJK text or CJK punctuation meets at the boundary."""
+    """Join rendered segments with one space where Latin script meets Latin script, and with none at CJK."""
     out = ""
     left = ""
     for segment, text in zip(segments, rendered, strict=True):
         if not text:
             continue
-        right = segment.text.strip()[:1]
+        stripped = segment.text.strip()
         if out:
-            out += _separator(left, right)
+            right = _LEADING.sub("", stripped)[:1]
+            out += "" if _CJK.match(left) or _CJK.match(right) else " "
         out += text
-        left = segment.text.strip()[-1:]
+        left = _TRAILING.sub("", stripped)[-1:]
     return out
-
-
-def _separator(left: str, right: str) -> str:
-    if _CJK_PUNCTUATION.match(left) or _CJK_PUNCTUATION.match(right):
-        return ""
-    return "" if _IDEOGRAPH.match(left) and _IDEOGRAPH.match(right) else " "
 
 
 def _escape_positions(text: str) -> set[int]:

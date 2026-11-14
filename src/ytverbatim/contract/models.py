@@ -1,3 +1,4 @@
+import itertools
 import re
 from collections.abc import Sequence
 from datetime import date
@@ -14,6 +15,8 @@ from pydantic import (
     model_validator,
 )
 
+# Readers refuse enum values they do not know, so a new flag kind, origin or source kind needs a new major version;
+# a minor version may only add optional fields.
 SCHEMA_VERSION = "2.0"
 
 # An absolute /Users/<name>/ or /home/<name>/ path, but not a URL path such as example.com/home/user/.
@@ -253,18 +256,14 @@ class YouTubeSource(_Model):
     access: Access
 
 
-_RECORDING_ID = re.compile(r"rec-[0-9a-f]{16}")
-_SHA256 = re.compile(r"[0-9a-f]{64}")
-
-
 class RecordingSource(_Model):
     kind: Literal["recording"]
     # "rec-" plus the first 16 hex digits of `audio_sha256`, the hash of the transcribed stream's encoded packets.
-    id: str
-    audio_sha256: str
+    id: str = Field(pattern=r"^rec-[0-9a-f]{16}$")
+    audio_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     title: str
     # A basename only: no absolute path is ever persisted.
-    file_name: str
+    file_name: str = Field(pattern=r"^[^/]+$")
     origin: Literal["file", "voice_memos"]
     recorded_at: AwareDatetime | None
     duration_s: Seconds
@@ -273,12 +272,8 @@ class RecordingSource(_Model):
 
     @model_validator(mode="after")
     def _identity(self) -> Self:
-        if not _SHA256.fullmatch(self.audio_sha256):
-            raise ValueError("recording audio_sha256 must be 64 lowercase hex digits")
-        if not _RECORDING_ID.fullmatch(self.id) or self.id != f"rec-{self.audio_sha256[:16]}":
+        if self.id != f"rec-{self.audio_sha256[:16]}":
             raise ValueError(f"recording id {self.id!r} must be 'rec-' plus the first 16 hex digits of audio_sha256")
-        if "/" in self.file_name or not self.file_name:
-            raise ValueError(f"recording file_name {self.file_name!r} must be a non-empty basename without '/'")
         return self
 
 
@@ -286,12 +281,28 @@ Source = Annotated[YouTubeSource | RecordingSource, Field(discriminator="kind")]
 
 
 class Speaker(_Model):
-    # "S1", "S2", ... in order of first appearance.
-    id: str
+    # Numbered by first appearance when speakers are attributed; a later text change may leave a gap, never renumber,
+    # so names bound to the attribution stay on the right person.
+    id: str = Field(pattern=r"^S[1-9][0-9]*$")
     # Two ids may share a name; the render then treats them as one person.
     name: str | None
     # The summed duration of this speaker's segments.
     speech_s: Seconds
+
+    @property
+    def number(self) -> int:
+        return int(self.id[1:])
+
+    @property
+    def label(self) -> str:
+        """Return the name, else the default label the render shows ("Speaker 3")."""
+        return self.name or f"Speaker {self.number}"
+
+    @model_validator(mode="after")
+    def _named(self) -> Self:
+        if self.name is not None and not self.name.strip():
+            raise ValueError(f"speaker {self.id} has a blank name; use null for no name")
+        return self
 
 
 class Quality(_Model):
@@ -369,6 +380,7 @@ class ContextDocument(_Model):
                 "chapter", [(c.index, c.first_segment, c.last_segment) for c in self.chapters], len(self.segments)
             )
         self._check_membership()
+        self._check_languages()
         self._check_speakers()
         return self
 
@@ -417,10 +429,27 @@ class ContextDocument(_Model):
             if chapter is None or not chapter.first_segment <= segment.id <= chapter.last_segment:
                 raise ValueError(f"segment {segment.id} names chapter {segment.chapter}, which does not contain it")
 
+    def _check_languages(self) -> None:
+        transcript = self.transcript
+        if self.segments and not transcript.languages:
+            raise ValueError("transcript.languages is empty but the document has segments")
+        if transcript.languages and transcript.language not in transcript.languages:
+            raise ValueError(
+                f"transcript.language {transcript.language!r} is not in transcript.languages "
+                f"{list(transcript.languages)}"
+            )
+
     def _check_speakers(self) -> None:
         listed = [speaker.id for speaker in self.speakers]
         if listed and self.transcript.diarization is None:
             raise ValueError("speakers are listed but transcript.diarization is None")
+        if self.segments and not listed and self.transcript.diarization is not None:
+            raise ValueError("the transcript is diarized and has segments but lists no speakers")
+        defaults = {f"Speaker {speaker.number}": speaker.id for speaker in self.speakers}
+        for speaker in self.speakers:
+            owner = defaults.get(speaker.name or "")
+            if owner is not None and owner != speaker.id:
+                raise ValueError(f"speaker {speaker.id} is named {speaker.name!r}, the default label of {owner}")
         for segment in self.segments:
             if segment.speaker is None:
                 if listed:
@@ -443,8 +472,9 @@ class ContextDocument(_Model):
         for speaker in listed:
             if speaker not in appearance:
                 raise ValueError(f"speaker {speaker!r} is listed but has no segment")
-        expected = [f"S{number}" for number in range(1, len(listed) + 1)]
-        if listed != expected or appearance != expected:
+        numbers = [speaker.number for speaker in self.speakers]
+        if any(b <= a for a, b in itertools.pairwise(numbers)) or appearance != listed:
             raise ValueError(
-                f"speaker ids must run {expected} in order of first appearance; listed {listed}, appearing {appearance}"
+                f"speaker ids must increase in order of first appearance (gaps allowed); listed {listed}, "
+                f"appearing {appearance}"
             )

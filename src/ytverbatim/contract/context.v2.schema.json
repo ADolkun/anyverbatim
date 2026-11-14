@@ -496,10 +496,12 @@
           "type": "string"
         },
         "id": {
+          "pattern": "^rec-[0-9a-f]{16}$",
           "title": "Id",
           "type": "string"
         },
         "audio_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
           "title": "Audio Sha256",
           "type": "string"
         },
@@ -508,6 +510,7 @@
           "type": "string"
         },
         "file_name": {
+          "pattern": "^[^/]+$",
           "title": "File Name",
           "type": "string"
         },
@@ -688,6 +691,7 @@
       "additionalProperties": false,
       "properties": {
         "id": {
+          "pattern": "^S[1-9][0-9]*$",
           "title": "Id",
           "type": "string"
         },

@@ -63,24 +63,34 @@ def _check_version(version: object) -> tuple[int, int]:
     major, minor = int(parts[0]), int(parts[1])
     if major != _CURRENT_MAJOR and version not in _UPGRADABLE_1X:
         supported = ", ".join(sorted(_UPGRADABLE_1X))
-        raise ContractError(
+        error = ContractError(
             f"unsupported context.json schema version {version!r}; this reader supports {supported} and "
             f"{_CURRENT_MAJOR}.x"
         )
+        error.fix = (
+            "upgrade ytverbatim to read this document"
+            if major > _CURRENT_MAJOR
+            else "no release of ytverbatim writes this version; produce the document again"
+        )
+        raise error
     return major, minor
 
 
 def _upgrade_1x(data: dict[str, Any]) -> dict[str, Any]:
     """Map a 1.x document onto the current shape; fields it does not know stay, so validation still rejects them."""
+    transcript = data.get("transcript")
+    old_transcript = cast("dict[str, Any]", transcript) if isinstance(transcript, dict) else {}
+    added = [key for key in ("source", "speakers") if key in data]
+    added += [f"transcript.{key}" for key in ("languages", "diarization") if key in old_transcript]
+    if added:
+        raise ContractError(f"a {data['schema_version']} document cannot carry the 2.0 fields {', '.join(added)}")
     upgraded = {key: value for key, value in data.items() if key not in ("video", "access")}
     video = data.get("video")
     if isinstance(video, dict):
         upgraded["source"] = {"kind": "youtube", **cast("dict[str, Any]", video), "access": data.get("access")}
-    transcript = data.get("transcript")
     if isinstance(transcript, dict):
-        old = cast("dict[str, Any]", transcript)
-        language = old.get("language")
-        upgraded["transcript"] = {**old, "languages": [language] if language else [], "diarization": None}
+        language = old_transcript.get("language")
+        upgraded["transcript"] = {**old_transcript, "languages": [language] if language else [], "diarization": None}
     upgraded["speakers"] = list[Any]()
     return upgraded
 
