@@ -20,6 +20,7 @@ from ytverbatim.ytdlp.types import Signal
 JSON_KEYS = {
     "state",
     "ok",
+    "usable",
     "fix",
     "detail",
     "source",
@@ -70,7 +71,8 @@ def test_status_json_shape_and_cache(kit, monkeypatch: pytest.MonkeyPatch) -> No
     assert first.exit_code == EXIT_CHATGPT_SIGNED_OUT, first.output
     payload = json.loads(first.output)["youtube"]
     assert set(payload) == JSON_KEYS
-    assert payload["state"] == "ok" and payload["ok"] is True and payload["cached"] is False
+    assert payload["state"] == "ok" and payload["ok"] is True and payload["usable"] is True
+    assert payload["cached"] is False
     assert payload["source"] == "chrome:Default" and payload["profile"] == "Default"
     assert payload["premium"] is None
 
@@ -107,7 +109,7 @@ def test_status_without_a_browser_login_is_fine_for_public_videos(kit, monkeypat
     assert youtube == f"YouTube  {'none':<{len(EMAIL)}}  public videos only (no browser login)"
     assert "Fix:" not in result.output
     payload = json.loads(_status("--json").output)
-    assert payload["youtube"]["state"] == "no_source"
+    assert payload["youtube"]["state"] == "no_source" and payload["youtube"]["usable"] is True
 
 
 def test_status_with_broken_saved_source_needs_attention(kit, monkeypatch: pytest.MonkeyPatch) -> None:
