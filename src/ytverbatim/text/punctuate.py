@@ -8,6 +8,11 @@ or digit. `guard_violation` enforces that on every reply: a violating item is re
 fails again the original text is kept and its index is reported in `PunctuationResult.failed`. A reply that is not the
 expected JSON raises `LLMOutputError` rather than shipping unpunctuated text as if it had been handled.
 
+Segments are cut from continuous speech at pauses and a size limit, so a cut can fall mid-sentence or even inside a
+word. Each segment therefore travels with the end of the segment before it and the start of the one after it, as
+read-only context the reply must not contain, so the model can tell a sentence that ends at the cut from one that
+goes on.
+
 Each batch that passes the guard is checkpointed, so a resume never pays twice for a finished batch.
 """
 
@@ -34,7 +39,7 @@ from ytverbatim.text.segment import is_punctuated, uses_zh_rules
 _log = logging.getLogger(__name__)
 
 # Part of every checkpoint and stage key: bump it on any prompt, guard or logic change so stored results are redone.
-PROMPT_VERSION = "punctuation-v3"
+PROMPT_VERSION = "punctuation-v4"
 BATCH_CHARS = 1500
 # A Latin stretch this long without one capital is Whisper's lowercase decoding, not a chat fragment or a lone
 # lowercase brand: real prose of this length carries at least a sentence start or an "I".
@@ -46,6 +51,9 @@ _MAX_OUTPUT_TOKENS = 8192
 # Marks that are data in a transcript (S&P, 3.5%, #1) and so count as content for the guard.
 _DATA_MARKS = frozenset("%&#@")
 _MAX_DIFF_PARTS = 6
+# How much of the neighbouring segment a segment is shown: enough to see that a word or sentence runs on across the cut.
+_CONTEXT_CHARS = 16
+_CONTEXT_WORDS = 4
 _DIFF_CONTEXT = 12
 
 Style = Literal["zh", "en"]
@@ -57,6 +65,12 @@ _RULES = (
     "Never add, remove or change punctuation inside or next to a number (1,000, 3.5, -5%, 1/2, 3:30, 10-K stay "
     "exactly as given). Never lowercase a letter. "
     "Never put quotation marks around arbitrary text. Never merge or split segments; every segment keeps its index. "
+    "The segments are consecutive pieces of one continuous speech, cut at pauses or by length, not at sentence "
+    "boundaries: a cut can fall mid-sentence or even inside a word. Each segment may come with `before` and `after`, "
+    "the end of the previous segment and the start of the next one. They are for reading only: use them to judge "
+    "whether the sentence is finished where the segment ends, and never include them in your reply. When the speech "
+    "runs on across the cut (the next words complete the word or the sentence), end the segment with no "
+    "sentence-final mark, or with a comma at most, and never put a mark inside a word. "
 )
 _STYLE_RULES: dict[Style, str] = {
     "zh": (
@@ -104,6 +118,15 @@ class PunctuationResult:
     edits: tuple[tuple[Edit, ...], ...]
     failed: tuple[int, ...]
     usage: tuple[LLMUsage, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _Piece:
+    """A segment to punctuate with the unpunctuated edges of its neighbours, which are only there to be read."""
+
+    text: str
+    before: str
+    after: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +294,7 @@ def punctuate(
 class _Run:
     def __init__(self, texts: Sequence[str], *, client: LLMClient, checkpoint_dir: Path) -> None:
         self.texts = list(texts)
+        self._source = tuple(texts)
         self.edits: list[list[Edit]] = [[] for _ in texts]
         self.failed: list[int] = []
         self.meter = UsageMeter()
@@ -279,14 +303,15 @@ class _Run:
 
     def punctuate_batch(self, style: Style, indices: list[int]) -> None:
         # Batch-local indices keep the checkpoint key independent of where the batch sits in the document.
-        originals = [self.texts[i] for i in indices]
-        path = self._checkpoint_path(style, originals)
+        pieces = [self._piece(style, i) for i in indices]
+        originals = [piece.text for piece in pieces]
+        path = self._checkpoint_path(style, pieces)
         loaded = self._load(path, originals)
         if loaded is not None:
             outputs, usage = loaded
         else:
             batch = UsageMeter()
-            outputs = self._ask_with_retry(style, originals, batch)
+            outputs = self._ask_with_retry(style, pieces, batch)
             usage = batch.summary()
             # A batch with a kept-original item is not cached, so a resume gets another try at it.
             if all(text is not None for text in outputs):
@@ -299,17 +324,24 @@ class _Run:
                 self.texts[index] = output
                 self.edits[index].append(Edit(stage=STAGE, before=original, after=output, llm=self._client.id))
 
-    def _ask_with_retry(self, style: Style, originals: list[str], meter: UsageMeter) -> list[str | None]:
-        outputs: list[str | None] = [None] * len(originals)
-        rejected = self._guarded(style, originals, list(range(len(originals))), None, outputs, meter)
+    def _piece(self, style: Style, index: int) -> _Piece:
+        # The neighbours as transcribed, not as an earlier batch may have punctuated them, so a batch's key and request
+        # do not depend on which batches ran before it.
+        before = self._source[index - 1] if index > 0 else ""
+        after = self._source[index + 1] if index + 1 < len(self._source) else ""
+        return _Piece(self._source[index], _tail(before, style), _head(after, style))
+
+    def _ask_with_retry(self, style: Style, pieces: list[_Piece], meter: UsageMeter) -> list[str | None]:
+        outputs: list[str | None] = [None] * len(pieces)
+        rejected = self._guarded(style, pieces, list(range(len(pieces))), None, outputs, meter)
         if rejected:
-            rejected = self._guarded(style, originals, sorted(rejected), rejected, outputs, meter)
+            rejected = self._guarded(style, pieces, sorted(rejected), rejected, outputs, meter)
         return outputs
 
     def _guarded(
         self,
         style: Style,
-        originals: list[str],
+        pieces: list[_Piece],
         asked: list[int],
         previous: dict[int, _Rejected] | None,
         outputs: list[str | None],
@@ -317,8 +349,8 @@ class _Run:
     ) -> dict[int, _Rejected]:
         """Ask for ``asked``, store the replies that pass the guard in ``outputs`` and return the ones that do not."""
         rejected: dict[int, _Rejected] = {}
-        for index, text in self._ask(style, originals, asked, previous, meter).items():
-            problem = guard_violation(originals[index], text)
+        for index, text in self._ask(style, pieces, asked, previous, meter).items():
+            problem = guard_violation(pieces[index].text, text)
             if problem is None:
                 outputs[index] = text
             else:
@@ -328,7 +360,7 @@ class _Run:
     def _ask(
         self,
         style: Style,
-        originals: list[str],
+        pieces: list[_Piece],
         asked: list[int],
         previous: dict[int, _Rejected] | None,
         meter: UsageMeter,
@@ -339,7 +371,7 @@ class _Run:
         for _ in range(2):
             request = LLMRequest(
                 system=_SYSTEM + _STYLE_RULES[style],
-                user=_prompt(originals, asked, previous) + complaint,
+                user=_prompt(pieces, asked, previous) + complaint,
                 max_output_tokens=_MAX_OUTPUT_TOKENS,
                 temperature=0.0,
             )
@@ -350,8 +382,8 @@ class _Run:
             complaint = f"\n\nYour previous reply had the indices {got}; it must contain exactly {expected}, once each."
         raise LLMOutputError(f"{self._client.id} did not return exactly the requested indices {expected} twice")
 
-    def _checkpoint_path(self, style: Style, originals: list[str]) -> Path:
-        batch_text = json.dumps(_batch_items(originals, range(len(originals))), ensure_ascii=False)
+    def _checkpoint_path(self, style: Style, pieces: list[_Piece]) -> Path:
+        batch_text = json.dumps(_batch_items(pieces, range(len(pieces))), ensure_ascii=False)
         key = json.dumps([PROMPT_VERSION, self._client.id, style, batch_text], ensure_ascii=False)
         return self._checkpoint_dir / f"{hashlib.sha256(key.encode()).hexdigest()}.json"
 
@@ -379,21 +411,39 @@ class _Run:
         atomic.write_json(path, _Checkpoint(items=items, usage=usage).model_dump(mode="json"))
 
 
-def _batch_items(originals: Sequence[str], indices: Sequence[int]) -> list[dict[str, object]]:
-    return [{"i": i, "text": originals[i]} for i in indices]
+def _tail(text: str, style: Style) -> str:
+    return text.strip()[-_CONTEXT_CHARS:] if style == "zh" else " ".join(text.split()[-_CONTEXT_WORDS:])
 
 
-def _prompt(originals: list[str], asked: list[int], previous: dict[int, _Rejected] | None) -> str:
+def _head(text: str, style: Style) -> str:
+    return text.strip()[:_CONTEXT_CHARS] if style == "zh" else " ".join(text.split()[:_CONTEXT_WORDS])
+
+
+def _item(pieces: Sequence[_Piece], i: int) -> dict[str, object]:
+    piece = pieces[i]
+    item: dict[str, object] = {"i": i}
+    if piece.before:
+        item["before"] = piece.before
+    item["text"] = piece.text
+    if piece.after:
+        item["after"] = piece.after
+    return item
+
+
+def _batch_items(pieces: Sequence[_Piece], indices: Sequence[int]) -> list[dict[str, object]]:
+    return [_item(pieces, i) for i in indices]
+
+
+def _prompt(pieces: list[_Piece], asked: list[int], previous: dict[int, _Rejected] | None) -> str:
     if previous is None:
         return (
             "Restore the punctuation in these segments. "
             + _SCHEMA_HINT
             + "\n\nSEGMENTS:\n"
-            + json.dumps(_batch_items(originals, asked), ensure_ascii=False)
+            + json.dumps(_batch_items(pieces, asked), ensure_ascii=False)
         )
     items: list[dict[str, object]] = [
-        {"i": i, "text": originals[i], "rejected_reply": previous[i].reply, "problem": previous[i].problem}
-        for i in asked
+        {**_item(pieces, i), "rejected_reply": previous[i].reply, "problem": previous[i].problem} for i in asked
     ]
     return (
         "Your punctuation for these segments was rejected because it changed letters, characters or digits, not only "
