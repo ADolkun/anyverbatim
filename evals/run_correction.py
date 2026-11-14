@@ -12,6 +12,7 @@ import os
 from contextlib import AbstractContextManager
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 import click
 
@@ -121,9 +122,9 @@ def external_client(candidate: Candidate) -> LLMClient:
     return client
 
 
-def native_client(candidate: Candidate) -> LLMClient:
+def native_client(candidate: Candidate, provider: Literal["chatgpt"]) -> LLMClient:
     """Build a candidate served by one of ytverbatim's own providers, refusing early when it is not ready."""
-    options = config.LLMOptions(provider=candidate.provider or "none", model=candidate.model, effort=candidate.effort)
+    options = config.LLMOptions(provider=provider, model=candidate.model, effort=candidate.effort)
     check_ready(options)
     return client_from_options(options)
 
@@ -134,7 +135,7 @@ def open_client(store: Layout, candidate: Candidate, cache: Path) -> AbstractCon
         cap = memory_cap_bytes(config.load_options().asr.memory_cap_gib)
         return local_server(candidate, cache, run_dir(store, candidate), memory_cap=cap)
     if candidate.provider is not None:
-        return contextlib.nullcontext(native_client(candidate))
+        return contextlib.nullcontext(native_client(candidate, candidate.provider))
     if candidate.external:
         return contextlib.nullcontext(external_client(candidate))
     _require_ready(claude_cli.readiness())

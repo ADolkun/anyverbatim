@@ -157,9 +157,9 @@ its own: splitting figures fused to tickers, and having the correction guard rec
 ### Update, 2026-11-14
 
 **gpt-6.1-sol at medium effort is now the native default LLM** (`chatgpt:gpt-6.1-sol@medium`), served by ytverbatim's
-own `chatgpt` provider through the user's ChatGPT plan after one `ytverbatim llm login`. It led every candidate in the
-screen above: 57.58 net errors removed per hour against c-sonnet's 42.71, at fix precision 0.929. High effort is not the
-default because it added nothing measurable and took 1.7 times as long. `claude-cli:claude-sonnet-5-5` remains the
-recommended alternative for users with a claude.ai subscription instead of a ChatGPT plan. The native provider sends the
-same request the external client sent for `x-gpt61-medium`; its eval candidate is `o-gpt61-medium`, a run separate from
-the stored external runs.
+own `chatgpt` provider through the user's ChatGPT plan after one `ytverbatim llm login`. gpt-6.1-sol led the screen
+above: medium removed 57.58 net errors per hour against c-sonnet's 42.71, at fix precision 0.929. Medium matched high
+(57.58 against 57.77, with overlapping intervals) in about 0.6 times the time (626.7 s against 1040.2 s), so medium is
+the default. `claude-cli:claude-sonnet-5-5` remains the recommended alternative for users with a claude.ai subscription
+instead of a ChatGPT plan. The native provider sends the same request the external client sent for `x-gpt61-medium`;
+its eval candidate is `o-gpt61-medium`, a run separate from the stored external runs.
