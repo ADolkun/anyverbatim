@@ -25,6 +25,7 @@ from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from ytverbatim.pipeline import ProgressEvent, VideoResult, process_many
 from ytverbatim.text import guards, numbers, numerals, numeric
 from ytverbatim.text import punctuate as punctuate_module
+from ytverbatim.ytdlp.types import Signal
 
 ZH = "zhVideo0001"
 EN = "enVideo0001"
@@ -1070,3 +1071,44 @@ def test_captions_mode_says_why_it_cannot_choose_among_manual_tracks(session_kit
     assert results[0].notices[0] == (
         "2 manual caption tracks and no declared video language to choose one; transcribed with ASR instead"
     )
+
+
+def captions_mode() -> config.Options:
+    return config.load_options(overrides={"asr": {"source": "captions"}})
+
+
+def test_an_audio_fetch_that_fails_after_the_captions_fell_through_fails_the_video(session_kit, worker) -> None:
+    yt = zh_yt(session_kit)
+    yt.failures[("audio", False)] = [session_kit.fail(Signal.NO_FORMATS)]
+    report, results, events = run(session_kit, yt, options=captions_mode())
+
+    (result,) = results
+    assert result.document is None and result.markdown is None
+    assert result.outcome.status is session.VideoStatus.ERROR and result.outcome.error == Signal.NO_FORMATS.value
+    assert [e.stage for e in events] == ["fetch", "fetch"] and worker.calls == []
+    assert report.exit_code == 1
+    batch = json.loads((session_kit.out / "batch_report.json").read_text(encoding="utf-8"))
+    (recorded,) = batch["videos"]
+    assert (recorded["id"], recorded["status"], recorded["error"]) == (ZH, "error", Signal.NO_FORMATS.value)
+    with store.lock(session_kit.out / ZH):
+        pass
+
+
+def test_tags_come_from_the_extraction_the_audio_fetch_refreshed(session_kit, worker, monkeypatch) -> None:
+    yt = zh_yt(session_kit)
+    extract = yt._info
+
+    def tagged(video_id: str, with_comments: bool = False) -> dict[str, object]:
+        return {**extract(video_id, with_comments), "tags": [f"extraction{len(yt.labels('metadata'))}"]}
+
+    monkeypatch.setattr(yt, "_info", tagged)
+    # Every saved extraction is too old for a fetch that still has stages to run, so the audio fetch extracts again.
+    monkeypatch.setattr(session, "INFO_MAX_AGE_S", -1.0)
+    llm = FakeLLM()
+    _, results, events = run(session_kit, yt, options=captions_mode(), llm=llm)
+
+    assert len(yt.labels("metadata")) == 2 and [e.stage for e in events][:2] == ["fetch", "fetch"]
+    assert only_document(results).video.tags == ("extraction2",)
+    (correction,) = [r for r, stage in zip(llm.requests, llm.stages(), strict=True) if stage == "correct"]
+    assert "extraction2" in correction.system + correction.user
+    assert "extraction1" not in correction.system + correction.user

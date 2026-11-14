@@ -2,7 +2,7 @@
   "schema_version": "1.1",
   "generator": {
     "name": "ytverbatim",
-    "version": "0.0.1"
+    "version": "0.0.0-fixture"
   },
   "created_at": "2030-01-01T12:00:00Z",
   "video": {
@@ -37,14 +37,14 @@
     "script": "n/a",
     "runs": [
       {
-        "id": "caption_manual:en",
+        "id": "caption_manual:en-US",
         "kind": "caption_manual",
         "engine": null,
         "model_repo": null,
         "model_revision": null,
         "params": {
           "format": "json3",
-          "language": "en"
+          "language": "en-US"
         },
         "vad": null,
         "chunking": null,
@@ -90,7 +90,7 @@
       "words": null,
       "source": {
         "kind": "caption_manual",
-        "run": "caption_manual:en"
+        "run": "caption_manual:en-US"
       },
       "edits": [],
       "flags": [],
@@ -105,7 +105,7 @@
       "words": null,
       "source": {
         "kind": "caption_manual",
-        "run": "caption_manual:en"
+        "run": "caption_manual:en-US"
       },
       "edits": [],
       "flags": [],
