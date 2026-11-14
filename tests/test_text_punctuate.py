@@ -311,3 +311,74 @@ def test_batches_hold_about_1500_characters_and_use_batch_local_indices(tmp_path
     result = run(texts, FakeClient(respond=respond), tmp_path)
     assert seen == [[0, 1, 2], [0, 1]]
     assert all(text.endswith("。") for text in result.texts)
+
+
+SPLIT_WORD = ["我们把这笔钱存进了银", "行账户然后就去上班了"]
+
+
+def test_a_segment_is_shown_with_the_edges_of_its_neighbours(tmp_path: Path) -> None:
+    texts = ["今天天气很好我们出门去", *SPLIT_WORD, "晚上回家吃饭"]
+    client = FakeClient(respond=lambda request: reply(*((int(i["i"]), i["text"]) for i in asked(request))))
+    run(texts, client, tmp_path)
+    items = asked(client.requests[0])
+    assert [(item.get("before"), item["text"], item.get("after")) for item in items] == [
+        (None, texts[0], texts[1][:16]),
+        (texts[0][-16:], texts[1], texts[2][:16]),
+        (texts[1][-16:], texts[2], texts[3][:16]),
+        (texts[2][-16:], texts[3], None),
+    ]
+
+
+def test_a_word_split_across_two_segments_is_not_ended_at_the_cut(tmp_path: Path) -> None:
+    def respond(request: LLMRequest) -> str:
+        out: list[tuple[int, str]] = []
+        for item in asked(request):
+            ends_mid_word = item.get("after", "").startswith("行")
+            out.append((int(item["i"]), item["text"] + ("" if ends_mid_word else "。")))
+        return reply(*out)
+
+    result = run(SPLIT_WORD, FakeClient(respond=respond), tmp_path)
+    assert result.texts == (SPLIT_WORD[0], SPLIT_WORD[1] + "。")
+    assert "".join(result.texts).count("。") == 1
+
+
+def test_the_prompt_says_a_cut_can_fall_inside_a_word_and_context_is_read_only(tmp_path: Path) -> None:
+    client = FakeClient([reply((0, SPLIT_WORD[0]), (1, SPLIT_WORD[1]))])
+    run(SPLIT_WORD, client, tmp_path)
+    system = client.requests[0].system
+    assert "inside a word" in system
+    assert "never include them in your reply" in system
+    assert "never put a mark inside a word" in system
+
+
+def test_english_context_is_whole_words(tmp_path: Path) -> None:
+    texts = [
+        "so the market was pretty quiet until the fed said that it would hold",
+        "rates steady for the rest of the year",
+    ]
+    client = FakeClient(respond=lambda request: reply(*((int(i["i"]), i["text"]) for i in asked(request))))
+    run(texts, client, tmp_path, "en")
+    first, second = asked(client.requests[0])
+    assert first["after"] == "rates steady for the"
+    assert second["before"] == "that it would hold"
+
+
+def test_neighbours_are_shown_as_transcribed_not_as_an_earlier_batch_punctuated_them(tmp_path: Path) -> None:
+    texts = [("大家好欢迎回来" * 100) for _ in range(5)]
+    seen: list[list[dict[str, Any]]] = []
+
+    def respond(request: LLMRequest) -> str:
+        items = asked(request)
+        seen.append(items)
+        return reply(*((int(item["i"]), item["text"] + "。") for item in items))
+
+    run(texts, FakeClient(respond=respond), tmp_path)
+    assert seen[1][0]["before"] == texts[2][-16:]
+    assert "。" not in seen[1][0]["before"]
+
+
+def test_a_changed_neighbour_redoes_the_batch(tmp_path: Path) -> None:
+    run(SPLIT_WORD, FakeClient([reply((0, SPLIT_WORD[0]), (1, SPLIT_WORD[1]))]), tmp_path)
+    again = FakeClient([reply((0, SPLIT_WORD[0]), (1, SPLIT_WORD[1]))])
+    run([*SPLIT_WORD, "后面的话说完了。"], again, tmp_path)
+    assert len(again.requests) == 1
