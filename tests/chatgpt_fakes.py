@@ -24,20 +24,19 @@ PLAN_SCOPES = ("email", "offline_access", "openid", "profile", "resource.invoke"
 class FakeResponse:
     body: bytes = b""
     lines: list[bytes] = field(default_factory=list[bytes])
-    timeouts: list[float] = field(default_factory=list[float])
     closed: bool = False
     on_readline: Callable[[], None] | None = None
+    read_error: Exception | None = None
 
     def read(self) -> bytes:
+        if self.read_error is not None:
+            raise self.read_error
         return self.body
 
     def readline(self) -> bytes:
         if self.on_readline is not None:
             self.on_readline()
         return self.lines.pop(0) if self.lines else b""
-
-    def settimeout(self, seconds: float) -> None:
-        self.timeouts.append(seconds)
 
     def close(self) -> None:
         self.closed = True
@@ -125,7 +124,6 @@ def store_account(
                 email=EMAIL,
                 access_token=access,
                 refresh_token=refresh,
-                id_token=id_token(),
                 scopes=scopes,
                 expires_at=expires_at,
                 earliest_refresh_at=earliest_refresh_at,

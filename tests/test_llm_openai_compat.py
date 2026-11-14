@@ -1,3 +1,4 @@
+import http.client
 import io
 import json
 import urllib.error
@@ -109,6 +110,8 @@ def test_missing_usage_is_unknown() -> None:
         TimeoutError("timed out"),
         urllib.error.URLError(TimeoutError("timed out")),
         urllib.error.URLError("connection refused"),
+        ConnectionResetError("reset mid-body"),
+        http.client.IncompleteRead(b"partial", 100),
     ],
 )
 def test_timeouts_and_network_errors_are_unavailable(error: Exception) -> None:

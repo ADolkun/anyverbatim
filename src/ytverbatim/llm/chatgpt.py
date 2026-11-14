@@ -119,14 +119,17 @@ class ChatGPTClient:
 
     def _read(self, response: Response, deadline: float) -> tuple[str, Usage]:
         done_items: dict[int, dict[str, object]] = {}
+        seen: set[object] = set()
         for event in self._events(response, deadline):
             kind = event.get("type")
+            if "output_index" in event:
+                seen.add(event.get("output_index"))
             if kind == "response.output_item.done":
                 index = event.get("output_index")
                 if isinstance(index, int) and not isinstance(index, bool):
                     done_items[index] = as_object(event.get("item"))
             elif kind == "response.completed":
-                return self._completed(as_object(event.get("response")), done_items)
+                return self._completed(as_object(event.get("response")), done_items, seen)
             elif kind == "response.failed":
                 raise self._failed(as_object(event.get("response")))
             elif kind == "response.incomplete":
@@ -140,10 +143,10 @@ class ChatGPTClient:
         raise LLMUnavailableError(f"{self.id}: the stream ended without response.completed; usage unknown")
 
     def _events(self, response: Response, deadline: float) -> Iterator[dict[str, object]]:
-        """Server-sent events' `data` fields, decoded; every read waits no longer than the deadline leaves."""
+        """Server-sent events' `data` fields, decoded; the opener ends any read at the deadline."""
         data: list[str] = []
         while True:
-            response.settimeout(self._remaining(deadline))
+            self._remaining(deadline)
             try:
                 raw = response.readline()
             except TimeoutError:
@@ -179,7 +182,9 @@ class ChatGPTClient:
             raise LLMUnavailableError(f"{self.id}: the stream sent a malformed event; usage unknown")
         yield as_object(event)
 
-    def _completed(self, body: Mapping[str, object], done_items: Mapping[int, dict[str, object]]) -> tuple[str, Usage]:
+    def _completed(
+        self, body: Mapping[str, object], done_items: Mapping[int, dict[str, object]], seen: set[object]
+    ) -> tuple[str, Usage]:
         usage = _usage(body)
         if body.get("status") != "completed" or body.get("error") is not None:
             raise LLMUnavailableError(
@@ -195,13 +200,17 @@ class ChatGPTClient:
                 responded=True,
                 usage=usage,
             )
-        # The completed event can arrive with an empty output list; the items it finished arrived one by one.
+        # The completed event can arrive with an empty output list; the items it finished arrived one by one, and
+        # then they must account for every output index the stream mentioned, with no gap.
         output = body.get("output")
-        items = (
-            [as_object(item) for item in output]
-            if isinstance(output, list) and output
-            else [done_items[index] for index in sorted(done_items)]
-        )
+        if isinstance(output, list) and output:
+            items = [as_object(item) for item in output]
+        elif set(done_items) | seen == set(range(len(done_items))):
+            items = [done_items[index] for index in sorted(done_items)]
+        else:
+            raise LLMOutputError(f"{self.id}: the streamed output items are incomplete", responded=True, usage=usage)
+        if any(item.get("status", "completed") != "completed" for item in items):
+            raise LLMOutputError(f"{self.id}: an output item did not complete", responded=True, usage=usage)
         text = "".join(
             str(part.get("text", ""))
             for item in items

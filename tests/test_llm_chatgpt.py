@@ -1,5 +1,10 @@
+import contextlib
+import http.client
 import io
 import json
+import socket
+import threading
+import time
 import urllib.request
 from collections.abc import Callable
 from email.message import Message
@@ -247,8 +252,8 @@ def test_the_deadline_covers_the_whole_stream(signed_in: list[str]) -> None:
     chat = client(opener, timeout_s=10.0, clock=lambda: now[0])
     with pytest.raises(LLMUnavailableError, match="within 10s"):
         chat.complete(REQUEST)
-    assert opener.timeouts == [10.0]
-    assert response.timeouts == [10.0, 6.0, 2.0]
+    assert opener.timeouts == [10.0], "the opener is handed the whole time left"
+    assert now[0] == 12.0, "three reads, then the clock is past the deadline"
     assert response.closed
 
 
@@ -335,3 +340,140 @@ def test_redirects_are_refused_rather_than_followed() -> None:
 def test_the_provider_defaults() -> None:
     assert (chatgpt.DEFAULT_MODEL, chatgpt.DEFAULT_EFFORT) == ("gpt-6.1-sol", "medium")
     assert chatgpt.EFFORTS == ("low", "medium", "high", "xhigh", "max")
+
+
+def test_a_reply_item_that_did_not_complete_is_refused(signed_in: list[str]) -> None:
+    unfinished = {**message("half an answer"), "status": "in_progress"}
+    with pytest.raises(LLMOutputError, match="did not complete") as raised:
+        client(stream(sse(completed([unfinished])))).complete(REQUEST)
+    assert raised.value.usage == Usage(120, 45)
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [{"type": "response.output_item.done", "output_index": 1, "item": message("ok")}],
+        [
+            {"type": "response.output_text.delta", "output_index": 1, "delta": "lost"},
+            {"type": "response.output_item.done", "output_index": 0, "item": message("ok")},
+        ],
+    ],
+)
+def test_rebuilt_output_must_cover_every_index_without_a_gap(
+    signed_in: list[str], events: list[dict[str, object]]
+) -> None:
+    with pytest.raises(LLMOutputError, match="output items are incomplete"):
+        client(stream(sse(*events, completed([])))).complete(REQUEST)
+
+
+def test_a_stream_that_breaks_off_is_unavailable(signed_in: list[str]) -> None:
+    def broken() -> None:
+        raise ConnectionError("the HTTP response broke off (IncompleteRead)")
+
+    with pytest.raises(LLMUnavailableError, match="broke off") as raised:
+        client(stream([], on_readline=broken)).complete(REQUEST)
+    assert raised.value.responded is False
+
+
+def test_the_suite_cannot_reach_openai() -> None:
+    with pytest.raises(AssertionError, match="tried to contact"):
+        chatgpt_http.https_open(urllib.request.Request(RESPONSES_URL), 1.0)
+
+
+Script = Callable[[socket.socket], None]
+
+HEADERS = b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
+
+
+def chunk(data: bytes) -> bytes:
+    return f"{len(data):x}\r\n".encode() + data + b"\r\n"
+
+
+def real_client(script: Script, timeout_s: float) -> tuple[ChatGPTClient, threading.Event]:
+    """A client whose responses are real http.client responses from a server on 127.0.0.1 running `script`."""
+    done = threading.Event()
+    server = socket.create_server(("127.0.0.1", 0))
+    port = server.getsockname()[1]
+
+    def serve() -> None:
+        with server:
+            connection, _ = server.accept()
+            with connection:
+                connection.recv(65536)
+                with contextlib.suppress(OSError):
+                    script(connection)
+                done.wait(5)
+
+    threading.Thread(target=serve, daemon=True).start()
+
+    def open_local(request: urllib.request.Request, timeout_s: float) -> chatgpt_http.Response:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout_s)
+        connection.request("POST", "/v1/responses", body=request.data)
+        return chatgpt_http.BoundedResponse(connection.getresponse(), timeout_s)
+
+    return ChatGPTClient(model=MODEL, effort="medium", timeout_s=timeout_s, opener=open_local), done
+
+
+def test_the_deadline_fires_on_a_real_stream_that_stalls(signed_in: list[str]) -> None:
+    def stall(connection: socket.socket) -> None:
+        connection.sendall(HEADERS + chunk(b'data: {"type": "response.created", "response": {}}\n\n'))
+
+    chat, done = real_client(stall, 0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(LLMUnavailableError, match=r"within 0\.5s"):
+            chat.complete(REQUEST)
+    finally:
+        done.set()
+    assert time.monotonic() - started < 2.0
+
+
+def test_the_deadline_fires_on_a_real_stream_that_trickles_inside_one_chunk(signed_in: list[str]) -> None:
+    def trickle(connection: socket.socket) -> None:
+        connection.sendall(HEADERS + b"400\r\n")
+        for _ in range(40):
+            connection.sendall(b"x")
+            time.sleep(0.1)
+
+    chat, done = real_client(trickle, 0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(LLMUnavailableError, match=r"within 0\.5s"):
+            chat.complete(REQUEST)
+    finally:
+        done.set()
+    assert time.monotonic() - started < 2.0
+
+
+def test_a_real_stream_cut_off_mid_chunk_is_unavailable(signed_in: list[str]) -> None:
+    def truncate(connection: socket.socket) -> None:
+        connection.sendall(HEADERS + b"100\r\n" + b"data: {")
+        connection.shutdown(socket.SHUT_RDWR)
+
+    chat, done = real_client(truncate, 5.0)
+    try:
+        with pytest.raises(LLMUnavailableError, match=r"broke off \(the HTTP response broke off \(IncompleteRead\)\)"):
+            chat.complete(REQUEST)
+    finally:
+        done.set()
+
+
+def test_a_real_stream_completes_through_the_bounded_reader(signed_in: list[str]) -> None:
+    body = b"".join(sse(completed([message("Hel", "lo")])))
+
+    def reply(connection: socket.socket) -> None:
+        connection.sendall(HEADERS + chunk(body[:7]) + chunk(body[7:]) + b"0\r\n\r\n")
+
+    chat, done = real_client(reply, 5.0)
+    try:
+        assert chat.complete(REQUEST).text == "Hello"
+    finally:
+        done.set()
+
+
+def test_a_response_without_a_reachable_socket_fails_loud() -> None:
+    class Stripped:
+        fp = io.BytesIO(b"body")
+
+    with pytest.raises(RuntimeError, match="deadline cannot be enforced"):
+        chatgpt_http.BoundedResponse(Stripped(), 1.0)  # type: ignore[arg-type]

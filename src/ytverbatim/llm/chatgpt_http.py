@@ -4,10 +4,13 @@ import http.client
 import json
 import re
 import socket
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from contextlib import suppress
 from email.message import Message
 from typing import IO, Protocol, override
 
@@ -18,6 +21,7 @@ AUTH_HOST = "auth.openai.com"
 API_HOST = "api.openai.com"
 HOSTS = frozenset({AUTH_HOST, API_HOST})
 _ERROR_BODY_LIMIT = 65_536
+_READ_SIZE = 65_536
 _SAFE_CODE = re.compile(r"[a-z][a-z0-9_.]{0,95}")
 
 
@@ -26,15 +30,12 @@ class Response(Protocol):
 
     def readline(self) -> bytes: ...
 
-    def settimeout(self, seconds: float) -> None:
-        """Bound the next read; a read that waits longer raises `TimeoutError`."""
-        ...
-
     def close(self) -> None: ...
 
 
-# (request, timeout_s) -> the open response. A status other than 2xx, a refused redirect included, raises
-# urllib.error.HTTPError; network errors propagate as urllib raises them. Tests inject a stub.
+# (request, timeout_s) -> the open response, which must end within timeout_s of the call: a read past it raises
+# TimeoutError. A status other than 2xx, a refused redirect included, raises urllib.error.HTTPError; network errors
+# are OSErrors. Tests inject a stub.
 Opener = Callable[[urllib.request.Request, float], Response]
 
 
@@ -56,26 +57,87 @@ class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_RefuseRedirects)
 
 
-class _UrllibResponse:
-    def __init__(self, response: http.client.HTTPResponse) -> None:
-        self._response = response
+class BoundedResponse:
+    """An open response that ends at its deadline, whatever the server does.
 
-    def read(self) -> bytes:
-        return self._response.read()
+    Each socket read waits at most the time left, and a timer shuts the socket down at the deadline, so a read that
+    http.client splits into several receives cannot outlast it either. http.client's own exceptions, such as
+    `IncompleteRead` from a stream cut off mid-chunk, become `ConnectionError`, so callers handle one family.
+    """
+
+    def __init__(self, response: http.client.HTTPResponse, timeout_s: float) -> None:
+        self._response = response
+        self._deadline = time.monotonic() + timeout_s
+        self._buffer = bytearray()
+        self._expired = threading.Event()
+        self._socket = _socket(response)
+        self._timer: threading.Timer | None = None
+        if self._socket is not None:
+            self._timer = threading.Timer(max(timeout_s, 0.0), self._expire)
+            self._timer.daemon = True
+            self._timer.start()
 
     def readline(self) -> bytes:
-        return self._response.readline()
+        searched = 0
+        while (end := self._buffer.find(b"\n", searched)) == -1:
+            searched = len(self._buffer)
+            chunk = self._read_some()
+            if not chunk:
+                line = bytes(self._buffer)
+                self._buffer.clear()
+                return line
+            self._buffer.extend(chunk)
+        line = bytes(self._buffer[: end + 1])
+        del self._buffer[: end + 1]
+        return line
 
-    def settimeout(self, seconds: float) -> None:
-        # http.client keeps the connection's socket only inside its buffered reader. Bounding each read by the time
-        # left is what turns urllib's per-operation timeout into one deadline over the whole stream.
-        raw = getattr(getattr(self._response, "fp", None), "raw", None)
-        sock = getattr(raw, "_sock", None)
-        if isinstance(sock, socket.socket):
-            sock.settimeout(seconds)
+    def read(self) -> bytes:
+        while chunk := self._read_some():
+            self._buffer.extend(chunk)
+        body = bytes(self._buffer)
+        self._buffer.clear()
+        return body
 
     def close(self) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
         self._response.close()
+
+    def _read_some(self) -> bytes:
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0 or self._expired.is_set():
+            raise TimeoutError
+        if self._socket is not None:
+            self._socket.settimeout(remaining)
+        try:
+            chunk = self._response.read1(_READ_SIZE)
+        except (OSError, http.client.HTTPException) as exc:
+            if self._expired.is_set() or isinstance(exc, TimeoutError):
+                raise TimeoutError from None
+            if isinstance(exc, OSError):
+                raise
+            raise ConnectionError(f"the HTTP response broke off ({type(exc).__name__})") from None
+        # The deadline's shutdown reads as a clean end of stream; it must not pass for one.
+        if not chunk and self._expired.is_set():
+            raise TimeoutError
+        return chunk
+
+    def _expire(self) -> None:
+        self._expired.set()
+        if self._socket is not None:
+            with suppress(OSError):
+                self._socket.shutdown(socket.SHUT_RDWR)
+
+
+def _socket(response: http.client.HTTPResponse) -> socket.socket | None:
+    if response.fp is None:
+        return None
+    # http.client keeps the connection's socket only inside its buffered reader. Without it no read could be bounded
+    # by the deadline, so its absence is an error, never a silently weaker deadline.
+    found = getattr(getattr(response.fp, "raw", None), "_sock", None)
+    if not isinstance(found, socket.socket):
+        raise RuntimeError("http.client keeps no reachable socket; the chatgpt stream deadline cannot be enforced")
+    return found
 
 
 def require_host(url: str) -> None:
@@ -92,8 +154,14 @@ def require_host(url: str) -> None:
 
 
 def https_open(request: urllib.request.Request, timeout_s: float) -> Response:
+    """Open `request`; connecting and each header read wait at most `timeout_s`, the body ends by then."""
     require_host(request.full_url)
-    return _UrllibResponse(_OPENER.open(request, timeout=timeout_s))
+    deadline = time.monotonic() + timeout_s
+    try:
+        response: http.client.HTTPResponse = _OPENER.open(request, timeout=timeout_s)
+    except http.client.HTTPException as exc:
+        raise ConnectionError(f"OpenAI sent a malformed HTTP response ({type(exc).__name__})") from None
+    return BoundedResponse(response, deadline - time.monotonic())
 
 
 def safe_code(value: object) -> str | None:
@@ -105,7 +173,7 @@ def error_code(exc: urllib.error.HTTPError) -> str | None:
     """Read the provider's error code from an error body: `{"error": "code"}` or `{"error": {"code"|"type": ...}}`."""
     try:
         body: object = json.loads(exc.read(_ERROR_BODY_LIMIT))
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return None
     finally:
         exc.close()
