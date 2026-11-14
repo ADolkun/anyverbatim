@@ -186,6 +186,14 @@ def test_the_before_text_shows_when_the_edit_is_narrower_than_the_flagged_span(m
     assert "numeric_fixed: 十五个百分点 → 五十个百分点; was 十五" in body
 
 
+def test_a_numeric_fix_in_digits_shows_the_figure_it_replaced(make_doc, seg, flag) -> None:
+    text = "涨了50个百分点"
+    edits = [Edit(stage="numeric", before="35", after="50", llm=None)]
+    flags = [flag("numeric_fixed", text, "50个百分点", note="三十五个百分点 → 五十个百分点")]
+    body = render_markdown(make_doc([seg(text, 0.0, 2.0, flags=flags, edits=edits)]))
+    assert "50个百分点[^1]" in body and "; was 35" in body
+
+
 def test_an_edit_outside_the_flagged_span_shows_no_before_text(make_doc, seg, flag) -> None:
     text = "Nvidia hit 150 today"
     edits = [Edit(stage="correction", before="Envidia", after="Nvidia", llm=None)]

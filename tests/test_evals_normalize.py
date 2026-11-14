@@ -1,6 +1,8 @@
 import pytest
 
+from evals.metrics import cer
 from evals.normalize import canonical, join_units, normalize, split_units, to_units
+from ytverbatim.text.numerals import display
 
 
 def test_traditional_characters_become_simplified() -> None:
@@ -45,6 +47,14 @@ def test_views_differ_on_chinese_quantities() -> None:
     text = "一百五十期和150期"
     assert normalize(text, "zh", "raw") == "一百五十期和150期"
     assert normalize(text, "zh", "itn") == "150期和150期"
+
+
+def test_the_itn_view_scores_the_digit_display_form_as_the_spoken_one() -> None:
+    reference = "收入三万五千美元，第一季度涨了百分之八十，三到五个月"
+    hypothesis = display(reference)
+    assert hypothesis == "收入3.5万美元，第一季度涨了80%，3到5个月"
+    errors = cer(reference, hypothesis, "zh", "itn")
+    assert errors.errors == 0
 
 
 def test_itn_leaves_non_quantity_numerals_alone() -> None:

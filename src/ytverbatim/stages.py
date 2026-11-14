@@ -46,6 +46,7 @@ from ytverbatim.contract import Generator as GeneratorInfo
 from ytverbatim.contract.models import SCHEMA_VERSION
 from ytverbatim.errors import ContractError
 from ytverbatim.text import clean, offsets
+from ytverbatim.text import numerals as numerals_module
 from ytverbatim.text import segment as seg
 
 # Part of every stage key that runs this module's code, and of the context record: bump it on any logic change.
@@ -204,6 +205,83 @@ def normalize(
             )
         )
     return tuple(out)
+
+
+def numerals(stretches: Sequence[Stretch], language: str) -> tuple[Stretch, ...]:
+    """Write Mandarin amounts as digits (`text.numerals`); flags, words and edits follow, and no edit is recorded.
+
+    Words covering a rewritten figure become one word with the display text, so `build_document` still times the
+    figure by the engine. A figure only partly matched by words keeps its words: it was interpolated before, and is
+    again. Edits are rewritten too, so they read in the same form as the text they lead to.
+    """
+    if not seg.is_zh(language):
+        return tuple(stretches)
+    display = numerals_module.display
+    out: list[Stretch] = []
+    for stretch in stretches:
+        changes = numerals_module.conversions(stretch.text)
+        edits = tuple(
+            edit.model_copy(update={"before": display(edit.before), "after": display(edit.after)})
+            for edit in stretch.edits
+        )
+        if not changes:
+            out.append(stretch.model_copy(update={"edits": edits}))
+            continue
+        steps: list[tuple[str, str]] = []
+        current = stretch.text
+        # Last first, so each step is one replacement at offsets that are still those of the original text.
+        for start, end, replacement in reversed(changes):
+            after = current[:start] + replacement + current[end:]
+            steps.append((current, after))
+            current = after
+        out.append(
+            stretch.model_copy(
+                update={
+                    "text": current,
+                    "words": _merged_words(stretch.text, stretch.words, changes),
+                    "flags": offsets.remap_flags(stretch.flags, steps),
+                    "edits": edits,
+                }
+            )
+        )
+    return tuple(out)
+
+
+def _merged_words(text: str, words: Sequence[Word], changes: Sequence[numerals_module.Conversion]) -> tuple[Word, ...]:
+    """Replace the words over each rewritten figure by one word that spells the figure as displayed.
+
+    Changes and the words over them are grouped while their ranges overlap (三点四十 heard as one word holds two
+    figures). A group is merged only when its words cover every letter and digit of its figures.
+    """
+    spans = seg.word_spans(text, words)
+    groups: list[tuple[int, int, list[numerals_module.Conversion], list[int]]] = []
+    for change in changes:
+        start, end, _ = change
+        over = [index for index, (a, b) in spans.items() if a < end and start < b]
+        lo = min([start, *(spans[index][0] for index in over)])
+        hi = max([end, *(spans[index][1] for index in over)])
+        if groups and groups[-1][1] > lo:
+            g_lo, g_hi, g_changes, g_words = groups[-1]
+            groups[-1] = (g_lo, max(g_hi, hi), [*g_changes, change], sorted({*g_words, *over}))
+        else:
+            groups.append((lo, hi, [change], over))
+    covered = {i for a, b in spans.values() for i in range(a, b)}
+    merged: dict[int, Word] = {}
+    dropped: set[int] = set()
+    for lo, hi, group_changes, group_words in groups:
+        figure_chars = (i for start, end, _ in group_changes for i in range(start, end) if text[i].isalnum())
+        if not group_words or not all(i in covered for i in figure_chars):
+            continue
+        shifted = [(start - lo, end - lo, replacement) for start, end, replacement in group_changes]
+        conf = [c for index in group_words if (c := words[index].conf) is not None]
+        merged[group_words[0]] = Word(
+            text=numerals_module.apply(text[lo:hi], shifted),
+            start=min(words[index].start for index in group_words),
+            end=max(words[index].end for index in group_words),
+            conf=min(conf) if conf else None,
+        )
+        dropped.update(group_words[1:])
+    return tuple(merged.get(index, word) for index, word in enumerate(words) if index not in dropped)
 
 
 def with_results(

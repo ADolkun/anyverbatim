@@ -153,3 +153,14 @@ def test_correct_override_beats_the_file_but_none_leaves_it(tmp_path: Path) -> N
 def test_correct_must_be_a_bool(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match=r"text\.correct must be of type bool"):
         load_options(_write(tmp_path, "[text]\ncorrect = 1\n"))
+
+
+def test_numerals_default_to_digits_and_keep_parses(tmp_path: Path) -> None:
+    assert Options().text.numerals == "digits"
+    assert load_options(_write(tmp_path, '[text]\nnumerals = "keep"\n')).text.numerals == "keep"
+
+
+@pytest.mark.parametrize("body", ['"chinese"', "true", '"Digits"'])
+def test_numerals_rejects_anything_but_digits_or_keep(tmp_path: Path, body: str) -> None:
+    with pytest.raises(ConfigError, match=r"text\.numerals must be one of: digits, keep"):
+        load_options(_write(tmp_path, f"[text]\nnumerals = {body}\n"))

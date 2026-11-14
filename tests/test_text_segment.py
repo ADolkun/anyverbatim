@@ -541,3 +541,32 @@ def test_unrelated_text_and_words_cost_no_character_diff() -> None:
     assert not complete and not any(token.timed for token in tokens)
     assert "".join(token.text for token in tokens) == text
     assert time.perf_counter() - started < 2.0
+
+
+def test_word_spans_names_the_text_each_matched_word_lines_up_with() -> None:
+    words = pieces_of(["成", "交", "17", "1.", "6", "万", "Rhino"])
+    assert seg.word_spans("成交171.6万手", words) == {0: (0, 1), 1: (1, 2), 2: (2, 4), 3: (4, 5), 4: (6, 7), 5: (7, 8)}
+
+
+@pytest.mark.parametrize(
+    ("text", "parts", "language"),
+    [
+        ("好，那我们看一下XLP的位置。", ["好，", "那", "我们", "看一下", "X", "LP", "的", "位", "置。"], "zh"),
+        ("成交171.6万手", ["成", "交", "17", "1.", "6", "万", "手"], "zh"),
+        ("SO XX rose", ["SOXX", " rose"], "en"),
+        ("买XLP QQQ吧", ["买", "XL", "PQ", "QQ", "吧"], "zh"),
+        ("ETF SOXX", [" ETFS", "OXX"], "en"),
+        ("I saw Ryno today", [" I", " saw", " Rhino", " today"], "en"),
+        ("成1, 500手", ["成", "1,500", "手"], "zh"),
+        ("It ended. Next began.", [" It", " ended", ".", " Next", " began."], "en"),
+    ],
+)
+def test_word_spans_is_the_matching_aligned_tokens_times_by(text: str, parts: list[str], language: str) -> None:
+    words = pieces_of(parts)
+    spans = seg.word_spans(text, words)
+    tokens, complete = align(text, parts, language)
+    covered = {i for a, b in spans.values() for i in range(a, b)}
+    assert complete == all(i in covered for i, char in enumerate(text) if char.isalnum())
+    timed = "".join(token.text for token in tokens if token.timed)
+    assert all(text[a:b] in timed for a, b in spans.values())
+    assert {t.start for t in tokens if t.timed} <= {words[i].start for i in spans}

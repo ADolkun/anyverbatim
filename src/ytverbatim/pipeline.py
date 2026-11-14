@@ -2,10 +2,10 @@
 
 Stages, per video under its directory lock: metadata, captions and audio (the fetch session's) → asr (the worker
 subprocess, which also plans the VAD chunks) or manual captions → normalize → punctuate → correct → numeric →
-segment, chapters and assemble (`stages.build_document`) → render. Every stage from asr to numeric is checkpointed
-in the video's `StageStore`, keyed by what it read, so a rerun with changed options recomputes only the stages those
-options reach, and an interrupted run resumes where it stopped. The 16 kHz WAV is deleted once the ASR output is
-stored; the compressed audio stays.
+numerals (Mandarin only) → segment, chapters and assemble (`stages.build_document`) → render. Every stage from asr to
+numerals is checkpointed in the video's `StageStore`, keyed by what it read, so a rerun with changed options
+recomputes only the stages those options reach, and an interrupted run resumes where it stopped. The 16 kHz WAV is
+deleted once the ASR output is stored; the compressed audio stays.
 """
 
 import hashlib
@@ -64,9 +64,10 @@ from ytverbatim.render import render_markdown
 from ytverbatim.stages import Stretch, Transcribed, build_document, stretch_flag, with_results
 from ytverbatim.store import StageStore, input_hash
 from ytverbatim.store import lock as video_lock
-from ytverbatim.text import clean, guards, numbers, numeric
+from ytverbatim.text import clean, guards, numbers, numerals, numeric
 from ytverbatim.text import correct as correct_module
 from ytverbatim.text import punctuate as punctuate_module
+from ytverbatim.text import segment as seg
 from ytverbatim.text.correct import CorrectionContext, correct_segments
 from ytverbatim.text.punctuate import needs_punctuation, punctuate
 from ytverbatim.ytdlp.runner import redact
@@ -92,6 +93,7 @@ _PIPELINE_VERSIONS: dict[str, int] = {
     "punctuate": 2,
     "correct": 1,
     "numeric": 1,
+    "numerals": 1,
     "context": 3,
 }
 _GLOSSARY_MAX_TERMS = 20
@@ -107,6 +109,7 @@ def stage_versions() -> dict[str, str]:
         "punctuate": [punctuate_module.PROMPT_VERSION, stages.VERSION],
         "correct": [correct_module.PROMPT_VERSION, stages.VERSION, numbers.VERSION, guards.VERSION],
         "numeric": [numeric.PROMPT_VERSION, stages.VERSION, numbers.VERSION, guards.VERSION],
+        "numerals": [numerals.VERSION, numbers.VERSION, stages.VERSION],
         "context": [stages.VERSION],
     }
     return {stage: "+".join([str(version), *modules[stage]]) for stage, version in _PIPELINE_VERSIONS.items()}
@@ -572,6 +575,7 @@ class _VideoRun:
         punctuated = self._punctuate(normalized, language)
         corrected, correction_llm = self._correct(punctuated, language, metadata)
         verified = self._numeric(corrected, source, tracks, second)
+        displayed = self._numerals(verified.stretches, language)
         self.notices += [*punctuated.notices, *verified.notices]
 
         self._emit("write")
@@ -581,7 +585,7 @@ class _VideoRun:
             tags=_tags(self.vdir),
             access=outcome.access,
             source=source,
-            stretches=verified.stretches,
+            stretches=displayed,
             chapters=settings.text.chapters != "none",
             created_at=settings.clock(),
             correction_llm=correction_llm,
@@ -875,6 +879,18 @@ class _VideoRun:
             )
 
         return self._stage("numeric", self._key("numeric", inputs), _TextResult, compute, self.settings.llm_id or "")
+
+    def _numerals(self, previous: Sequence[Stretch], language: str) -> tuple[Stretch, ...]:
+        # Display only: the stages before it read the text as recognized, so a rule change never repeats an LLM call.
+        style = self.settings.text.numerals
+        if style == "keep" or not seg.is_zh(language):
+            return tuple(previous)
+        key = self._key("numerals", {"text": _text_key(previous), "numerals": style})
+
+        def compute() -> _Stretches:
+            return _Stretches(stretches=stages.numerals(previous, language))
+
+        return self._stage("numerals", key, _Stretches, compute).stretches
 
 
 def _adopt(out_dir: Path, decode: JsonValue) -> None:

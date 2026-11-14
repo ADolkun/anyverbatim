@@ -167,6 +167,48 @@ def aligned_tokens(
     those tokens are not `timed`.
     """
     text = text.strip()
+    spans = word_spans(text, words)
+    tokens: list[Token] = []
+    complete = True
+    cursor = 0
+    left = start
+    joinable = False
+    for index, word in enumerate(words):
+        span = spans.get(index)
+        if span is None:
+            continue
+        first, last = span
+        word_start = min(max(word.start, start), end)
+        word_end = min(max(word.end, word_start), end)
+        if joinable and _continues_run(text, cursor, first):
+            previous = tokens[-1]
+            conf = [c for c in (previous.conf, word.conf) if c is not None]
+            tokens[-1] = replace(
+                previous,
+                text=previous.text + text[cursor:last],
+                end=max(previous.end, word_end),
+                conf=min(conf) if conf else None,
+            )
+        else:
+            lead, interpolated = _fill(tokens, text[cursor:first], left, word_start, language, origin)
+            complete = complete and not interpolated
+            tokens.append(Token(lead + text[first:last], word_start, word_end, word.conf, origin=origin))
+        cursor, left, joinable = last, word_end, True
+    rest, interpolated = _fill(tokens, text[cursor:], left, end, language, origin)
+    if rest and tokens:
+        tokens[-1] = replace(tokens[-1], text=tokens[-1].text + rest)
+    elif rest:
+        # Text without a letter or digit, which nothing can be matched against.
+        return pseudo_tokens(rest, start, end, language=language, origin=origin), False
+    return tokens, complete and not interpolated
+
+
+def word_spans(text: str, words: Sequence[TimedWord]) -> dict[int, tuple[int, int]]:
+    """Map each matched word's index to the half-open range of `text` it lines up with, as `aligned_tokens` matches.
+
+    A word is matched when every one of its letters and digits lines up with consecutive text, under the rules
+    `aligned_tokens` describes. Unmatched words are absent.
+    """
     text_runs = [m.span() for m in _ALIGN_RUNS.finditer(text)]
     text_units = [(i, i + 1) for a, b in text_runs for i in range(a, b)]
     word_units: list[str] = []
@@ -199,40 +241,7 @@ def aligned_tokens(
         and not _spans_a_space(text, text_units, units, word_run_of[firsts[index] : firsts[index] + sizes[index]])
     }
     accepted = _whole_runs(candidates, [b - a for a, b in text_runs])
-
-    tokens: list[Token] = []
-    complete = True
-    cursor = 0
-    left = start
-    joinable = False
-    for index, word in enumerate(words):
-        units = accepted.get(index)
-        if not units:
-            continue
-        first, last = text_units[units[0]][0], text_units[units[-1]][1]
-        word_start = min(max(word.start, start), end)
-        word_end = min(max(word.end, word_start), end)
-        if joinable and _continues_run(text, cursor, first):
-            previous = tokens[-1]
-            conf = [c for c in (previous.conf, word.conf) if c is not None]
-            tokens[-1] = replace(
-                previous,
-                text=previous.text + text[cursor:last],
-                end=max(previous.end, word_end),
-                conf=min(conf) if conf else None,
-            )
-        else:
-            lead, interpolated = _fill(tokens, text[cursor:first], left, word_start, language, origin)
-            complete = complete and not interpolated
-            tokens.append(Token(lead + text[first:last], word_start, word_end, word.conf, origin=origin))
-        cursor, left, joinable = last, word_end, True
-    rest, interpolated = _fill(tokens, text[cursor:], left, end, language, origin)
-    if rest and tokens:
-        tokens[-1] = replace(tokens[-1], text=tokens[-1].text + rest)
-    elif rest:
-        # Text without a letter or digit, which nothing can be matched against.
-        return pseudo_tokens(rest, start, end, language=language, origin=origin), False
-    return tokens, complete and not interpolated
+    return {index: (text_units[units[0]][0], text_units[units[-1]][1]) for index, units in accepted.items()}
 
 
 def _spans_a_space(

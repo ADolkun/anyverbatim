@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from ytverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack
 from ytverbatim.acquire.metadata import VideoMetadata
 from ytverbatim.asr import registry
@@ -13,6 +15,7 @@ from ytverbatim.stages import (
     from_asr_rows,
     from_captions,
     normalize,
+    numerals,
     with_results,
     word_confidence,
 )
@@ -223,3 +226,101 @@ def test_word_confidence_lists_the_probabilities_each_stretch_has() -> None:
     source = source_of([row("估值很高", 0.0, 2.0, scored), row("然后", 3.0, 4.0, unscored)])
     assert len(source.stretches) == 2
     assert word_confidence(source.stretches) == [[0.9, 0.3], None]
+
+
+def timed_row(pieces: list[str], start: float = 1.0) -> ChunkHypothesis:
+    words = tuple(Word(text=p, start=start + i, end=start + i + 0.5, conf=0.9 - i / 100) for i, p in enumerate(pieces))
+    return row("".join(pieces), 0.0, start + len(pieces) + 1.0, words)
+
+
+def test_flags_stay_on_their_quantity_across_the_numerals_stage() -> None:
+    source = source_of([row("收入三十五万美元，第一季度涨了百分之八十", 0.0, 6.0)])
+    (stretch,) = source.stretches
+    flags = (
+        flag_on(stretch.text, "三十五万美元", "numeric_single_source"),
+        flag_on(stretch.text, "第一季度", "low_confidence"),
+        flag_on(stretch.text, "百分之八十", "numeric_disputed"),
+    )
+    (shown,) = numerals((stretch.model_copy(update={"flags": flags}),), "zh")
+    assert shown.text == "收入35万美元，第一季度涨了80%"
+    assert [shown.text[f.char_start : f.char_end] for f in shown.flags] == ["35万美元", "第一季度", "80%"]
+    assert [f.note for f in shown.flags] == [f.note for f in flags]
+
+
+@pytest.mark.parametrize(
+    ("pieces", "shown", "figure", "first", "last"),
+    [
+        (["收入", "三", "万", "美元", "左右"], "收入3万美元左右", "3万", 1, 2),
+        (["涨到", "一百", "五十", "块"], "涨到150块", "150", 1, 2),
+        (["在", "二零", "二六年", "以后"], "在2026年以后", "2026年", 1, 2),
+        (["成交", "4", "千", "手"], "成交4000手", "4000", 1, 2),
+        (["成交", "1", ".5", "千万", "手"], "成交1500万手", "1500万", 1, 3),
+        (["下午三点四十", "分开会"], "下午3点40分开会", "下午3点40", 0, 0),
+    ],
+)
+def test_words_split_over_a_figure_retime_it_without_interpolation(
+    pieces: list[str], shown: str, figure: str, first: int, last: int
+) -> None:
+    source = source_of([timed_row(pieces)])
+    assert flagged(document(source, source.stretches)) == []
+    (stretch,) = numerals(source.stretches, "zh")
+    assert stretch.text == shown
+    doc = document(source, (stretch,))
+    assert flagged(doc) == [] and not any("did not cover" in w for w in doc.quality.warnings)
+    (segment,) = doc.segments
+    timed = {w.text: (w.start, w.end, w.conf) for w in segment.words or ()}
+    assert timed[figure] == (1.0 + first, 1.5 + last, 0.9 - last / 100)
+
+
+def test_a_figure_its_words_only_partly_cover_stays_interpolated() -> None:
+    source = source_of([timed_row(["收入", "三", "美元", "左右"])])
+    (stretch,) = source.stretches
+    with_missing_word = stretch.model_copy(update={"text": "收入三万美元左右"})
+    assert [kind for _, kind, _ in flagged(document(source, (with_missing_word,)))] == ["timing_interpolated"]
+    (shown,) = numerals((with_missing_word,), "zh")
+    assert shown.text == "收入3万美元左右" and shown.words == stretch.words
+    assert [kind for _, kind, _ in flagged(document(source, (shown,)))] == ["timing_interpolated"]
+
+
+def test_edits_are_rewritten_and_land_on_their_sentence_with_the_was_text() -> None:
+    source = source_of([row("开盘平稳 营收增长了三十五个百分点 利润也不错", 0.0, 9.0)])
+    (stretch,) = source.stretches
+    punctuated = "开盘平稳。营收增长了三十五个百分点，利润也不错。"
+    fixed = "开盘平稳。营收增长了五十个百分点，利润也不错。"
+    first = with_results(
+        (stretch,),
+        [punctuated],
+        [[Edit(stage="punctuation", before=stretch.text, after=punctuated, llm=LLM)]],
+        record=False,
+    )
+    flag = flag_on(fixed, "五十个百分点", "numeric_fixed")
+    verified = with_results(
+        first, [fixed], [[Edit(stage="numeric", before=punctuated, after=fixed, llm=LLM)]], [[flag]]
+    )
+    (shown,) = numerals(verified, "zh")
+    assert [(e.before, e.after) for e in shown.edits] == [
+        ("开盘平稳。营收增长了35个百分点，利润也不错。", "开盘平稳。营收增长了50个百分点，利润也不错。")
+    ]
+    doc = document(source, (shown,), llm_punctuated=True)
+    assert [s.text for s in doc.segments] == ["开盘平稳。", "营收增长了50个百分点，利润也不错。"]
+    assert doc.segments[0].edits == ()
+    assert [(e.stage, e.before, e.after) for e in doc.segments[1].edits] == [("numeric", "35", "50")]
+    assert flagged(doc) == [(1, "numeric_fixed", "50个百分点")]
+    assert "numeric_fixed: 五十个百分点; was 35" in render_markdown(doc)
+
+
+def test_an_edit_is_rewritten_even_where_the_final_text_has_no_numeral() -> None:
+    stretch = Stretch(
+        text="涨了50%",
+        start=0.0,
+        end=2.0,
+        edits=(Edit(stage="numeric", before="涨了百分之五", after="涨了50%", llm=LLM),),
+    )
+    (shown,) = numerals((stretch,), "zh")
+    assert shown.text == "涨了50%" and shown.edits[0].before == "涨了5%"
+
+
+def test_the_numerals_stage_leaves_other_languages_alone() -> None:
+    stretch = Stretch(text="三万美元 is 30,000 dollars", start=0.0, end=2.0)
+    assert numerals((stretch,), "en") == (stretch,)
+    assert numerals((stretch,), "zh")[0].text == "3万美元 is 30,000 dollars"
