@@ -77,6 +77,10 @@ def locks_dir() -> Path:
     return _private(state_dir() / "locks")
 
 
+def voicememos_cache_file() -> Path:
+    return state_dir() / "voicememos.json"
+
+
 def cache_dir() -> Path:
     return _private(Path.home() / "Library" / "Caches" / _APP)
 
@@ -101,6 +105,10 @@ def home_dir() -> Path:
 
 def default_output_root() -> Path:
     return home_dir() / "videos"
+
+
+def recordings_root() -> Path:
+    return home_dir() / "recordings"
 
 
 def video_dir(video_id: str, out: Path | None = None) -> Path:
