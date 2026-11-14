@@ -11,7 +11,11 @@ Two backends:
 - ``ExternalBackend`` runs any command that writes an RTTM, for pyannote in its throwaway uv project.
 
 WDER needs the words of an ASR run per recording: ``words.json`` (a list of ``{"text", "start", "end"}``) next to
-each recording's audio. Without it WDER is skipped.
+each recording's audio; ``python -m evals.run_recordings_asr words`` writes it. Without it WDER is skipped.
+
+The ``owner`` corpus lists the owner's own recordings in a private index. They have no reference RTTM, so each is scored
+by its speaker count only (against the owner's count when the index gives one) and compared to other diarizers through
+``python -m evals.disputes``.
 """
 
 from __future__ import annotations
@@ -46,7 +50,7 @@ from evals.diarization import (
     wder,
     write_rttm,
 )
-from evals.recordings_data import CorpusIndex, load_index, recordings_dir
+from evals.recordings_data import OWNER, WORDS_FILE, CorpusIndex, load_index, load_owner, recordings_dir
 from ytverbatim import atomic, proc
 from ytverbatim.contract.models import Word
 from ytverbatim.diarize import registry as diarize_registry
@@ -60,8 +64,7 @@ from ytverbatim.diarize.runner import DiarizeResult
 from ytverbatim.errors import ConfigError, EngineError, YtverbatimError
 
 PRIMARY_CORPORA = ("ami", "alimeeting")
-CORPORA = (*PRIMARY_CORPORA, "ascend")
-WORDS_FILE = "words.json"
+CORPORA = (*PRIMARY_CORPORA, "ascend", OWNER)
 SCORE_FILE = "score.json"
 SUMMARY_FILE = "summary.json"
 PYANNOTE_ENV = {"PYANNOTE_METRICS_ENABLED": "0"}
@@ -79,8 +82,10 @@ class Recording:
     corpus: str
     id: str
     wav: Path
-    reference: Path
+    # None for an owner recording, which has no reference.
+    reference: Path | None
     duration_s: float
+    expected_speakers: int | None = None
 
     @property
     def words(self) -> Path:
@@ -144,6 +149,25 @@ class RecordingScore(_Frozen):
     attributed_speakers_smoothed: int | None = None
 
 
+class OwnerScore(_Frozen):
+    """An owner recording has no reference: only the speaker count and the cost are scored."""
+
+    corpus: str
+    recording: str
+    duration_s: float
+    hypothesis_speakers: int
+    # The owner's own count, when the index gives it.
+    expected_speakers: int | None
+    speaker_count_error: int | None
+    diarize_s: float
+    load_s: float
+    rtf: float
+    peak_footprint_bytes: int | None
+    inputs: str
+    attributed_speakers_raw: int | None = None
+    attributed_speakers_smoothed: int | None = None
+
+
 def _finite(value: float) -> float | None:
     return value if math.isfinite(value) else None
 
@@ -174,8 +198,11 @@ def load_words(path: Path) -> list[Word] | None:
 def input_digest(recording: Recording) -> str:
     """Hash of the reference, the words and the collars: what a cached score depends on besides the diarizer."""
     digest = hashlib.sha256()
-    digest.update(recording.reference.read_bytes())
+    digest.update(recording.reference.read_bytes() if recording.reference else b"")
     digest.update(b"\0")
+    if recording.expected_speakers is not None:
+        digest.update(str(recording.expected_speakers).encode())
+        digest.update(b"\0")
     digest.update(recording.words.read_bytes() if recording.words.is_file() else b"")
     digest.update(b"\0")
     digest.update(repr(COLLARS_S).encode())
@@ -184,6 +211,8 @@ def input_digest(recording: Recording) -> str:
 
 def score_recording(backend: Backend, recording: Recording, out_dir: Path) -> RecordingScore:
     """Diarize one recording and score it; the hypothesis RTTM is kept next to the score."""
+    if recording.reference is None:
+        raise ConfigError(f"{recording.id} has no reference; score it with score_owner_recording")
     out_dir.mkdir(parents=True, exist_ok=True)
     reference = read_rttm(recording.reference)[recording.id]
     run = backend.diarize(recording, out_dir / "worker")
@@ -215,14 +244,48 @@ def score_recording(backend: Backend, recording: Recording, out_dir: Path) -> Re
     )
 
 
+def score_owner_recording(backend: Backend, recording: Recording, out_dir: Path) -> OwnerScore:
+    """Diarize one owner recording and count its speakers; the hypothesis RTTM is kept for the dispute builder."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    run = backend.diarize(recording, out_dir / "worker")
+    write_rttm(out_dir / "hypothesis.rttm", recording.id, run.turns)
+    words = load_words(recording.words)
+    attributed = (
+        None if words is None else [backend.attribute(words, run, smoothing=smoothing) for smoothing in (False, True)]
+    )
+    count = speaker_count(run.turns)
+    expected = recording.expected_speakers
+    return OwnerScore(
+        corpus=recording.corpus,
+        recording=recording.id,
+        duration_s=recording.duration_s,
+        hypothesis_speakers=count,
+        expected_speakers=expected,
+        speaker_count_error=None if expected is None else count - expected,
+        diarize_s=run.diarize_s,
+        load_s=run.load_s,
+        rtf=run.diarize_s / recording.duration_s,
+        peak_footprint_bytes=run.peak_footprint_bytes,
+        inputs=input_digest(recording),
+        attributed_speakers_raw=None if attributed is None else len({x for x in attributed[0] if x is not None}),
+        attributed_speakers_smoothed=None if attributed is None else len({x for x in attributed[1] if x is not None}),
+    )
+
+
 def _der_score(record: DerRecord) -> DerScore:
     return DerScore(record.total, record.missed, record.false_alarm, record.confusion)
 
 
-def summarize(scores: Sequence[RecordingScore]) -> dict[str, object]:
-    """Aggregate per corpus and over the primary corpora. Every figure is a rate; no recording ids appear."""
+def summarize(scores: Sequence[RecordingScore | OwnerScore]) -> dict[str, object]:
+    """Aggregate per corpus and over the primary corpora.
+
+    Every figure of a public corpus is a rate and no recording id appears. The owner block lists speaker counts by the
+    generic label the owner index requires (``rec-01``).
+    """
     if not scores:
         raise ConfigError("no recordings were scored")
+    owner = [s for s in scores if isinstance(s, OwnerScore)]
+    referenced = [s for s in scores if isinstance(s, RecordingScore)]
 
     def der_block(items: Sequence[RecordingScore]) -> dict[str, dict[str, float]]:
         return {
@@ -262,23 +325,48 @@ def summarize(scores: Sequence[RecordingScore]) -> dict[str, object]:
             "peak_footprint_gib": max(footprints) / 2**30 if footprints else None,
         }
 
-    corpora = sorted({s.corpus for s in scores})
-    primary = [s for s in scores if s.corpus in PRIMARY_CORPORA]
-    has_both = all(any(s.corpus == corpus for s in scores) for corpus in PRIMARY_CORPORA)
+    def owner_block(items: Sequence[OwnerScore]) -> dict[str, object]:
+        footprints = [s.peak_footprint_bytes for s in items if s.peak_footprint_bytes is not None]
+        errors = [abs(s.speaker_count_error) for s in items if s.speaker_count_error is not None]
+        return {
+            "recordings": len(items),
+            "audio_hours": sum(s.duration_s for s in items) / 3600,
+            "hypothesis_speakers": {s.recording: s.hypothesis_speakers for s in items},
+            "smoothed_attributed_speakers": {
+                s.recording: s.attributed_speakers_smoothed for s in items if s.attributed_speakers_smoothed is not None
+            },
+            "mean_abs_speaker_count_error": sum(errors) / len(errors) if errors else None,
+            "rtf": sum(s.diarize_s for s in items) / sum(s.duration_s for s in items),
+            "peak_footprint_gib": max(footprints) / 2**30 if footprints else None,
+        }
+
+    corpora = sorted({s.corpus for s in referenced})
+    primary = [s for s in referenced if s.corpus in PRIMARY_CORPORA]
+    has_both = all(any(s.corpus == corpus for s in referenced) for corpus in PRIMARY_CORPORA)
+    blocks: dict[str, object] = {corpus: block([s for s in referenced if s.corpus == corpus]) for corpus in corpora}
+    if owner:
+        blocks[OWNER] = owner_block(owner)
     return {
-        "corpora": {corpus: block([s for s in scores if s.corpus == corpus]) for corpus in corpora},
+        "corpora": blocks,
         "primary_macro_der_collar_0": macro_rate([_der_score(s.der[0]) for s in primary]) if has_both else None,
     }
 
 
 def recordings_of(corpus: str, only: Sequence[str] = (), root: Path | None = None) -> list[Recording]:
     corpus_dir = (root or recordings_dir()) / corpus
-    index: CorpusIndex = load_index(corpus_dir)
-    found = [
-        Recording(corpus, e.id, corpus_dir / e.audio, corpus_dir / e.reference_rttm, e.duration_s)
-        for e in index.recordings
-        if not only or e.id in only
-    ]
+    if corpus == OWNER:
+        found = [
+            Recording(corpus, o.entry.id, o.wav, None, o.duration_s, o.entry.speakers)
+            for o in load_owner(corpus_dir)
+            if not only or o.entry.id in only
+        ]
+    else:
+        index: CorpusIndex = load_index(corpus_dir)
+        found = [
+            Recording(corpus, e.id, corpus_dir / e.audio, corpus_dir / e.reference_rttm, e.duration_s)
+            for e in index.recordings
+            if not only or e.id in only
+        ]
     missing = set(only) - {r.id for r in found}
     if missing:
         raise ConfigError(f"{corpus} has no recording(s) {', '.join(sorted(missing))}")
@@ -291,15 +379,35 @@ def run_corpora(
     recordings: Sequence[Recording],
     runs_dir: Path,
 ) -> list[RecordingScore]:
-    scores: list[RecordingScore] = []
+    return _resume(RecordingScore, score_recording, backend, diarizer, recordings, runs_dir)
+
+
+def run_owner(
+    backend: Backend,
+    diarizer: str,
+    recordings: Sequence[Recording],
+    runs_dir: Path,
+) -> list[OwnerScore]:
+    return _resume(OwnerScore, score_owner_recording, backend, diarizer, recordings, runs_dir)
+
+
+def _resume[S: (RecordingScore, OwnerScore)](
+    model: type[S],
+    scorer: Callable[[Backend, Recording, Path], S],
+    backend: Backend,
+    diarizer: str,
+    recordings: Sequence[Recording],
+    runs_dir: Path,
+) -> list[S]:
+    scores: list[S] = []
     for recording in recordings:
         out_dir = runs_dir / diarizer / recording.corpus / recording.id
         path = out_dir / SCORE_FILE
-        cached = RecordingScore.model_validate_json(path.read_text(encoding="utf-8")) if path.is_file() else None
+        cached = model.model_validate_json(path.read_text(encoding="utf-8")) if path.is_file() else None
         if cached is not None and cached.inputs == input_digest(recording):
             scores.append(cached)
             continue
-        score = score_recording(backend, recording, out_dir)
+        score = scorer(backend, recording, out_dir)
         if cached is not None:
             # Only the scoring inputs changed. A resumed worker reports no work, so the original timing stands.
             score = score.model_copy(
@@ -441,7 +549,11 @@ def run(diarizer: str, corpora: tuple[str, ...], recordings: str | None, externa
     only = [r for r in (recordings or "").split(",") if r]
     selected = [r for corpus in corpora for r in recordings_of(corpus, only if len(corpora) == 1 else ())]
     runs_dir = recordings_dir() / "runs" / "diarization"
-    scores = run_corpora(make_backend(diarizer, external_command), diarizer, selected, runs_dir)
+    backend = make_backend(diarizer, external_command)
+    scores: list[RecordingScore | OwnerScore] = [
+        *run_corpora(backend, diarizer, [r for r in selected if r.reference is not None], runs_dir),
+        *run_owner(backend, diarizer, [r for r in selected if r.reference is None], runs_dir),
+    ]
     summary = summarize(scores)
     atomic.write_text(runs_dir / diarizer / SUMMARY_FILE, json.dumps(summary, indent=2) + "\n")
     click.echo(json.dumps(summary, indent=2))
@@ -468,7 +580,13 @@ def _stored_scores(diarizer: str) -> list[RecordingScore]:
     return [
         RecordingScore.model_validate_json(p.read_text(encoding="utf-8"))
         for p in sorted(base.glob(f"*/*/{SCORE_FILE}"))
+        if p.parent.parent.name != OWNER
     ]
+
+
+def _stored_owner_scores(diarizer: str) -> list[OwnerScore]:
+    base = recordings_dir() / "runs" / "diarization" / diarizer / OWNER
+    return [OwnerScore.model_validate_json(p.read_text(encoding="utf-8")) for p in sorted(base.glob(f"*/{SCORE_FILE}"))]
 
 
 @main.command(name="compare")
@@ -488,7 +606,7 @@ def compare_command(challenger: str, incumbent: str, seed: int) -> None:
 @click.option("--diarizer", required=True)
 def summary(diarizer: str) -> None:
     """Re-aggregate the per-recording scores already on disk."""
-    scores = _stored_scores(diarizer)
+    scores: list[RecordingScore | OwnerScore] = [*_stored_scores(diarizer), *_stored_owner_scores(diarizer)]
     click.echo(json.dumps(summarize(scores), indent=2))
 
 
