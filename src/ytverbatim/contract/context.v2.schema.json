@@ -180,6 +180,38 @@
       "title": "CreatorNote",
       "type": "object"
     },
+    "DiarizationRun": {
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "title": "Engine",
+          "type": "string"
+        },
+        "model_repo": {
+          "title": "Model Repo",
+          "type": "string"
+        },
+        "model_revision": {
+          "title": "Model Revision",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Params",
+          "type": "object"
+        }
+      },
+      "required": [
+        "engine",
+        "model_repo",
+        "model_revision",
+        "params"
+      ],
+      "title": "DiarizationRun",
+      "type": "object"
+    },
     "Edit": {
       "additionalProperties": false,
       "properties": {
@@ -233,7 +265,8 @@
             "low_confidence",
             "decoder_anomaly",
             "timing_interpolated",
-            "punctuation_failed"
+            "punctuation_failed",
+            "overlapping_speech"
           ],
           "title": "Kind",
           "type": "string"
@@ -368,6 +401,18 @@
           "minimum": 0,
           "title": "Last Segment",
           "type": "integer"
+        },
+        "speaker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speaker"
         }
       },
       "required": [
@@ -440,6 +485,81 @@
         "text"
       ],
       "title": "Reading",
+      "type": "object"
+    },
+    "RecordingSource": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "recording",
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "audio_sha256": {
+          "title": "Audio Sha256",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "file_name": {
+          "title": "File Name",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "file",
+            "voice_memos"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "recorded_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recorded At"
+        },
+        "duration_s": {
+          "minimum": 0,
+          "title": "Duration S",
+          "type": "number"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Language"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "audio_sha256",
+        "title",
+        "file_name",
+        "origin",
+        "recorded_at",
+        "duration_s",
+        "language"
+      ],
+      "title": "RecordingSource",
       "type": "object"
     },
     "Segment": {
@@ -515,6 +635,18 @@
           ],
           "default": null,
           "title": "Chapter"
+        },
+        "speaker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Speaker"
         }
       },
       "required": [
@@ -552,12 +684,51 @@
       "title": "SourceRef",
       "type": "object"
     },
+    "Speaker": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
+        },
+        "speech_s": {
+          "minimum": 0,
+          "title": "Speech S",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "speech_s"
+      ],
+      "title": "Speaker",
+      "type": "object"
+    },
     "Transcript": {
       "additionalProperties": false,
       "properties": {
         "language": {
           "title": "Language",
           "type": "string"
+        },
+        "languages": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Languages",
+          "type": "array"
         },
         "script": {
           "enum": [
@@ -595,14 +766,26 @@
             }
           ],
           "title": "Correction Llm"
+        },
+        "diarization": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DiarizationRun"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
         "language",
+        "languages",
         "script",
         "runs",
         "punctuation",
-        "correction_llm"
+        "correction_llm",
+        "diarization"
       ],
       "title": "Transcript",
       "type": "object"
@@ -717,9 +900,52 @@
       "title": "TranscriptRun",
       "type": "object"
     },
-    "Video": {
+    "Word": {
       "additionalProperties": false,
       "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "number"
+        },
+        "end": {
+          "minimum": 0,
+          "title": "End",
+          "type": "number"
+        },
+        "conf": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Conf"
+        }
+      },
+      "required": [
+        "text",
+        "start",
+        "end"
+      ],
+      "title": "Word",
+      "type": "object"
+    },
+    "YouTubeSource": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "youtube",
+          "title": "Kind",
+          "type": "string"
+        },
         "id": {
           "title": "Id",
           "type": "string"
@@ -789,9 +1015,13 @@
             }
           ],
           "default": null
+        },
+        "access": {
+          "$ref": "#/$defs/Access"
         }
       },
       "required": [
+        "kind",
         "id",
         "url",
         "title",
@@ -801,54 +1031,17 @@
         "duration_s",
         "description",
         "language",
-        "tags"
+        "tags",
+        "access"
       ],
-      "title": "Video",
-      "type": "object"
-    },
-    "Word": {
-      "additionalProperties": false,
-      "properties": {
-        "text": {
-          "title": "Text",
-          "type": "string"
-        },
-        "start": {
-          "minimum": 0,
-          "title": "Start",
-          "type": "number"
-        },
-        "end": {
-          "minimum": 0,
-          "title": "End",
-          "type": "number"
-        },
-        "conf": {
-          "anyOf": [
-            {
-              "type": "number"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Conf"
-        }
-      },
-      "required": [
-        "text",
-        "start",
-        "end"
-      ],
-      "title": "Word",
+      "title": "YouTubeSource",
       "type": "object"
     }
   },
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.1",
+      "const": "2.0",
       "title": "Schema Version",
       "type": "string"
     },
@@ -860,14 +1053,33 @@
       "title": "Created At",
       "type": "string"
     },
-    "video": {
-      "$ref": "#/$defs/Video"
-    },
-    "access": {
-      "$ref": "#/$defs/Access"
+    "source": {
+      "discriminator": {
+        "mapping": {
+          "recording": "#/$defs/RecordingSource",
+          "youtube": "#/$defs/YouTubeSource"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/YouTubeSource"
+        },
+        {
+          "$ref": "#/$defs/RecordingSource"
+        }
+      ],
+      "title": "Source"
     },
     "transcript": {
       "$ref": "#/$defs/Transcript"
+    },
+    "speakers": {
+      "items": {
+        "$ref": "#/$defs/Speaker"
+      },
+      "title": "Speakers",
+      "type": "array"
     },
     "chapters": {
       "items": {
@@ -905,9 +1117,9 @@
     "schema_version",
     "generator",
     "created_at",
-    "video",
-    "access",
+    "source",
     "transcript",
+    "speakers",
     "chapters",
     "paragraphs",
     "segments",

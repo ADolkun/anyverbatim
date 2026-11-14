@@ -21,7 +21,7 @@ from ytverbatim.auth.fixes import fix_for
 from ytverbatim.auth.source import CookieFileSource
 from ytverbatim.auth.state import AuthState
 from ytverbatim.cli import main
-from ytverbatim.contract import ContextDocument, Word, load_document
+from ytverbatim.contract import ContextDocument, Word, YouTubeSource, load_document
 from ytverbatim.errors import (
     AuthError,
     BusyError,
@@ -49,6 +49,11 @@ SENTENCES = (
     (" Markets", " rose", " today.", 5.0),
     (" Then", " they", " fell", " sharply.", 60.0),
 )
+
+
+def youtube(document: ContextDocument | None) -> YouTubeSource:
+    assert document is not None and isinstance(document.source, YouTubeSource)
+    return document.source
 
 
 def whole_file_rows(request: WorkerRequest) -> list[ChunkHypothesis]:
@@ -179,7 +184,7 @@ def test_end_to_end_writes_a_valid_document_and_markdown(session_kit, worker: Fa
     vdir = session_kit.out / PUBLIC
     doc = load_document(vdir / "context.json")
     assert [s.text for s in doc.segments] == ["Markets rose today.", "Then they fell sharply."]
-    assert doc.video.id == PUBLIC and doc.access.cookies_used is False
+    assert youtube(doc).id == PUBLIC and youtube(doc).access.cookies_used is False
     assert len(doc.chapters) == 2 and [s.chapter for s in doc.segments] == [0, 1]
     assert doc.transcript.runs[0].engine == "w-prod" and doc.transcript.punctuation == "engine"
     markdown = (vdir / "context.md").read_text(encoding="utf-8")
@@ -447,14 +452,15 @@ def test_the_document_carries_the_creator_note_only_when_the_option_is_on(sessio
     yt = session_kit.yt()
     yt.comments[PUBLIC] = [NOTE]
     _, results, _ = run(session_kit, yt)
-    assert results[0].document is not None and results[0].document.video.creator_note is None
-    assert results[0].document.schema_version == "1.1"
+    assert results[0].document is not None and youtube(results[0].document).creator_note is None
+    assert results[0].document.schema_version == "2.0"
     assert "--get-comments" not in yt.labels("metadata")[0].args
 
     _, results, _ = run(session_kit, yt, options=note_options(on=True))
     document = results[0].document
-    assert document is not None and document.video.creator_note is not None
-    assert document.video.creator_note.model_dump() == {
+    note = youtube(document).creator_note
+    assert note is not None
+    assert note.model_dump() == {
         "text": "Correction: the figure is 12%.",
         "author": "@synthetic",
         "like_count": 7,
@@ -472,7 +478,7 @@ def test_a_video_without_a_pinned_creator_comment_has_no_note(session_kit, worke
     yt = session_kit.yt()
     yt.comments[PUBLIC] = [{**NOTE, "author_is_uploader": False}]
     _, results, _ = run(session_kit, yt, options=note_options(on=True))
-    assert results[0].document is not None and results[0].document.video.creator_note is None
+    assert results[0].document is not None and youtube(results[0].document).creator_note is None
     assert "--get-comments" in yt.labels("metadata")[0].args
 
 
@@ -482,7 +488,7 @@ def test_turning_the_option_off_drops_a_saved_note_from_the_document(session_kit
     run(session_kit, yt, options=note_options(on=True))
     _, results, _ = run(session_kit, yt, options=note_options(on=False))
     assert results[0].outcome.reused != ("context",), "the document is made again"
-    assert results[0].document is not None and results[0].document.video.creator_note is None
+    assert results[0].document is not None and youtube(results[0].document).creator_note is None
     assert len(yt.labels("metadata")) == 1
 
 
@@ -579,7 +585,7 @@ def test_the_reuse_path_keeps_the_cookies_the_document_was_made_with(session_kit
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
     yt.secondary[("metadata", True)] = (Signal.AUTH_COOKIES_FOUND,)
     _, first, _ = run(session_kit, yt, [MEMBERS], source=source)
-    assert first[0].document is not None and first[0].document.access.cookies_used
+    assert first[0].document is not None and youtube(first[0].document).access.cookies_used
     age_info(session_kit.out / MEMBERS)
     before = len(yt.calls)
 
@@ -617,7 +623,7 @@ def test_a_stale_info_403_keeps_the_creator_note(
     info = json.loads((session_kit.out / PUBLIC / "info.json").read_text())
     assert info["comments"], "the refreshed extraction still carries the comments"
     document = results[0].document
-    assert document is not None and document.video.creator_note is not None
+    assert document is not None and youtube(document).creator_note is not None
 
 
 def test_a_present_video_still_waives_the_cooldown(session_kit, worker: FakeWorker) -> None:

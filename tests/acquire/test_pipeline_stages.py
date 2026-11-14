@@ -18,7 +18,7 @@ from ytverbatim.asr.models import HYPOTHESES_FILE, METRICS_FILE, ChunkHypothesis
 from ytverbatim.asr.runner import WorkerResult
 from ytverbatim.asr.worker import _claim_output as claim_output
 from ytverbatim.cli import main
-from ytverbatim.contract import ContextDocument, Word, load_document
+from ytverbatim.contract import ContextDocument, Word, YouTubeSource, load_document
 from ytverbatim.errors import ConfigError, DependencyError, EngineError, LLMUnavailableError
 from ytverbatim.llm import claude_cli
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
@@ -217,6 +217,12 @@ def only_document(results: list[VideoResult]) -> ContextDocument:
     (result,) = results
     assert result.document is not None, result.outcome
     return result.document
+
+
+def only_youtube(results: list[VideoResult]) -> YouTubeSource:
+    source = only_document(results).source
+    assert isinstance(source, YouTubeSource)
+    return source
 
 
 def stored(result: VideoResult) -> dict[str, bool]:
@@ -898,7 +904,7 @@ def test_the_creator_note_reaches_correction_only_when_the_option_is_on(session_
         "numeric": True,
         "numerals": True,
     }
-    assert only_document(results).video.creator_note is not None
+    assert only_youtube(results).creator_note is not None
 
     llm = FakeLLM()
     _, results, events = note_run(session_kit, yt, llm, note=True)
@@ -906,7 +912,7 @@ def test_the_creator_note_reaches_correction_only_when_the_option_is_on(session_
 
     _, results, _ = note_run(session_kit, yt, FakeLLM(), note=False)
     assert stored(results[0])["correct"] is False
-    assert only_document(results).video.creator_note is None
+    assert only_youtube(results).creator_note is None
 
 
 def test_turning_the_note_on_for_a_video_without_one_reuses_correction(session_kit, worker) -> None:
@@ -923,7 +929,7 @@ def test_turning_the_note_on_for_a_video_without_one_reuses_correction(session_k
         "numeric": True,
         "numerals": True,
     }
-    assert only_document(results).video.creator_note is None
+    assert only_youtube(results).creator_note is None
 
 
 def test_numbers_without_independent_readings_are_called_unchecked(session_kit, worker, monkeypatch) -> None:
@@ -1108,7 +1114,7 @@ def test_tags_come_from_the_extraction_the_audio_fetch_refreshed(session_kit, wo
     _, results, events = run(session_kit, yt, options=captions_mode(), llm=llm)
 
     assert len(yt.labels("metadata")) == 2 and [e.stage for e in events][:2] == ["fetch", "fetch"]
-    assert only_document(results).video.tags == ("extraction2",)
+    assert only_youtube(results).tags == ("extraction2",)
     (correction,) = [r for r, stage in zip(llm.requests, llm.stages(), strict=True) if stage == "correct"]
     assert "extraction2" in correction.system + correction.user
     assert "extraction1" not in correction.system + correction.user

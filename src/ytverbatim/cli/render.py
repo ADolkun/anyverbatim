@@ -13,7 +13,7 @@ from ytverbatim.ytdlp.runner import redact
 @click.argument("context", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--stdout", "to_stdout", is_flag=True, help="Print the markdown instead of writing it.")
 def render_command(context: Path, *, to_stdout: bool) -> None:
-    """Render a context.json as markdown, written beside it with the .md suffix."""
+    """Render a context.json (contract 1.0, 1.1 or 2.x) as markdown, written beside it with the .md suffix."""
     try:
         markdown = render_markdown(load_document(context))
     except ContractError as exc:

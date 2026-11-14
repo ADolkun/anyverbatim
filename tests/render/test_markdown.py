@@ -1,8 +1,11 @@
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
+from ytverbatim.cli import main
 from ytverbatim.contract import ContextDocument, Edit, Flag, Segment, TranscriptRun
 from ytverbatim.render import render_markdown
 
@@ -10,7 +13,8 @@ MakeDoc = Callable[..., ContextDocument]
 MakeSeg = Callable[..., Segment]
 MakeFlag = Callable[..., Flag]
 
-GOLDEN = Path(__file__).parent.parent / "fixtures" / "render"
+FIXTURES = Path(__file__).parent.parent / "fixtures"
+GOLDEN = FIXTURES / "render"
 
 
 def zh_doc(make_doc: MakeDoc, seg: MakeSeg, flag: MakeFlag) -> ContextDocument:
@@ -70,7 +74,37 @@ def en_doc(make_doc: MakeDoc, seg: MakeSeg, flag: MakeFlag) -> ContextDocument:
     )
 
 
-@pytest.mark.parametrize(("name", "build"), [("zh", zh_doc), ("en", en_doc)])
+def recording_doc(make_doc: MakeDoc, seg: MakeSeg, flag: MakeFlag) -> ContextDocument:
+    budget = "我这边预算还是120万，没有变。"
+    return make_doc(
+        [
+            seg("好，我们开始吧。", 0.0, 2.0, paragraph=0, speaker="S1"),
+            seg("First item is the Q3 budget.", 2.0, 8.5, paragraph=0, speaker="S1"),
+            seg(
+                budget,
+                9.0,
+                14.0,
+                paragraph=1,
+                speaker="S2",
+                flags=[
+                    flag("low_confidence", budget, "120万", note="engine confidence 0.31"),
+                    flag("overlapping_speech", budget, "我这边", note="a second speaker is active"),
+                ],
+            ),
+            seg("OK, so we keep it flat.", 15.0, 17.0, paragraph=2, speaker="S1"),
+            seg("Next is hiring.", 17.0, 18.5, paragraph=2, speaker="S1"),
+        ],
+        language="zh",
+        languages=("zh", "en"),
+        duration_s=2832.0,
+        punctuation="llm",
+        correction_llm="example-llm",
+        source={"kind": "recording", "recorded_at": datetime(2026, 11, 3, 14, 5, tzinfo=timezone(timedelta(hours=8)))},
+        speakers={"S1": (None, 12.0), "S2": (None, 6.0)},
+    )
+
+
+@pytest.mark.parametrize(("name", "build"), [("zh", zh_doc), ("en", en_doc), ("recording", recording_doc)])
 def test_golden(name: str, build: Callable[[MakeDoc, MakeSeg, MakeFlag], ContextDocument], make_doc, seg, flag) -> None:
     rendered = render_markdown(build(make_doc, seg, flag))
     assert rendered == (GOLDEN / f"{name}.md").read_text(encoding="utf-8")
@@ -133,6 +167,119 @@ def test_zh_segments_join_without_separator_and_en_with_a_space(make_doc, seg) -
     en = render_markdown(make_doc([seg("Hello.", 0.0, 1.0), seg("Bye.", 1.0, 2.0)], language="en"))
     assert "你好。再见。" in zh
     assert "Hello. Bye." in en
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "joined"),
+    [
+        ("Really strong quarter.", "Next we look at margins.", "Really strong quarter. Next we look at margins."),
+        ("收入3.5万美元。", "Really strong quarter.", "收入3.5万美元。Really strong quarter."),
+        ("Really strong quarter.", "大家好。", "Really strong quarter. 大家好。"),
+        ("大家好欢迎回来", "今天聊聊ETF", "大家好欢迎回来今天聊聊ETF"),
+        ("今天聊聊利润", "really strong", "今天聊聊利润 really strong"),
+        ("引用", "「原话」", "引用「原话」"),
+    ],
+    ids=["end.Next", "cjk-stop-latin", "latin-stop-cjk", "cjk-cjk", "cjk-latin", "cjk-bracket"],
+)
+def test_segments_join_by_the_script_at_each_boundary(make_doc, seg, left: str, right: str, joined: str) -> None:
+    doc = make_doc([seg(left, 0.0, 1.0), seg(right, 1.0, 2.0)], language="zh")
+    assert f"[00:00](https://youtu.be/AAAAAAAAAAA?t=0) {joined}\n" in render_markdown(doc)
+
+
+def test_the_joiner_reads_the_text_not_the_footnote_marker(make_doc, seg, flag) -> None:
+    text = "Prices rose 12"
+    doc = make_doc([seg(text, 0.0, 1.0, flags=[flag("low_confidence", text, "12")]), seg("今天。", 1.0, 2.0)])
+    assert "Prices rose 12[^1] 今天。" in render_markdown(doc)
+
+
+def recording(**fields: object) -> dict[str, object]:
+    return {"kind": "recording", **fields}
+
+
+def test_a_recording_has_plain_timestamps_and_no_links(make_doc, seg) -> None:
+    doc = make_doc([seg("one", 5.0, 6.0, chapter=0)], chapters={0: "First"}, source=recording())
+    body = render_markdown(doc)
+    assert "## [00:05] First" in body and "[00:05] one" in body
+    assert "youtu" not in body
+
+
+def test_a_recording_header_omits_an_unknown_date_and_names_a_plain_file(make_doc, seg) -> None:
+    doc = make_doc([seg("x", 0.0, 1.0)], duration_s=3725.0, source=recording(origin="file", file_name="a_b [1].m4a"))
+    lines = render_markdown(doc).splitlines()
+    assert lines[2] == "1:02:05 · a_b \\[1\\].m4a"
+    assert lines[4] == "Transcript: example-engine · languages: en · punctuation: engine · corrected by: none · 0 flags"
+
+
+def test_a_recording_time_is_shown_in_its_own_offset(make_doc, seg) -> None:
+    moment = datetime(2026, 11, 3, 6, 5, tzinfo=UTC)
+    doc = make_doc([seg("x", 0.0, 1.0)], source=recording(recorded_at=moment))
+    assert "Recorded 2026-11-03 06:05 +00:00 · 10:00 · Voice Memos\n" in render_markdown(doc)
+
+
+def test_a_single_speaker_gets_no_labels(make_doc, seg) -> None:
+    doc = make_doc(
+        [seg("one.", 0.0, 1.0, speaker="S1"), seg("two.", 5.0, 6.0, paragraph=1, speaker="S1")],
+        source=recording(),
+        speakers={"S1": (None, 2.0)},
+    )
+    body = render_markdown(doc)
+    assert "Speaker" not in body
+    assert "[00:00] one.\n\n[00:05] two." in body
+
+
+def test_ids_sharing_a_name_are_one_person(make_doc, seg) -> None:
+    doc = make_doc(
+        [
+            seg("Hi.", 0.0, 1.0, paragraph=0, speaker="S1"),
+            seg("Hello.", 1.0, 2.0, paragraph=1, speaker="S2"),
+            seg("And me.", 2.0, 3.0, paragraph=2, speaker="S3"),
+            seg("Still me.", 9.0, 10.0, paragraph=3, speaker="S3"),
+            seg("Bye.", 10.0, 11.0, paragraph=4, speaker="S1"),
+        ],
+        source=recording(),
+        speakers={"S1": ("Alice", 2.0), "S2": ("Bob", 1.0), "S3": ("Bob", 2.0)},
+    )
+    body = render_markdown(doc)
+    assert "Speakers: Alice (40%) · Bob (60%)" in body
+    paragraphs = [line for line in body.splitlines() if line.startswith("[")]
+    assert paragraphs == [
+        "[00:00] **Alice:** Hi.",
+        "[00:01] **Bob:** Hello. And me.",
+        "[00:09] **Bob:** Still me.",
+        "[00:10] **Alice:** Bye.",
+    ]
+
+
+def test_ids_that_all_share_one_name_get_no_labels(make_doc, seg) -> None:
+    doc = make_doc(
+        [seg("Hi.", 0.0, 1.0, speaker="S1"), seg("Hello.", 1.0, 2.0, paragraph=1, speaker="S2")],
+        source=recording(),
+        speakers={"S1": ("Alice", 1.0), "S2": ("Alice", 1.0)},
+    )
+    body = render_markdown(doc)
+    assert "Alice" not in body and "Speakers" not in body
+    assert "[00:00] Hi. Hello." in body
+
+
+def test_names_are_escaped(make_doc, seg) -> None:
+    doc = make_doc(
+        [seg("Hi.", 0.0, 1.0, speaker="S1"), seg("Yo.", 1.0, 2.0, paragraph=1, speaker="S2")],
+        source=recording(),
+        speakers={"S1": ("*Al*", 1.0), "S2": (None, 1.0)},
+    )
+    body = render_markdown(doc)
+    assert "[00:00] **\\*Al\\*:** Hi." in body and "Speakers: \\*Al\\* (50%) · Speaker 2 (50%)" in body
+
+
+def test_overlapping_speech_stays_in_the_json(make_doc, seg, flag) -> None:
+    text = "we both talk"
+    overlap = flag("overlapping_speech", text, "both", note="a second speaker is active")
+    doc = make_doc(
+        [seg(text, 0.0, 2.0, flags=[overlap], speaker="S1")], source=recording(), speakers={"S1": (None, 2.0)}
+    )
+    body = render_markdown(doc)
+    assert "overlapping" not in body and "[^" not in body and "0 flags" in body
+    assert doc.segments[0].flags == (overlap,)
 
 
 def test_numeric_single_source_needs_overlapping_low_confidence(make_doc, seg, flag) -> None:
@@ -286,7 +433,7 @@ def test_provenance_line_labels(make_doc, seg, flag) -> None:
 
 
 def test_header_omits_unknown_upload_date(make_doc, seg) -> None:
-    body = render_markdown(make_doc([seg("x", 0.0, 1.0)], upload_date=None))
+    body = render_markdown(make_doc([seg("x", 0.0, 1.0)], source={"upload_date": None}))
     assert "Example Channel · 10:00 · https://youtu.be/AAAAAAAAAAA" in body
 
 
@@ -295,3 +442,11 @@ def test_document_without_segments_renders_header_only(make_doc) -> None:
     assert body.startswith("# Example Title\n")
     assert body.rstrip().endswith("## Transcript")
     assert "0 flags" in body
+
+
+def test_the_render_command_reads_a_1_1_document_as_its_2_0_upgrade(tmp_path: Path) -> None:
+    context = tmp_path / "context.json"
+    context.write_bytes((FIXTURES / "contract" / "context_v1_1.json").read_bytes())
+    result = CliRunner().invoke(main, ["render", "--stdout", str(context)])
+    assert result.exit_code == 0, result.output
+    assert result.output == (FIXTURES / "pipeline" / "fxMixZhEn01" / "context.md").read_text(encoding="utf-8")
