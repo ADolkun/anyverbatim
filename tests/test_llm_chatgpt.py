@@ -1,5 +1,4 @@
 import contextlib
-import http.client
 import io
 import json
 import socket
@@ -407,9 +406,9 @@ def real_client(script: Script, timeout_s: float) -> tuple[ChatGPTClient, thread
     threading.Thread(target=serve, daemon=True).start()
 
     def open_local(request: urllib.request.Request, timeout_s: float) -> chatgpt_http.Response:
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout_s)
-        connection.request("POST", "/v1/responses", body=request.data)
-        return chatgpt_http.BoundedResponse(connection.getresponse(), timeout_s)
+        # urllib, as in production: it hands the socket to the response, so http.client's close at the end is final.
+        local = urllib.request.Request(f"http://127.0.0.1:{port}/v1/responses", data=request.data, method="POST")
+        return chatgpt_http.BoundedResponse(urllib.request.build_opener().open(local, timeout=timeout_s), timeout_s)
 
     return ChatGPTClient(model=MODEL, effort="medium", timeout_s=timeout_s, opener=open_local), done
 
@@ -499,6 +498,9 @@ def test_whatever_a_read_the_deadline_interrupts_returns_is_the_timeout(outcome:
                 return outcome
             raise outcome
 
+        def isclosed(self) -> bool:
+            return False
+
         def close(self) -> None:
             pass
 
@@ -512,3 +514,24 @@ def test_reply_items_with_a_null_status_count_as_complete(signed_in: list[str]) 
     reply = {**message("ok"), "status": None}
     response = client(stream(sse(completed([reasoning, reply])))).complete(REQUEST)
     assert response.text == "ok"
+
+
+def test_a_whole_body_read_through_urllib_ends_cleanly() -> None:
+    body = b'{"issuer": "https://auth.example.com"}'
+    server = socket.create_server(("127.0.0.1", 0))
+    port = server.getsockname()[1]
+
+    def serve() -> None:
+        with server:
+            connection, _ = server.accept()
+            with connection:
+                connection.recv(65536)
+                connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body))
+
+    threading.Thread(target=serve, daemon=True).start()
+    response = urllib.request.build_opener().open(f"http://127.0.0.1:{port}/", timeout=5)
+    bounded = chatgpt_http.BoundedResponse(response, 5.0)
+    try:
+        assert bounded.read() == body
+    finally:
+        bounded.close()

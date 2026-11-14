@@ -108,6 +108,10 @@ class BoundedResponse:
         self._response.close()
 
     def _read_some(self) -> bytes:
+        # http.client closes the connection once the body is complete; urllib has already released the socket, so
+        # that close is final and the socket must not be touched again.
+        if self._response.isclosed():
+            return b""
         remaining = self._deadline - time.monotonic()
         if remaining <= 0 or self._expired.is_set():
             raise TimeoutError
