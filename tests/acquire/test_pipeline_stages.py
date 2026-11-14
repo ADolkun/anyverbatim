@@ -741,9 +741,7 @@ def test_a_module_version_bump_redoes_its_stage_and_the_document(session_kit, wo
 
 
 @pytest.mark.parametrize("module", [numbers, guards])
-def test_a_tokenizer_or_guard_bump_rechecks_the_stored_replies_without_asking_again(
-    session_kit, worker, monkeypatch, module
-) -> None:
+def test_a_tokenizer_or_guard_bump_rechecks_the_stored_replies(session_kit, worker, monkeypatch, module) -> None:
     yt = zh_yt(session_kit)
     llm = FakeLLM()
     run(session_kit, yt, llm=llm)
@@ -759,7 +757,9 @@ def test_a_tokenizer_or_guard_bump_rechecks_the_stored_replies_without_asking_ag
         "correct": False,
         "numeric": False,
     }
-    assert len(llm.requests) == asked, "correct and numeric re-apply their rules to the checkpointed replies"
+    assert len(llm.requests) == asked, (
+        "no request changed, so correct and numeric re-apply their rules to the checkpointed replies"
+    )
     assert only_document(results).quality.flags_by_kind == {"numeric_fixed": 1, "timing_interpolated": 1}
 
 

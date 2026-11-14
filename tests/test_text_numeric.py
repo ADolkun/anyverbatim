@@ -125,6 +125,41 @@ def test_a_per_unit_one_after_a_figure_in_wan_agrees_with_its_digit_form(tmp_pat
     assert client.requests == []
 
 
+@pytest.mark.parametrize(
+    ("asr", "caption", "span"),
+    [
+        ("这个城市参与人数十五万人左右吧", "这个城市参与人数二十五万人左右吧", "十五万人"),
+        # A run of place words after 人数 keeps no value, but is still compared with the captions.
+        ("这个城市参与人数十万左右吧", "这个城市参与人数二十万左右吧", "十万"),
+    ],
+)
+def test_a_figure_after_a_noun_ending_in_shu_is_still_verified(
+    asr: str, caption: str, span: str, tmp_path: Path
+) -> None:
+    result = verify_numbers(
+        [TimedText(asr, 0.0, 3.0)],
+        language="zh",
+        evidence=Evidence(PRIMARY, captions=(manual((0.0, 3.0, caption)),)),
+        client=None,
+        checkpoint_dir=tmp_path / "checkpoints",
+    )
+    (flag,) = result.flags[0]
+    assert flag.kind == "numeric_disputed" and span_text(result, 0, flag) == span
+
+
+@pytest.mark.parametrize(
+    ("asr", "caption"),
+    [("调查显示百分之六十支持这个方案", "调查显示60%支持这个方案"), ("利率从百分之三升到百分之五", "利率从3%升到5%")],
+)
+def test_a_spoken_percent_before_a_word_agrees_with_its_digit_form(asr: str, caption: str, tmp_path: Path) -> None:
+    client = FakeClient()
+    result = run(
+        [TimedText(asr, 0.0, 3.0)], Evidence(PRIMARY, captions=(manual((0.0, 3.0, caption)),)), client, tmp_path
+    )
+    assert result.flags == ((),) and result.stats.disputed == 0
+    assert client.requests == []
+
+
 def test_without_an_llm_a_dispute_is_flagged_with_its_readings_and_nothing_changes(tmp_path: Path) -> None:
     result = verify_numbers(
         DISPUTED,

@@ -475,6 +475,7 @@ def test_one_stays_part_of_the_number_elsewhere(text: str, value: str) -> None:
         ("三点四十分", [("三点", "3点"), ("四十", "40")]),
         ("十二点三十五", [("十二点", "12点"), ("三十五", "35")]),
         ("下午四点四十分", [("四点", "4点"), ("四十", "40")]),
+        ("二十四点五十九", [("二十四点", "24点"), ("五十九", "59")]),
         ("一点十分", [("一点", "1点")]),
         ("一点五万", [("一点五万", "15000")]),
         ("三点一四", [("三点一四", "3.14")]),
@@ -517,38 +518,89 @@ def test_words_after_a_numeral_that_are_not_counts(text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "text",
+    ("text", "surface"),
     [
-        "三分之一",
-        "二十分之一",
-        "千分之十五",
-        "千分之五",
-        "万分之一",
-        "几万分之一",
-        "一百分之一",
-        "十万八千里",
-        "相差十万八千里",
+        ("三分之一", "三分之一"),
+        ("二十分之一", "二十分之一"),
+        ("千分之十五", "千分之十五"),
+        ("万分之一", "万分之一"),
+        ("几万分之一", "万分之一"),
+        ("一百分之一", "一百分之一"),
     ],
 )
-def test_fractions_and_the_idiom_of_distance_are_not_quantities(text: str) -> None:
-    assert quantity_tokens(text) == []
+def test_a_fraction_is_one_token_that_keeps_its_surface(text: str, surface: str) -> None:
+    (token,) = quantity_tokens(text)
+    assert (token.surface, token.value_itn, token.kind) == (surface, surface, "cjk_quantity")
     assert itn(text) == text
+
+
+@pytest.mark.parametrize("text", ["十万八千里", "相差十万八千里", "百度", "百度一下"])
+def test_idioms_with_place_words_are_not_quantities(text: str) -> None:
+    assert quantity_tokens(text) == []
 
 
 def test_baifenzhi_on_its_own_is_still_a_percent() -> None:
     assert itn("涨了百分之二十，三分之一") == "涨了20%，三分之一"
 
 
-@pytest.mark.parametrize("text", ["二十几岁", "数十个", "几十个", "数十亿", "几千", "一百几十", "三千几百块", "十几个"])
-def test_ji_and_shu_make_a_rough_figure_not_a_quantity(text: str) -> None:
-    assert quantity_tokens(text) == []
+@pytest.mark.parametrize(
+    ("text", "surfaces"),
+    [
+        ("二十几岁", ["二十"]),
+        ("数十个", ["十个"]),
+        ("几十个", ["十个"]),
+        ("数十亿", ["十亿"]),
+        ("几千", []),
+        ("三千几百块", ["三千", "百块"]),
+        # After a noun ending in 数 a run of place words alone may be exact or rough, so it keeps no value either.
+        ("参与人数十万", ["十万"]),
+        ("股数十万股", ["十万股"]),
+        ("次数十次", ["十次"]),
+    ],
+)
+def test_ji_and_shu_make_a_rough_figure_that_keeps_its_surface(text: str, surfaces: list[str]) -> None:
+    assert [(t.surface, t.value_itn) for t in quantity_tokens(text)] == [(s, s) for s in surfaces]
+    assert itn(text) == text
 
 
 @pytest.mark.parametrize(
-    ("text", "value"), [("指数两千八百点", "指数2800点"), ("人数两万", "人数20000"), ("二十几乎", "20几乎")]
+    ("text", "value"),
+    [
+        ("指数两千八百点", "指数2800点"),
+        ("人数两万", "人数20000"),
+        ("人数十五万人", "人数150000人"),
+        ("股数三十万股", "股数300000股"),
+        ("二十几乎", "20几乎"),
+    ],
 )
-def test_a_word_ending_in_shu_or_a_word_starting_with_ji_does_not_make_a_rough_figure(text: str, value: str) -> None:
+def test_a_digit_after_a_word_ending_in_shu_makes_an_exact_figure(text: str, value: str) -> None:
     assert itn(text) == value
+
+
+@pytest.mark.parametrize(
+    ("text", "surface"),
+    [
+        ("百分之六十支持", "百分之六十"),
+        ("从百分之三升到", "百分之三"),
+        ("百分之三十人口", "百分之三十"),
+        ("百分之五十个", "百分之五十"),
+    ],
+)
+def test_a_spoken_percent_takes_no_measure_word(text: str, surface: str) -> None:
+    (token,) = quantity_tokens(text)
+    assert token.surface == surface and token.kind == "percent"
+
+
+@pytest.mark.parametrize("text", ["一百点二十", "三点五十年期", "二十五点三十"])
+def test_a_clock_time_needs_an_hour_and_minutes_and_no_unit(text: str) -> None:
+    assert "点" in quantity_tokens(text)[0].surface
+    assert len(quantity_tokens(text)) == 1
+
+
+@pytest.mark.parametrize("text", ["一亿五千零三", "三亿二千零五十"])
+def test_zero_inside_the_group_after_yi_keeps_the_surface(text: str) -> None:
+    (token,) = quantity_tokens(text)
+    assert token.value_itn == text
 
 
 def test_tokens_from_one_run_tile_it_in_order() -> None:

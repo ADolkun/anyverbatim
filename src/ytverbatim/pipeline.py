@@ -80,7 +80,8 @@ CONTEXT_MD = "context.md"
 # input. The text modules' versions are folded in by `stage_versions`, so a prompt, tokenizer, guard or rule change
 # there redoes that stage, everything after it, and the context record. LLM checkpoints are keyed by the request alone
 # (`PROMPT_VERSION`, client, prompt), so a `numbers` or `guards` bump re-applies the new rules to the stored replies
-# without asking again. Worker folders are keyed by the decode request alone, so an `asr` or `second_opinion` bump
+# and re-asks only where a request changes (a numeric batch whose disputes moved, a different second correction
+# pass). Worker folders are keyed by the decode request alone, so an `asr` or `second_opinion` bump
 # re-reads the decoded rows they keep instead of decoding the audio again.
 _PIPELINE_VERSIONS: dict[str, int] = {
     "asr": 2,

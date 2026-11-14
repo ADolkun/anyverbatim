@@ -47,8 +47,8 @@ from ytverbatim.text.numbers import QToken, quantity_tokens
 _log = logging.getLogger(__name__)
 
 # Part of every checkpoint and stage key: bump it only when the request changes, which asks the LLM again. A tokenizer
-# or guard change bumps `numbers.VERSION` or `guards.VERSION` instead, which the stage key folds in, so the stored
-# replies are checked again for free.
+# or guard change bumps `numbers.VERSION` or `guards.VERSION` instead, which the stage key folds in: the stored
+# replies are checked again and only requests that change are asked anew.
 PROMPT_VERSION = "numeric-v5"
 STAGE = "numeric"
 BATCH_SIZE = 8
