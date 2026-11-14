@@ -11,6 +11,7 @@ sentence that holds it. Nothing here performs I/O.
 """
 
 import collections
+import difflib
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
@@ -211,40 +212,83 @@ def numerals(stretches: Sequence[Stretch], language: str) -> tuple[Stretch, ...]
     """Write Mandarin amounts as digits (`text.numerals`); flags, words and edits follow, and no edit is recorded.
 
     Words covering a rewritten figure become one word with the display text, so `build_document` still times the
-    figure by the engine. A figure only partly matched by words keeps its words: it was interpolated before, and is
-    again. Edits are rewritten too, so they read in the same form as the text they lead to.
+    figure by the engine. A figure its words only partly match stays as said, so no word loses its time. Edits carry
+    the same rewrites, so they read in the form of the text they lead to.
     """
     if not seg.is_zh(language):
         return tuple(stretches)
-    display = numerals_module.display
     out: list[Stretch] = []
     for stretch in stretches:
-        changes = numerals_module.conversions(stretch.text)
-        edits = tuple(
-            edit.model_copy(update={"before": display(edit.before), "after": display(edit.after)})
-            for edit in stretch.edits
-        )
-        if not changes:
-            out.append(stretch.model_copy(update={"edits": edits}))
-            continue
-        steps: list[tuple[str, str]] = []
-        current = stretch.text
-        # Last first, so each step is one replacement at offsets that are still those of the original text.
-        for start, end, replacement in reversed(changes):
-            after = current[:start] + replacement + current[end:]
-            steps.append((current, after))
-            current = after
+        changes = _timeable_conversions(stretch)
         out.append(
             stretch.model_copy(
                 update={
-                    "text": current,
-                    "words": _merged_words(stretch.text, stretch.words, changes),
-                    "flags": offsets.remap_flags(stretch.flags, steps),
-                    "edits": edits,
+                    "text": numerals_module.apply(stretch.text, changes),
+                    "words": _merged_words(stretch.text, stretch.words, changes) if changes else stretch.words,
+                    "flags": offsets.replace_under_flags(stretch.flags, changes),
+                    "edits": _carried_edits(stretch.edits, changes),
                 }
             )
         )
     return tuple(out)
+
+
+def _timeable_conversions(stretch: Stretch) -> list[numerals_module.Conversion]:
+    changes = numerals_module.conversions(stretch.text)
+    if not changes or not stretch.words:
+        return changes
+    covered = {i for a, b in seg.word_spans(stretch.text, stretch.words).values() for i in range(a, b)}
+
+    def whole_or_untimed(change: numerals_module.Conversion) -> bool:
+        figure = [i for i in range(change[0], change[1]) if stretch.text[i].isalnum()]
+        timed = sum(i in covered for i in figure)
+        return timed in (0, len(figure))
+
+    if all(whole_or_untimed(change) for change in changes):
+        return changes
+    return numerals_module.conversions(stretch.text, allowed=whole_or_untimed)
+
+
+def _carried_edits(edits: Sequence[Edit], changes: Sequence[numerals_module.Conversion]) -> tuple[Edit, ...]:
+    """Rewrite each edit with the rewrites of the text it leads to, carried back along the chain of edits.
+
+    Each edit's `after` is the next one's `before`, and the last one's is the stretch text. A rewrite reaches an
+    earlier text only through characters the edit left alone, so 张了两点 → 涨了两点 reads 张了2点 → 涨了2点, as the
+    move word in the final text decided. A figure the edit itself changed takes its own text's rewrites, so a
+    numeric fix reads 35 → 50.
+    """
+    carried = list(changes)
+    out: list[Edit] = []
+    for edit in reversed(edits):
+        back = _carried_back(edit.before, edit.after, carried)
+        after = numerals_module.apply(edit.after, carried)
+        out.append(edit.model_copy(update={"before": numerals_module.apply(edit.before, back), "after": after}))
+        carried = back
+    return tuple(reversed(out))
+
+
+def _carried_back(
+    before: str, after: str, changes: Sequence[numerals_module.Conversion]
+) -> list[numerals_module.Conversion]:
+    equal = [
+        op[1:] for op in difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes() if op[0] == "equal"
+    ]
+    back: list[numerals_module.Conversion] = []
+    for start, end, replacement in changes:
+        for i1, _, j1, j2 in equal:
+            if j1 <= start and end <= j2:
+                back.append((start - j1 + i1, end - j1 + i1, replacement))
+                break
+
+    def untouched(start: int, end: int) -> bool:
+        return any(i1 <= start and end <= i2 for i1, i2, _, _ in equal)
+
+    own = [
+        change
+        for change in numerals_module.conversions(before)
+        if not untouched(change[0], change[1]) and not any(change[0] < b and a < change[1] for a, b, _ in back)
+    ]
+    return sorted(back + own)
 
 
 def _merged_words(text: str, words: Sequence[Word], changes: Sequence[numerals_module.Conversion]) -> tuple[Word, ...]:

@@ -3,7 +3,7 @@ import random
 
 import pytest
 
-from ytverbatim.text.numbers import _NUMERALS, itn
+from ytverbatim.text.numbers import _NUMERALS, itn, quantity_tokens
 from ytverbatim.text.numerals import apply, conversions, display
 
 # Plan section 5.3: input after correction, the display form, and the rule it shows.
@@ -90,6 +90,17 @@ CONVERTED = [
     ("三万一个月", "3万一个月"),
     ("五百亿一个", "500亿一个"),
     ("指数十月份", "指数10月份"),
+    ("三、四、五个", "3、4、5个"),
+    ("一到二到三个", "1到2到3个"),
+    ("从一到三月份", "从1到3月份"),
+    ("下午两点到四点", "下午2点到4点"),
+    ("晚上八点到十点", "晚上8点到10点"),
+    ("两点到三点半", "2点到3点半"),
+    ("涨了三点到五点", "涨了3点到5点"),
+    ("两点零五分", "2点05分"),
+    ("下午三点零五分", "下午3点05分"),
+    ("百分之五百分之五", "5%5%"),
+    ("上升两点", "上升2点"),
 ]
 
 UNCHANGED = [
@@ -165,6 +176,32 @@ UNCHANGED = [
     "一点点",
     "这十点很关键",
     "A三百",
+    "百分之三到五",
+    "三到五万",
+    "一到三万",
+    "三万到五",
+    "三到二十5",
+    "５三百",
+    "５三个",
+    "5.三百",
+    "Ａ三百",
+    "三百.5",
+    "一到三月份就开始涨",
+    "一到十二点就睡",
+    "第三到五个",
+    "一个到两个",
+    "提升两点",
+    "数十日",
+    "几十点",
+    "跌了几十点",
+    "八月十五",
+    "五十步笑百步",
+    "三十而立",
+    "十二生肖",
+    "三十六计",
+    "十一黄金周",
+    "一号文件",
+    "三万五到四万三万五到四万",
     "三百5",
 ]
 
@@ -216,8 +253,19 @@ def test_p1_display_is_idempotent() -> None:
     assert [text for text in SAMPLES if display(display(text)) != display(text)] == []
 
 
+def readings(text: str) -> list[tuple[str, str]]:
+    # A rewritten Chinese numeral reads as a digit number; every other kind and every value must stay.
+    return [("number" if t.kind == "cjk_quantity" else t.kind, t.value_itn) for t in quantity_tokens(text)]
+
+
 def test_p2_a_rewrite_never_changes_a_numbers_value() -> None:
-    assert [text for text in SAMPLES if itn(display(text)) != itn(text)] == []
+    assert [text for text in SAMPLES if readings(display(text)) != readings(text)] == []
+
+
+@pytest.mark.parametrize(("text", "change"), [("５三百", (1, 3, "300")), ("5.三百", (2, 4, "300"))])
+def test_p2_sees_figures_that_a_rewrite_would_merge(text: str, change: tuple[int, int, str]) -> None:
+    assert readings(apply(text, [change])) != readings(text)
+    assert itn(apply(text, [change])) == itn(text), "the joined itn text alone would not tell"
 
 
 # GB/T 5.3 allows 万 and 亿 beside Arabic digits (3.5万), never 十, 百, 千 or a Chinese digit (1百零8).
