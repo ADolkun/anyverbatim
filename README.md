@@ -92,6 +92,7 @@ Without `llm=`, `process` uses the configured LLM, ChatGPT by default, and raise
 - macOS on Apple Silicon
 - `ffmpeg`
 - A JavaScript runtime for yt-dlp: Deno or Node 22 or newer
+- `curl_cffi` (installed with ytverbatim, MIT): yt-dlp asks for browser impersonation on caption downloads, and without it YouTube rate-limits them (HTTP 429) more often and yt-dlp warns that no impersonate target is available
 
 ## Responsible use
 

@@ -143,6 +143,21 @@ wheels = [
 ]
 
 [[package]]
+name = "curl-cffi"
+version = "0.17.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "cffi" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/96/4c/69074f9797d83a5401b3c6bc58c5de5aad6d1a085d0497b87a093a152e87/curl_cffi-0.17.0.tar.gz", hash = "sha256:31ee8500d06d6502ce1ec0b7ded1c5aa8e8f3401bbe37ccd78d6153d859d8f3c", size = 282294, upload-time = "2026-10-26T04:13:39.396Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/dc/ab/cd7e71bc96c36521193d3dcd38e1a08a9939538fc34b50ba81f30201f9b3/curl_cffi-0.17.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:88cb5e34eb23eb2106711b06df68027209c72be709df239c6029345551e0acfd", size = 2921615, upload-time = "2026-10-26T04:12:44.941Z" },
+    { url = "https://files.pythonhosted.org/packages/43/23/44a51c58960590a8a588a0ed4593bb124f86c54f7e052b5e2894607b25ec/curl_cffi-0.17.0-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:9426fa386a0f299ab043f64e59689d52e6ee2370f19238aa0bb42e6bf3620aaf", size = 2921843, upload-time = "2026-10-26T04:13:09.566Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/ab/770a84343fbf72d07d6829bc0f633b77391ab710b28078e9c93a4b9f7f93/curl_cffi-0.17.0-cp315-abi3.abi3t-macosx_11_0_arm64.whl", hash = "sha256:f8cf840646d3e57637b8caae7d0d93334dfed0bfbf6f160b36479a7d6069d547", size = 2921865, upload-time = "2026-10-26T04:13:24.474Z" },
+]
+
+[[package]]
 name = "filelock"
 version = "4.2.10"
 source = { registry = "https://pypi.org/simple" }
@@ -1036,6 +1051,9 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+curl-cffi = [
+    { name = "curl-cffi", marker = "implementation_name == 'cpython'" },
+]
 default = [
     { name = "brotli", marker = "implementation_name == 'cpython'" },
     { name = "brotlicffi", marker = "implementation_name != 'cpython'" },
@@ -1068,7 +1086,7 @@ dependencies = [
     { name = "opencc" },
     { name = "pydantic" },
     { name = "rapidfuzz" },
-    { name = "yt-dlp", extra = ["default"] },
+    { name = "yt-dlp", extra = ["curl-cffi", "default"] },
 ]
 
 [package.optional-dependencies]
@@ -1103,7 +1121,7 @@ requires-dist = [
     { name = "opencc", specifier = ">=1.4.2" },
     { name = "pydantic", specifier = ">=2.14" },
     { name = "rapidfuzz", specifier = ">=3.14" },
-    { name = "yt-dlp", extras = ["default"], specifier = ">=2026.10.26" },
+    { name = "yt-dlp", extras = ["default", "curl-cffi"], specifier = ">=2026.10.26" },
 ]
 provides-extras = ["asr", "whisper"]
 
