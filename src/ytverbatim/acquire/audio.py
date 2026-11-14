@@ -181,9 +181,14 @@ def to_wav16k(
     *,
     expected_duration: float | None = None,
     timeout_s: float = DEFAULT_CONVERT_TIMEOUT_S,
+    stream: int | None = None,
 ) -> None:
-    """Write 16 kHz mono pcm_s16le, the ASR input format; the file appears only once it validates."""
+    """Write 16 kHz mono pcm_s16le, the ASR input format; the file appears only once it validates.
+
+    `stream` is the index among the source's audio streams to convert; None leaves the choice to ffmpeg.
+    """
     tmp = destination.with_name(f".{destination.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
+    mapping = ["-map", f"0:a:{stream}"] if stream is not None else []
     try:
         result = proc.run(
             [
@@ -194,6 +199,7 @@ def to_wav16k(
                 "-y",
                 "-i",
                 str(source),
+                *mapping,
                 "-vn",
                 "-acodec",
                 "pcm_s16le",

@@ -96,3 +96,13 @@ def test_the_chatgpt_store_location_is_computed_without_creating_it(home: Path) 
     assert not (home / ".local").exists()
     assert paths.chatgpt_auth_dir(create_parents=True) == location
     assert _mode(location.parent) == 0o700 and not location.exists()
+
+
+def test_source_dir_takes_either_id_shape(home: Path) -> None:
+    recording = "rec-0123456789abcdef"
+    assert paths.source_dir("abcDEF_1234") == paths.default_output_root() / "abcDEF_1234"
+    assert paths.source_dir(recording) == paths.recordings_root() / recording
+    assert paths.source_dir(recording, home / "out") == home / "out" / recording
+    for bad in ("rec-0123456789ABCDEF", "rec-0123", "../escape"):
+        with pytest.raises(ValueError, match="not a YouTube video id or a recording id"):
+            paths.source_dir(bad)

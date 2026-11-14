@@ -1,8 +1,8 @@
 """iPhone Voice Memos: list the memos synced to this Mac, and remember which recording id each one has.
 
 The library is Apple's undocumented Sonoma-and-later layout, so the database is read-only and its columns are
-resolved at run time. Hashing a memo into its `rec-…` id is the identity stage's job; this module only caches the
-result, keyed by size and mtime, through a function the caller passes in.
+resolved at run time. Hashing a memo into its `rec-…` id is `acquire.local.recording_id`'s job; this module only
+caches the result, keyed by size and mtime, through a function the caller passes in.
 """
 
 import json
