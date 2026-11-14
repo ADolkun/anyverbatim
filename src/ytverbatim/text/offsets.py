@@ -74,6 +74,33 @@ def remap_flags(flags: Sequence[Flag], changes: Iterable[tuple[str, str]]) -> tu
     return tuple(moved)
 
 
+def replace_under_flags(flags: Sequence[Flag], replacements: Sequence[tuple[int, int, str]]) -> tuple[Flag, ...]:
+    """Move ``flags`` through sorted, non-overlapping ``(start, end, replacement)`` spans of their text, by arithmetic.
+
+    The spans are known, so nothing is diffed: a diff pairs repeated text (三千目标价三千) with the wrong occurrence.
+    An offset before a span stays, one inside it moves to the replacement's edge, and one after it shifts by the
+    change in length.
+    """
+
+    def moved(offset: int, *, end: bool) -> int:
+        shift = 0
+        for start, stop, replacement in replacements:
+            inside = start < offset <= stop if end else start <= offset < stop
+            if inside:
+                return start + shift + (len(replacement) if end else 0)
+            if stop > offset:
+                break
+            shift += len(replacement) - (stop - start)
+        return offset + shift
+
+    out: list[Flag] = []
+    for flag in flags:
+        start, end = moved(flag.char_start, end=False), moved(flag.char_end, end=True)
+        if end > start:
+            out.append(flag.model_copy(update={"char_start": start, "char_end": end}))
+    return tuple(out)
+
+
 @dataclass(frozen=True, slots=True)
 class ChangedRun:
     """One replaced run of an edit: ``before`` became ``after``, which sits at ``[start, end)`` of the new text."""

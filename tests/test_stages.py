@@ -1,3 +1,5 @@
+import itertools
+import random
 from datetime import UTC, datetime
 
 import pytest
@@ -19,6 +21,8 @@ from ytverbatim.stages import (
     with_results,
     word_confidence,
 )
+from ytverbatim.text.numbers import quantity_tokens
+from ytverbatim.text.numerals import apply, conversions
 
 ACCESS = Access(
     auth_source="none",
@@ -272,14 +276,69 @@ def test_words_split_over_a_figure_retime_it_without_interpolation(
     assert timed[figure] == (1.0 + first, 1.5 + last, 0.9 - last / 100)
 
 
-def test_a_figure_its_words_only_partly_cover_stays_interpolated() -> None:
+def test_a_figure_its_words_only_partly_cover_stays_as_said_and_keeps_its_word_times() -> None:
     source = source_of([timed_row(["收入", "三", "美元", "左右"])])
     (stretch,) = source.stretches
     with_missing_word = stretch.model_copy(update={"text": "收入三万美元左右"})
-    assert [kind for _, kind, _ in flagged(document(source, (with_missing_word,)))] == ["timing_interpolated"]
+    before = document(source, (with_missing_word,))
     (shown,) = numerals((with_missing_word,), "zh")
-    assert shown.text == "收入3万美元左右" and shown.words == stretch.words
-    assert [kind for _, kind, _ in flagged(document(source, (shown,)))] == ["timing_interpolated"]
+    assert shown == with_missing_word
+    after = document(source, (shown,))
+    assert flagged(after) == flagged(before) == [(0, "timing_interpolated", "收入三万美元左右")]
+    assert after.segments[0].words == before.segments[0].words
+
+
+def test_a_range_with_an_end_its_words_only_partly_cover_stays_whole() -> None:
+    source = source_of([timed_row(["要", "三到十五", "个月"])])
+    (stretch,) = source.stretches
+    assert numerals((stretch,), "zh")[0].text == "要3到15个月"
+    words = (*stretch.words[:1], stretch.words[1].model_copy(update={"text": "三到十"}), *stretch.words[2:])
+    (shown,) = numerals((stretch.model_copy(update={"words": words}),), "zh")
+    assert shown.text == "要三到十五个月" and shown.words == words
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "目标价三千目标价三千",
+        "是八十是八十",
+        "涨到四千涨到四千",
+        "三万五到四万三万五到四万",
+        "百分之五十分",
+        "收入三万，收入三万",
+    ],
+)
+def test_every_flag_stays_on_its_own_figure_when_figures_repeat(text: str) -> None:
+    tokens = quantity_tokens(text)
+    flags = tuple(
+        Flag.model_validate(
+            {"kind": "numeric_single_source", "char_start": t.char_start, "char_end": t.char_end, "note": t.surface}
+        )
+        for t in tokens
+    )
+    (shown,) = numerals((Stretch(text=text, start=0.0, end=1.0, flags=flags),), "zh")
+    changes = conversions(text)
+    expected = [
+        apply(
+            t.surface,
+            [(a - t.char_start, b - t.char_start, r) for a, b, r in changes if t.char_start <= a < t.char_end],
+        )
+        for t in tokens
+    ]
+    assert [shown.text[f.char_start : f.char_end] for f in shown.flags] == expected
+    assert [f.note for f in shown.flags] == [t.surface for t in tokens]
+
+
+def test_an_edit_reads_with_the_rewrites_of_the_text_it_led_to() -> None:
+    stretch = Stretch(
+        text="指数涨了两点",
+        start=0.0,
+        end=2.0,
+        edits=(Edit(stage="correction", before="指数张了两点", after="指数涨了两点", llm=LLM),),
+    )
+    (shown,) = numerals((stretch,), "zh")
+    assert shown.text == "指数涨了2点"
+    assert [(e.before, e.after) for e in shown.edits] == [("指数张了2点", "指数涨了2点")]
 
 
 def test_edits_are_rewritten_and_land_on_their_sentence_with_the_was_text() -> None:
@@ -324,3 +383,39 @@ def test_the_numerals_stage_leaves_other_languages_alone() -> None:
     stretch = Stretch(text="三万美元 is 30,000 dollars", start=0.0, end=2.0)
     assert numerals((stretch,), "en") == (stretch,)
     assert numerals((stretch,), "zh")[0].text == "3万美元 is 30,000 dollars"
+
+
+_PHRASES = (
+    *("收入三十五万美元", "第一季度", "涨了百分之八十", "三到五个", "下午三点四十分", "二〇二六年三月五日"),
+    *("一亿五千三", "三块五", "涨了二十四点", "两千八百点", "一个", "三家公司", "四千", "4千", "1.5千万", "的"),
+    *("我们", "看", "ETF", "三百ETF", "两点半", "百分之三到五", "三、四、五个", "一到三月份", "十二点", "零点五"),
+    *("两块钱", "3", "5", "八点零八分", "三万五到四万"),
+)
+
+
+def test_the_stage_never_adds_interpolation_or_loses_a_flag_however_words_split() -> None:
+    rng = random.Random(15835)
+    for _ in range(400):
+        text = "".join(rng.choice(_PHRASES) for _ in range(rng.randint(2, 4)))
+        pieces: list[str] = []
+        while sum(map(len, pieces)) < len(text):
+            start = sum(map(len, pieces))
+            pieces.append(text[start : start + rng.randint(1, 3)])
+        kept = [piece for piece in pieces if rng.random() >= 0.1]
+        words = tuple(Word(text=p, start=1.0 + k * 0.5, end=1.4 + k * 0.5, conf=0.9) for k, p in enumerate(kept))
+        source = source_of([row(text, 0.0, 2.0 + len(kept) * 0.5, words)])
+        first, *rest = source.stretches
+        flags = tuple(
+            Flag.model_validate(
+                {"kind": "numeric_single_source", "char_start": t.char_start, "char_end": t.char_end, "note": t.surface}
+            )
+            for t in quantity_tokens(first.text)
+        )
+        stretches = (first.model_copy(update={"flags": flags}), *rest)
+        shown = numerals(stretches, "zh")
+        interpolated = [
+            sum(k == "timing_interpolated" for _, k, _ in flagged(document(source, s))) for s in (stretches, shown)
+        ]
+        assert interpolated[1] <= interpolated[0], text
+        assert len(shown[0].flags) == len(flags), text
+        assert all(a.start <= b.start for s in shown for a, b in itertools.pairwise(s.words)), text

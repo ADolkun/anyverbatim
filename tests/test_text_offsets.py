@@ -1,5 +1,5 @@
 from ytverbatim.contract import Flag
-from ytverbatim.text.offsets import ChangedRun, changed_runs, remap_flags
+from ytverbatim.text.offsets import ChangedRun, changed_runs, remap_flags, replace_under_flags
 
 
 def flag_on(text: str, part: str, kind: str = "decoder_anomaly") -> Flag:
@@ -50,3 +50,22 @@ def test_rare_cjk_characters_are_units_of_their_own() -> None:
     # U+3400 (Extension A), U+F900 (compatibility) and U+20000 (Extension B) next to Latin letters.
     assert changed_runs("a\u3400b", "a\u3400c") == [ChangedRun(2, 3, "b", "c")]
     assert changed_runs("x\uf900\U00020000", "x\uf900\U00020001") == [ChangedRun(2, 3, "\U00020000", "\U00020001")]
+
+
+def test_known_replacements_move_flags_by_arithmetic_even_where_text_repeats() -> None:
+    text = "目标价三千目标价三千"
+    flags = (flag_on(text, "三千"), Flag(kind="decoder_anomaly", char_start=8, char_end=10, note="second"))
+    after = "目标价3000目标价3000"
+    moved = replace_under_flags(flags, [(3, 5, "3000"), (8, 10, "3000")])
+    assert [(f.char_start, f.char_end) for f in moved] == [(3, 7), (10, 14)]
+    assert spans(after, moved) == ["3000", "3000"]
+
+
+def test_a_flag_inside_or_around_a_replacement_takes_its_edges() -> None:
+    text = "涨了百分之五十分"
+    inner = Flag(kind="decoder_anomaly", char_start=4, char_end=6, note="inside")
+    around = flag_on(text, "了百分之五十分")
+    after_only = Flag(kind="low_confidence", char_start=7, char_end=8, note="after")
+    moved = replace_under_flags((inner, around), [(2, 7, "50%")])
+    assert spans("涨了50%分", moved) == ["50%", "了50%分"]
+    assert spans("涨了50%分", replace_under_flags((after_only,), [(2, 7, "50%")])) == ["分"]
