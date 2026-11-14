@@ -11,11 +11,12 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from statistics import NormalDist
+from typing import Literal
 
 import jiwer
 
 from evals.consensus import TimedUnit
-from evals.normalize import Language, View, canonical, english_normalizer, normalize, to_units
+from evals.normalize import Language, View, canonical, english_normalizer, normalize, script_counts, to_units
 from ytverbatim.text.numbers import QKind, QToken, quantity_tokens
 
 Interval = tuple[float, float]
@@ -24,6 +25,9 @@ DEFAULT_CONFIDENCE = 0.95
 PARITY = 0.5
 DEFAULT_RESAMPLES = 2000
 MIN_NONSPEECH_S = 1.0
+# "At least 70%" as an integer ratio, so a 7-of-10 chunk is not lost to float rounding.
+TRANSLATION_SHARE_NUM, TRANSLATION_SHARE_DEN = 7, 10
+MIN_INCIDENT_UNITS = 3
 _WHITESPACE = re.compile(r"\s+")
 
 
@@ -206,6 +210,44 @@ def win_rate(challenger_wins: int, control_wins: int, confidence: float = DEFAUL
     """
     low, high = wilson_interval(challenger_wins, challenger_wins + control_wins, confidence)
     return WinRate(challenger_wins, control_wins, low, high)
+
+
+@dataclass(frozen=True, slots=True)
+class ScriptMix:
+    """How many Han and Latin units a text has; the basis of the translation-incident counter."""
+
+    han: int
+    latin: int
+
+    @property
+    def total(self) -> int:
+        return self.han + self.latin
+
+    @property
+    def mixed(self) -> bool:
+        return self.han > 0 and self.latin > 0
+
+    def mostly(self, script: Literal["han", "latin"]) -> bool:
+        """Whether at least ``TRANSLATION_SHARE`` of the units are in ``script``."""
+        count = self.han if script == "han" else self.latin
+        return self.total > 0 and count * TRANSLATION_SHARE_DEN >= self.total * TRANSLATION_SHARE_NUM
+
+
+def script_mix(text: str) -> ScriptMix:
+    return ScriptMix(*script_counts(text))
+
+
+def translation_incident(reference: ScriptMix, hypothesis: ScriptMix) -> bool:
+    """Whether the hypothesis is mostly in the other script from the reference: it was translated, not transcribed.
+
+    Both sides need at least 70% of their units in one script. A reference shorter than ``MIN_INCIDENT_UNITS`` is
+    too small to say: one misheard word of "好的" would otherwise read as a translation.
+    """
+    if reference.total < MIN_INCIDENT_UNITS:
+        return False
+    return (reference.mostly("han") and hypothesis.mostly("latin")) or (
+        reference.mostly("latin") and hypothesis.mostly("han")
+    )
 
 
 @dataclass(frozen=True, slots=True)
