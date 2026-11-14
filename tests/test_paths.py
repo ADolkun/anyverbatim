@@ -88,3 +88,11 @@ def test_video_dir(home: Path, tmp_path: Path) -> None:
 def test_video_dir_rejects_non_ids(bad: str) -> None:
     with pytest.raises(ValueError, match="not a YouTube video id"):
         paths.video_dir(bad)
+
+
+def test_the_chatgpt_store_location_is_computed_without_creating_it(home: Path) -> None:
+    location = paths.chatgpt_auth_dir()
+    assert location == home / ".local" / "state" / "ytverbatim" / "llm" / "chatgpt"
+    assert not (home / ".local").exists()
+    assert paths.chatgpt_auth_dir(create_parents=True) == location
+    assert _mode(location.parent) == 0o700 and not location.exists()

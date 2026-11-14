@@ -12,6 +12,7 @@ from ytverbatim.llm.protocol import LLMClient, LLMRequest, LLMResponse, Readines
 from ytverbatim.llm.usage import UsageMeter
 
 __all__ = [
+    "EFFORTS",
     "ChatGPTClient",
     "ClaudeCLIClient",
     "LLMClient",
@@ -31,7 +32,7 @@ __all__ = [
 
 Provider = Literal["chatgpt", "claude-cli", "openai-compat"]
 _PROVIDERS = ("chatgpt", "claude-cli", "openai-compat")
-_EFFORTS: dict[str, tuple[str, ...]] = {"chatgpt": chatgpt.EFFORTS, "claude-cli": claude_cli.EFFORTS}
+EFFORTS: dict[str, tuple[str, ...]] = {"chatgpt": chatgpt.EFFORTS, "claude-cli": claude_cli.EFFORTS}
 
 
 def client_from_options(options: LLMOptions) -> ChatGPTClient | ClaudeCLIClient | OpenAICompatClient:
@@ -65,7 +66,7 @@ def check_effort(options: LLMOptions) -> None:
     """Raise `ConfigError` unless the configured effort is one the provider takes; openai-compat takes none."""
     if options.effort is None:
         return
-    efforts = _EFFORTS.get(options.provider)
+    efforts = EFFORTS.get(options.provider)
     if efforts is None:
         raise ConfigError(f"[llm] effort does not apply to {options.provider}")
     if options.effort not in efforts:
@@ -98,9 +99,12 @@ def check_ready(options: LLMOptions) -> None:
     if options.provider == "chatgpt":
         status = chatgpt_auth.readiness()
         if not status.ready:
-            raise ConfigError(
-                f"the chatgpt LLM is not ready: {status.detail}, or pass `--llm none` to skip the LLM stages"
+            error = ConfigError(
+                f"the chatgpt LLM is not ready: {status.detail}. To run without an LLM, pass `--llm none` on the "
+                'command line or `LLMOptions(provider="none")` from Python'
             )
+            error.fix = f'run `{chatgpt_auth.LOGIN_COMMAND}`, or opt out: --llm none, LLMOptions(provider="none")'
+            raise error
     elif options.provider == "claude-cli":
         claude_cli.executable()
     elif options.provider == "openai-compat":

@@ -26,8 +26,12 @@ def config_file() -> Path:
     return _xdg("XDG_CONFIG_HOME", Path.home() / ".config") / _APP / "config.toml"
 
 
+def _state_root() -> Path:
+    return _xdg("XDG_STATE_HOME", Path.home() / ".local" / "state") / _APP
+
+
 def state_dir() -> Path:
-    return _private(_xdg("XDG_STATE_HOME", Path.home() / ".local" / "state") / _APP)
+    return _private(_state_root())
 
 
 def auth_dir() -> Path:
@@ -50,9 +54,15 @@ def snapshots_dir() -> Path:
     return _private(auth_dir() / "snapshots")
 
 
-def chatgpt_auth_dir() -> Path:
-    """Home of the ChatGPT credentials. Not created here: the store creates it and refuses a symlink in its place."""
-    return _private(state_dir() / "llm") / "chatgpt"
+def chatgpt_auth_dir(*, create_parents: bool = False) -> Path:
+    """Home of the ChatGPT credentials, never created here: reading the sign-in status must leave no trace.
+
+    With `create_parents`, the private directories above it are made; the store creates the directory itself and
+    refuses a symlink in its place.
+    """
+    if create_parents:
+        return _private(state_dir() / "llm") / "chatgpt"
+    return _state_root() / "llm" / "chatgpt"
 
 
 def chatgpt_credentials_file() -> Path:
