@@ -81,7 +81,8 @@ _STYLE_RULES: dict[Style, str] = {
     "en": (
         "Use ASCII punctuation. Capitalise the first letter of each sentence, even when the text already ends in a "
         "period, and capitalise proper nouns and acronyms that are unmistakable (the I pronoun, NVDA, Fed, Q4). Only "
-        "ever turn a lowercase letter into its capital; never add, drop, respell or change a word. "
+        "ever turn a lowercase letter into its capital; never add, drop, respell or change a word. When `before` shows "
+        "that the segment continues its sentence, the segment does not begin one: do not capitalise its first word. "
     ),
 }
 _SYSTEM = (
@@ -122,7 +123,7 @@ class PunctuationResult:
 
 @dataclass(frozen=True, slots=True)
 class _Piece:
-    """A segment to punctuate with the unpunctuated edges of its neighbours, which are only there to be read."""
+    """A segment to punctuate with the edges of its neighbours as transcribed, which are only there to be read."""
 
     text: str
     before: str
@@ -267,7 +268,7 @@ def punctuate(
     checkpoint_dir: Path,
 ) -> PunctuationResult:
     """Restore punctuation in the stretches of ``texts`` that lack it; the rest pass through unchanged."""
-    run = _Run(texts, client=client, checkpoint_dir=checkpoint_dir)
+    run = _Run(texts, language=language, client=client, checkpoint_dir=checkpoint_dir)
     pending: dict[Style, list[int]] = {"zh": [], "en": []}
     for i, text in enumerate(texts):
         if needs_punctuation(text, language):
@@ -292,9 +293,10 @@ def punctuate(
 
 
 class _Run:
-    def __init__(self, texts: Sequence[str], *, client: LLMClient, checkpoint_dir: Path) -> None:
+    def __init__(self, texts: Sequence[str], *, language: str, client: LLMClient, checkpoint_dir: Path) -> None:
         self.texts = list(texts)
         self._source = tuple(texts)
+        self._language = language
         self.edits: list[list[Edit]] = [[] for _ in texts]
         self.failed: list[int] = []
         self.meter = UsageMeter()
@@ -303,7 +305,7 @@ class _Run:
 
     def punctuate_batch(self, style: Style, indices: list[int]) -> None:
         # Batch-local indices keep the checkpoint key independent of where the batch sits in the document.
-        pieces = [self._piece(style, i) for i in indices]
+        pieces = [self._piece(i) for i in indices]
         originals = [piece.text for piece in pieces]
         path = self._checkpoint_path(style, pieces)
         loaded = self._load(path, originals)
@@ -324,12 +326,23 @@ class _Run:
                 self.texts[index] = output
                 self.edits[index].append(Edit(stage=STAGE, before=original, after=output, llm=self._client.id))
 
-    def _piece(self, style: Style, index: int) -> _Piece:
+    def _piece(self, index: int) -> _Piece:
         # The neighbours as transcribed, not as an earlier batch may have punctuated them, so a batch's key and request
-        # do not depend on which batches ran before it.
-        before = self._source[index - 1] if index > 0 else ""
-        after = self._source[index + 1] if index + 1 < len(self._source) else ""
-        return _Piece(self._source[index], _tail(before, style), _head(after, style))
+        # do not depend on which batches ran before it. A neighbour is cut by its own script, not this segment's, and
+        # a blank one (filler removal can empty a stretch) is skipped, since the run-on signal lies beyond it.
+        before = next((t for t in reversed(self._source[:index]) if t.strip()), "")
+        after = next((t for t in self._source[index + 1 :] if t.strip()), "")
+        return _Piece(self._source[index], self._tail(before), self._head(after))
+
+    def _tail(self, text: str) -> str:
+        if uses_zh_rules(text, self._language):
+            return text.strip()[-_CONTEXT_CHARS:]
+        return " ".join(text.split()[-_CONTEXT_WORDS:])
+
+    def _head(self, text: str) -> str:
+        if uses_zh_rules(text, self._language):
+            return text.strip()[:_CONTEXT_CHARS]
+        return " ".join(text.split()[:_CONTEXT_WORDS])
 
     def _ask_with_retry(self, style: Style, pieces: list[_Piece], meter: UsageMeter) -> list[str | None]:
         outputs: list[str | None] = [None] * len(pieces)
@@ -409,14 +422,6 @@ class _Run:
         self._checkpoint_dir.mkdir(parents=True, exist_ok=True)
         items = [_Item(i=i, text=text) for i, text in enumerate(outputs)]
         atomic.write_json(path, _Checkpoint(items=items, usage=usage).model_dump(mode="json"))
-
-
-def _tail(text: str, style: Style) -> str:
-    return text.strip()[-_CONTEXT_CHARS:] if style == "zh" else " ".join(text.split()[-_CONTEXT_WORDS:])
-
-
-def _head(text: str, style: Style) -> str:
-    return text.strip()[:_CONTEXT_CHARS] if style == "zh" else " ".join(text.split()[:_CONTEXT_WORDS])
 
 
 def _item(pieces: Sequence[_Piece], i: int) -> dict[str, object]:
