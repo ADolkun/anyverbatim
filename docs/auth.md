@@ -34,11 +34,13 @@ Brave, Chromium, Edge and Vivaldi work the same way: replace `chrome` with the b
 3. Check that YouTube accepts the login:
 
    ```console
-   $ ytverbatim auth status --refresh
-   ✓ Signed in · Premium: unknown · verified 2026-01-01 12:00
+   $ ytverbatim status --refresh
+   YouTube  chrome:Default   ok, signed in · Premium: unknown · verified 2026-01-01 12:00
+   ChatGPT  you@example.com  ok, plan permission, session ready
+   LLM      chatgpt:gpt-6.1-sol (medium effort)
    ```
 
-   `auth status` takes a snapshot and makes one request (`:ytfav`, your Liked videos list, of which nothing is shown or kept). A good result is cached for an hour; `--refresh` skips the cache and `--json` prints a machine-readable report. Premium shows as `unknown` until a fetch has seen it.
+   The YouTube line takes a snapshot and makes one request (`:ytfav`, your Liked videos list, of which nothing is shown or kept). A good result is cached for an hour; `--refresh` skips the cache and `--json` prints a machine-readable report. Premium shows as `unknown` until a fetch has seen it.
 
 `ytverbatim auth doctor` checks everything at once: ffmpeg and ffprobe, a JavaScript runtime, the yt-dlp version, the source, the snapshot, the login, and any active cooldown.
 
@@ -46,7 +48,7 @@ When several profiles have cookies, a bare `chrome` source is refused rather tha
 
 ## Keychain
 
-Chrome encrypts its cookies with a key stored in the macOS Keychain item "Chrome Safe Storage". The first snapshot makes macOS ask whether `security` may read it. Run `ytverbatim auth status --refresh` in Terminal, enter your login password, and click **Always Allow**, so later runs do not prompt again. If you click Deny, or nobody answers within two minutes, the state is `keychain_denied`.
+Chrome encrypts its cookies with a key stored in the macOS Keychain item "Chrome Safe Storage". The first snapshot makes macOS ask whether `security` may read it. Run `ytverbatim status --refresh` in Terminal, enter your login password, and click **Always Allow**, so later runs do not prompt again. If you click Deny, or nobody answers within two minutes, the state is `keychain_denied`.
 
 ## Cookie file
 
@@ -57,7 +59,7 @@ If you would rather not let ytverbatim read your browser, export a cookie file i
 3. Close the private window **without signing out**. Signing out would invalidate the exported session.
 4. Run `ytverbatim auth use cookie-file:PATH`.
 
-A file expires much sooner than a live profile. YouTube rotates session cookies regularly, and an exported copy cannot follow the rotation, so expect to re-export when `auth status` reports `rotated` or `cookie_file_logged_out`. The private window keeps the exported session apart from your everyday browser session, which would otherwise rotate it away. ytverbatim snapshots the file like a browser profile and never writes to it.
+A file expires much sooner than a live profile. YouTube rotates session cookies regularly, and an exported copy cannot follow the rotation, so expect to re-export when `status` reports `rotated` or `cookie_file_logged_out`. The private window keeps the exported session apart from your everyday browser session, which would otherwise rotate it away. ytverbatim snapshots the file like a browser profile and never writes to it.
 
 ## Why live reading is preferred
 
@@ -70,7 +72,7 @@ ytverbatim keeps your account's footprint small:
 - By default, videos are fetched anonymously first, and your login is used only when YouTube requires it. Members playlists (`UUMO…`), channels in `auth.cookie_channels`, and `--policy always` use it from the start.
 - Batches sleep between requests, and each run has a video cap.
 - A bot check, captcha, IP block, or rate limit stops the batch and starts a cooldown (one hour, doubling on repeats, at most a day). Later runs refuse to start until it ends. When the signal arrives on a request that still succeeded, the current video finishes first.
-- `auth status` and `auth doctor` respect the cooldown too: while it runs they skip the `:ytfav` request and show when it ends, and a stop signal on their own request starts or extends it. `--ignore-cooldown` makes the request anyway, at the account's risk.
+- `status` and `auth doctor` respect the cooldown too: while it runs they skip the `:ytfav` request and show when it ends, and a stop signal on their own request starts or extends it. `--ignore-cooldown` makes the request anyway, at the account's risk.
 - **Never add cookies to get past a bot check.** That ties the flagged traffic to your account. Wait out the cooldown, and disconnect any VPN or proxy.
 
 ## PO token
@@ -79,7 +81,7 @@ YouTube sometimes asks for a Proof of Origin (PO) token before serving some form
 
 ## States and fixes
 
-Every auth state has exactly one fix. `auth status` and `auth doctor` print it next to the state.
+Every auth state has exactly one fix. `status` and `auth doctor` print it next to the state.
 
 ### no_source
 
@@ -135,7 +137,7 @@ You are signed in, but the account is not a member of the channel, or its member
 
 ### auth_uncertain
 
-The login could not be confirmed, for example because the check request failed for an unrelated reason. Run `ytverbatim auth status --refresh`; if it fails again, run `ytverbatim auth doctor`.
+The login could not be confirmed, for example because the check request failed for an unrelated reason. Run `ytverbatim status --refresh`; if it fails again, run `ytverbatim auth doctor`.
 
 ### auth_required
 

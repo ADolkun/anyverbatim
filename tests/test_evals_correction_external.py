@@ -259,7 +259,7 @@ def test_the_native_candidate_needs_a_chatgpt_sign_in_and_no_factory(
     monkeypatch.setattr(run_correction, "ClaudeCLIClient", lambda **_: pytest.fail("fell back to the Claude CLI"))
     result = CliRunner().invoke(run_correction.main, ["correct", "--candidate", "o-gpt61-medium"])
     assert isinstance(result.exception, ConfigError)
-    assert "ytverbatim llm login" in str(result.exception)
+    assert "ytverbatim login" in str(result.exception)
     assert CLIENT_FACTORY_ENV not in str(result.exception)
     assert not (correction.run_dir(layout, NATIVE) / "calls.jsonl").exists()
 

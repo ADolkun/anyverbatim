@@ -48,7 +48,7 @@ SCOPES = "openid profile email offline_access resource.invoke " + PLAN_SCOPE
 AGENT_NAME = "ytverbatim"
 CALLBACK_PATH = "/auth/callback"
 LOGIN_TIMEOUT_S = 300.0
-LOGIN_COMMAND = "ytverbatim llm login"
+LOGIN_COMMAND = "ytverbatim login"
 
 _HTTP_TIMEOUT_S = 15.0
 _REFRESH_MARGIN_S = 60.0
@@ -140,12 +140,27 @@ class State:
     account: Account | None = None
 
 
-def status(*, clock: Callable[[], float] = time.time) -> Status:
-    """Read the stored account's status without a lock, a refresh or any request."""
+@dataclass(frozen=True)
+class Session:
+    email: str
+    status: Status
+
+    @property
+    def usable(self) -> bool:
+        return self.status in ("ready", "refreshable")
+
+
+def session(*, clock: Callable[[], float] = time.time) -> Session:
+    """Read the stored account's email and status without a lock, a refresh or any request."""
     state = _read(_require_dir(create=False))
     if state.account is None:
-        return "signed_out"
-    return state.account.status(clock(), registered=state.client_id is not None)
+        return Session("", "signed_out")
+    return Session(state.account.email, state.account.status(clock(), registered=state.client_id is not None))
+
+
+def status(*, clock: Callable[[], float] = time.time) -> Status:
+    """Read the stored account's status without a lock, a refresh or any request."""
+    return session(clock=clock).status
 
 
 def readiness(*, clock: Callable[[], float] = time.time) -> Readiness:
@@ -165,10 +180,12 @@ def login(
     opener: Opener = https_open,
     timeout_s: float = LOGIN_TIMEOUT_S,
     clock: Callable[[], float] = time.time,
+    switch: bool = False,
 ) -> LoginResult:
     """Sign in through the browser; the stored account is replaced only once the new one is verified.
 
-    `open_url` gets the authorization URL; returning False means the browser could not be opened.
+    `open_url` gets the authorization URL; returning False means the browser could not be opened. `switch` shows
+    OpenAI's account chooser instead of preselecting the stored account.
     """
     with _locked() as state:
         # The host id must be on disk before OpenAI first sees it, so the registration it makes stays ours.
@@ -176,15 +193,16 @@ def login(
     previous = state.account
     # Asking for consent again is the only way to add the plan scope to an account that signed in without it.
     consent = previous is not None and bool(previous.access_token) and PLAN_SCOPE not in previous.scopes
+    prompt = "login" if switch else "consent" if consent else None
     # The identity page preselects the account signed in before, so a re-sign-in while the browser session lives
     # can finish without a click.
-    hint = previous.email if previous is not None and previous.email else None
+    hint = previous.email if previous is not None and previous.email and not switch else None
     client_id = state.client_id or DYNAMIC_CLIENT
     # Each fallback below runs at most once per sign-in, so a server that keeps refusing ends the attempt.
     reauthorized = reregistered = False
     while True:
         pending, callback = _authorize_in_browser(
-            state.host_id, client_id, open_url=open_url, timeout_s=timeout_s, consent=consent, login_hint=hint
+            state.host_id, client_id, open_url=open_url, timeout_s=timeout_s, prompt=prompt, login_hint=hint
         )
         client_id = _issued_client(pending, callback)
         # Kept before the exchange: a first sign-in that fails after this point must not register the host again.
@@ -609,7 +627,7 @@ class _Pending:
     verifier: str = field(default_factory=lambda: secrets.token_urlsafe(64))
 
 
-def _authorization_url(pending: _Pending, host_id: str, *, consent: bool, login_hint: str | None) -> str:
+def _authorization_url(pending: _Pending, host_id: str, *, prompt: str | None, login_hint: str | None) -> str:
     challenge = base64.urlsafe_b64encode(hashlib.sha256(pending.verifier.encode()).digest()).rstrip(b"=").decode()
     query = {
         "client_id": pending.client_id,
@@ -625,8 +643,8 @@ def _authorization_url(pending: _Pending, host_id: str, *, consent: bool, login_
     }
     if pending.client_id == DYNAMIC_CLIENT:
         query["agent_name_hint"] = AGENT_NAME
-    if consent:
-        query["prompt"] = "consent"
+    if prompt is not None:
+        query["prompt"] = prompt
     if login_hint is not None:
         query["login_hint"] = login_hint
     return AUTHORIZE_URL + "?" + urllib.parse.urlencode(query)
@@ -684,7 +702,7 @@ def _authorize_in_browser(
     *,
     open_url: Callable[[str], object],
     timeout_s: float,
-    consent: bool,
+    prompt: str | None,
     login_hint: str | None,
 ) -> tuple[_Pending, dict[str, str]]:
     received: list[dict[str, str]] = []
@@ -715,7 +733,7 @@ def _authorize_in_browser(
         server.timeout = 0.25
         server.deadline = time.monotonic() + timeout_s
         pending = _Pending(client_id, f"http://127.0.0.1:{server.server_port}{CALLBACK_PATH}")
-        if open_url(_authorization_url(pending, host_id, consent=consent, login_hint=login_hint)) is False:
+        if open_url(_authorization_url(pending, host_id, prompt=prompt, login_hint=login_hint)) is False:
             raise ChatGPTAuthError("could not open a browser; retry with --no-browser", code="no_browser")
         while not received and time.monotonic() < server.deadline:
             server.handle_request()

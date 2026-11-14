@@ -1,0 +1,210 @@
+"""Top-level sign-in commands: `login` and `logout` for ChatGPT, and `status` for every sign-in at once."""
+
+import json
+import webbrowser
+from dataclasses import dataclass, field
+
+import click
+
+from ytverbatim.auth.fixes import fix_for
+from ytverbatim.auth.preflight import AuthReport, preflight
+from ytverbatim.auth.source import resolve_source
+from ytverbatim.auth.state import AuthState
+from ytverbatim.cli.auth import EXIT_AUTH, IGNORE_COOLDOWN, fail_other
+from ytverbatim.config import LLMOptions, load_options
+from ytverbatim.errors import AuthError, YtverbatimError
+from ytverbatim.llm import chatgpt, chatgpt_auth
+from ytverbatim.ytdlp.runner import SubprocessRunner, redact
+
+EXIT_LLM = 1
+_CHATGPT_STATE: dict[chatgpt_auth.Status, str] = {
+    "ready": "ok, plan permission, session ready",
+    "refreshable": "ok, plan permission, refreshes automatically on the next call",
+    "expired": "needs re-sign-in",
+    "no_plan": "signed in without ChatGPT plan permission",
+    "signed_out": "not signed in",
+}
+
+
+@click.command(name="login")
+@click.option(
+    "--switch", is_flag=True, help="Pick another ChatGPT account; the current one stays until the new one is verified."
+)
+@click.option("--no-browser", is_flag=True, help="Only print the sign-in URL; open it in a browser yourself.")
+def login_command(*, switch: bool, no_browser: bool) -> None:
+    """Sign in with your ChatGPT plan for the default chatgpt LLM.
+
+    Opens OpenAI's sign-in page and waits up to five minutes for it to return to this machine. A usable sign-in is
+    kept as it is, and renewed automatically; --switch signs in with another account instead.
+    """
+    try:
+        current = chatgpt_auth.session()
+        if current.usable and not switch:
+            who = current.email or "your ChatGPT account"
+            click.echo(
+                f"Already signed in as {who} ({_CHATGPT_STATE[current.status]}); "
+                "`ytverbatim login --switch` to use another account"
+            )
+            return
+
+        def open_url(url: str) -> object:
+            click.echo(f"Sign in to ChatGPT at:\n  {url}", err=True)
+            return None if no_browser else webbrowser.open(url)
+
+        result = chatgpt_auth.login(open_url=open_url, switch=switch)
+    except YtverbatimError as exc:
+        raise click.ClickException(str(exc)) from exc
+    who = f" as {result.email}" if result.email else ""
+    if result.plan:
+        click.echo(f"chatgpt: signed in{who}")
+        return
+    click.echo(
+        f"chatgpt: signed in{who}, but without ChatGPT plan permission; run `ytverbatim login` again and grant it",
+        err=True,
+    )
+    raise SystemExit(EXIT_LLM)
+
+
+_LOGOUT_MESSAGES: dict[chatgpt_auth.Revocation, str] = {
+    "confirmed": "signed out; OpenAI confirmed the revocation",
+    "unconfirmed": "signed out; OpenAI did not confirm the revocation, so the sign-in may stay valid until it expires",
+    "no_refresh_token": "signed out; there was no refresh token to revoke",
+    "not_signed_in": "not signed in; nothing to revoke",
+}
+
+
+@click.command(name="logout")
+def logout_command() -> None:
+    """Sign out of ChatGPT: revoke the sign-in and remove its tokens from this machine."""
+    try:
+        outcome = chatgpt_auth.logout()
+    except YtverbatimError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"chatgpt: {_LOGOUT_MESSAGES[outcome]}")
+
+
+@dataclass
+class _Row:
+    label: str
+    who: str
+    what: str = ""
+    notes: list[str] = field(default_factory=list[str])
+
+
+@click.command(name="status")
+@click.option("--json", "as_json", is_flag=True, help="Print everything as one JSON object.")
+@click.option("--refresh", is_flag=True, help="Ignore the one-hour cache and probe YouTube again.")
+@IGNORE_COOLDOWN
+def status_command(*, as_json: bool, refresh: bool, ignore_cooldown: bool) -> None:
+    """Show the YouTube login, the ChatGPT sign-in and the LLM in use. Makes no LLM call.
+
+    The YouTube check takes a cookie snapshot and makes one :ytfav request, cached for an hour. Nothing printed is a
+    cookie or a token. Exit codes: 0 all usable, 1 the configured chatgpt LLM needs a sign-in, 2 the YouTube login
+    needs a fix.
+    """
+    try:
+        options = load_options().llm
+    except YtverbatimError as exc:
+        fail_other(exc)
+    report, youtube_error = _youtube(refresh=refresh, ignore_cooldown=ignore_cooldown)
+    try:
+        session: chatgpt_auth.Session | None = chatgpt_auth.session()
+        store_error = None
+    except chatgpt_auth.ChatGPTAuthError as exc:
+        session, store_error = None, exc
+    if as_json:
+        click.echo(json.dumps(_json(report, youtube_error, session, store_error, options), ensure_ascii=False))
+    else:
+        _print_rows(
+            [
+                _youtube_row(report, youtube_error),
+                _chatgpt_row(session, store_error),
+                _Row("LLM", llm_label(options)),
+            ]
+        )
+    if report is None or not report.ok:
+        raise SystemExit(EXIT_AUTH)
+    if options.provider == "chatgpt" and (session is None or not session.usable):
+        raise SystemExit(EXIT_LLM)
+
+
+def llm_label(options: LLMOptions) -> str:
+    if options.provider == "none":
+        return "none (the LLM stages are skipped)"
+    model = options.model or (chatgpt.DEFAULT_MODEL if options.provider == "chatgpt" else "?")
+    effort = options.effort or (chatgpt.DEFAULT_EFFORT if options.provider == "chatgpt" else None)
+    return f"{options.provider}:{model}" + (f" ({effort} effort)" if effort else "")
+
+
+def _youtube(*, refresh: bool, ignore_cooldown: bool) -> tuple[AuthReport | None, AuthError | None]:
+    try:
+        source = resolve_source()
+        return preflight(source, SubprocessRunner(), refresh=refresh, ignore_cooldown=ignore_cooldown), None
+    except AuthError as exc:
+        return None, exc
+    except YtverbatimError as exc:
+        fail_other(exc)
+
+
+def _youtube_row(report: AuthReport | None, error: AuthError | None) -> _Row:
+    if report is None:
+        assert error is not None
+        state = f"{error.state.value}: {redact(error.detail)}" if error.detail else error.state.value
+        return _Row("YouTube", "?", state, [f"Fix: {fix_for(error.state)}"])
+    if report.ok:
+        verdict = report.fix[:1].lower() + report.fix[1:]
+        row = _Row("YouTube", report.source, f"ok, {verdict}{' (cached)' if report.cached else ''}")
+    else:
+        state = f"{report.state.value}: {report.detail}" if report.detail else report.state.value
+        row = _Row("YouTube", report.source, state, [f"Fix: {report.fix}"])
+    if report.probe_skipped:
+        row.notes.append("(--ignore-cooldown probes anyway, at the account's risk.)")
+    context = {"version": report.ytdlp_version, "days": str(report.ytdlp_age_days)}
+    row.notes += [f"! {fix_for(AuthState(warning), **context)}" for warning in report.warnings]
+    return row
+
+
+def _chatgpt_row(session: chatgpt_auth.Session | None, error: chatgpt_auth.ChatGPTAuthError | None) -> _Row:
+    if session is None:
+        return _Row("ChatGPT", "?", str(error))
+    row = _Row("ChatGPT", session.email or "-", _CHATGPT_STATE[session.status])
+    if not session.usable:
+        row.notes.append(f"Fix: run `{chatgpt_auth.LOGIN_COMMAND}`")
+    return row
+
+
+def _print_rows(rows: list[_Row]) -> None:
+    label_width = max(len(row.label) for row in rows)
+    who_width = max(len(row.who) for row in rows if row.what)
+    indent = " " * (label_width + 2 + who_width + 2)
+    for row in rows:
+        line = (
+            f"{row.label:<{label_width}}  {row.who:<{who_width}}  {row.what}"
+            if row.what
+            else (f"{row.label:<{label_width}}  {row.who}")
+        )
+        click.echo(line.rstrip())
+        for note in row.notes:
+            click.echo(f"{indent}{note}")
+
+
+def _json(
+    report: AuthReport | None,
+    youtube_error: AuthError | None,
+    session: chatgpt_auth.Session | None,
+    store_error: chatgpt_auth.ChatGPTAuthError | None,
+    options: LLMOptions,
+) -> dict[str, object]:
+    if report is not None:
+        youtube: dict[str, object] = report.to_json()
+    else:
+        assert youtube_error is not None
+        state = youtube_error.state
+        youtube = {"state": state.value, "ok": False, "fix": fix_for(state), "detail": redact(youtube_error.detail)}
+    chatgpt_status: dict[str, object] = (
+        {"email": session.email, "status": session.status, "usable": session.usable}
+        if session is not None
+        else {"error": str(store_error)}
+    )
+    llm: dict[str, object] = {"provider": options.provider, "label": llm_label(options)}
+    return {"youtube": youtube, "chatgpt": chatgpt_status, "llm": llm}

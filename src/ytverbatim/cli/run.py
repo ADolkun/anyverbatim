@@ -42,7 +42,7 @@ from ytverbatim.ytdlp.runner import redact
     metavar="SPEC",
     help=(
         "LLM for punctuation, correction and numeric verdicts: PROVIDER:MODEL, or none for no LLM. "
-        "Default: chatgpt:gpt-6.1-sol at medium effort (needs `ytverbatim llm login`); "
+        "Default: chatgpt:gpt-6.1-sol at medium effort (needs `ytverbatim login`); "
         "alternatives: claude-cli:claude-sonnet-5-5, openai-compat:MODEL."
     ),
 )

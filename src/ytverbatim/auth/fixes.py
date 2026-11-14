@@ -26,7 +26,7 @@ FIXES: Mapping[AuthState, str] = MappingProxyType(
             f"Re-export it ({DOCS}#cookie-file) and run: ytverbatim auth use cookie-file:PATH"
         ),
         AuthState.KEYCHAIN_DENIED: (
-            "macOS Keychain refused '{keychain_item}'. Run 'ytverbatim auth status --refresh' in Terminal "
+            "macOS Keychain refused '{keychain_item}'. Run 'ytverbatim status --refresh' in Terminal "
             f"and click 'Always Allow' for 'security' ({DOCS}#keychain)."
         ),
         AuthState.LOGGED_OUT: (
@@ -60,7 +60,7 @@ FIXES: Mapping[AuthState, str] = MappingProxyType(
         AuthState.NOT_MEMBER: "Signed in, but this account is not a member of {channel} (or its tier is too low).",
         AuthState.AUTH_UNCERTAIN: (
             "Could not confirm that YouTube accepts this login. "
-            "Run: ytverbatim auth status --refresh; if it fails again, run: ytverbatim auth doctor"
+            "Run: ytverbatim status --refresh; if it fails again, run: ytverbatim auth doctor"
         ),
         AuthState.AUTH_REQUIRED: (
             "This video needs a signed-in account. Run: ytverbatim auth profiles, then ytverbatim auth use chrome:<DIR>"

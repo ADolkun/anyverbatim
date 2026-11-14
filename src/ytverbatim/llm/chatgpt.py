@@ -1,6 +1,6 @@
 """OpenAI models on the user's ChatGPT plan: one streamed `/v1/responses` call per completion, under one deadline.
 
-The access token comes from `chatgpt_auth` (`ytverbatim llm login`) and is refreshed before each request. There are
+The access token comes from `chatgpt_auth` (`ytverbatim login`) and is refreshed before each request. There are
 no automatic retries: a failure raises, and retry policy belongs to the caller.
 """
 

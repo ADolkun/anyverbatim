@@ -286,7 +286,7 @@ def test_an_invalid_store_fails_loud(content: str) -> None:
     with pytest.raises(ChatGPTAuthError) as raised:
         chatgpt_auth.status()
     assert raised.value.code == "invalid_store"
-    assert "ytverbatim llm login" in str(raised.value)
+    assert "ytverbatim login" in str(raised.value)
 
 
 def test_status_reports_every_state_without_a_request() -> None:
@@ -338,7 +338,7 @@ def test_a_refresh_without_a_new_refresh_token_is_refused_and_keeps_the_old_one(
 def test_a_terminal_refresh_error_keeps_the_stored_sign_in(code: str) -> None:
     stored = store_account(expires_at=NOW)
     opener = FakeOpener({f"POST {TOKEN_URL}": http_error(400, {"error": code, "error_description": "secret detail"})})
-    with pytest.raises(ChatGPTAuthError, match="ytverbatim llm login") as raised:
+    with pytest.raises(ChatGPTAuthError, match="ytverbatim login") as raised:
         chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
     assert raised.value.code == code and raised.value.needs_sign_in
     assert "secret detail" not in str(raised.value)
@@ -367,7 +367,7 @@ def test_earliest_refresh_at_holds_off_a_refresh_while_the_token_still_works() -
 
 
 def test_no_account_or_no_plan_refuses_a_token() -> None:
-    with pytest.raises(ChatGPTAuthError, match="ytverbatim llm login") as raised:
+    with pytest.raises(ChatGPTAuthError, match="ytverbatim login") as raised:
         chatgpt_auth.access_token(opener=FakeOpener())
     assert raised.value.code == "not_signed_in"
     store_account(scopes=("openid",))
@@ -744,3 +744,23 @@ def test_interactive_login_says_why_prints_the_url_and_opens_the_browser(
     assert err.startswith("ChatGPT sign-in lapsed; opening the browser to sign in again (waiting up to 5 minutes)\n")
     assert url in err and opened == [url]
     assert "access-" not in err and "refresh-" not in err
+
+
+def test_switch_shows_the_account_chooser_and_replaces_the_account_only_once_verified() -> None:
+    store_account()
+    browser = Browser(approve)
+    opener = token_endpoint(browser, sub="another-subject", email="other@example.com")
+    result = chatgpt_auth.login(open_url=browser, opener=opener, timeout_s=10.0, clock=lambda: NOW, switch=True)
+    assert browser.query["prompt"] == "login"
+    assert "login_hint" not in browser.query
+    assert result.email == "other@example.com"
+    account = stored_state().account
+    assert account is not None and account.subject == "another-subject"
+
+
+def test_a_failed_switch_keeps_the_current_account() -> None:
+    stored = store_account()
+    browser = Browser(lambda query: [{"error": "access_denied", "state": query["state"]}])
+    with pytest.raises(ChatGPTAuthError):
+        chatgpt_auth.login(open_url=browser, opener=FakeOpener(), timeout_s=10.0, clock=lambda: NOW, switch=True)
+    assert stored_state() == stored

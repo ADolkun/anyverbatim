@@ -864,7 +864,7 @@ def test_a_missing_claude_cli_fails_before_any_request(session_kit, worker, monk
 def test_the_default_llm_without_a_chatgpt_sign_in_fails_before_any_request(session_kit, worker) -> None:
     (session_kit.home / ".config" / "ytverbatim" / "config.toml").unlink()
     yt = zh_yt(session_kit)
-    with pytest.raises(ConfigError, match=r"not signed in.*`ytverbatim llm login`.*`--llm none`"):
+    with pytest.raises(ConfigError, match=r"not signed in.*`ytverbatim login`.*`--llm none`"):
         run(session_kit, yt)
     assert yt.calls == [] and worker.calls == []
 
@@ -891,7 +891,7 @@ def test_cli_default_llm_without_a_sign_in_names_login_and_llm_none(session_kit,
     (session_kit.home / ".config" / "ytverbatim" / "config.toml").unlink()
     refused = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH)
     assert refused.exit_code == 1
-    assert "ytverbatim llm login" in refused.output and "--llm none" in refused.output
+    assert "ytverbatim login" in refused.output and "--llm none" in refused.output
     without = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH, "--llm", "none")
     assert without.exit_code == 0, without.output
     assert worker.calls != []
