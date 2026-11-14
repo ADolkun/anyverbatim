@@ -1,5 +1,6 @@
 """Any OpenAI-compatible `/chat/completions` endpoint (mlx_lm.server, Ollama, hosted APIs) over stdlib HTTP."""
 
+import http.client
 import ipaddress
 import json
 import os
@@ -163,6 +164,12 @@ def _send(opener: Opener, request: urllib.request.Request, timeout_s: float, lab
         raise LLMUnavailableError(f"{label}: no response from {request.full_url} within {timeout_s:g}s") from exc
     except urllib.error.URLError as exc:
         raise LLMUnavailableError(f"{label}: cannot reach {request.full_url}: {exc.reason}") from exc
+    # A connection reset or a body cut off mid-read (http.client's IncompleteRead, which is no OSError) after the
+    # status line is still the transport failing, not a bug to crash the batch on.
+    except (OSError, http.client.HTTPException) as exc:
+        raise LLMUnavailableError(
+            f"{label}: the connection to {request.full_url} broke off ({type(exc).__name__})"
+        ) from exc
 
 
 def _parse(raw: bytes, label: str) -> tuple[dict[str, object], Usage | None]:
