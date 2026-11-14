@@ -52,6 +52,8 @@ LOGIN_COMMAND = "ytverbatim llm login"
 
 _HTTP_TIMEOUT_S = 15.0
 _REFRESH_MARGIN_S = 60.0
+# A token with less left than this is not handed out: the request it would authorize could outlive it.
+_USABLE_MARGIN_S = 30.0
 _CLOCK_SKEW_S = 30.0
 _SCHEMA_VERSION = 1
 _FILE_MODE = 0o600
@@ -104,14 +106,20 @@ class Account:
     expires_at: float = 0.0
     earliest_refresh_at: float = 0.0
 
-    def status(self, now: float) -> Status:
+    def status(self, now: float, *, registered: bool = True) -> Status:
+        """Classify the account; without `registered` (OpenAI dropped the client) the token works but cannot renew."""
         if not self.access_token:
             return "signed_out"
         if PLAN_SCOPE not in self.scopes:
             return "no_plan"
         if self.expires_at > now + _REFRESH_MARGIN_S:
             return "ready"
-        return "refreshable" if self.refresh_token else "expired"
+        if self.refresh_token and registered:
+            return "refreshable"
+        return "ready" if self.usable(now) else "expired"
+
+    def usable(self, now: float) -> bool:
+        return self.expires_at > now + _USABLE_MARGIN_S
 
     def refresh_due(self, now: float) -> bool:
         """Refresh at the first chance the server allows, or a minute before expiry, whichever comes first.
@@ -134,8 +142,10 @@ class State:
 
 def status(*, clock: Callable[[], float] = time.time) -> Status:
     """Read the stored account's status without a lock, a refresh or any request."""
-    account = _read(_require_dir(create=False)).account
-    return "signed_out" if account is None else account.status(clock())
+    state = _read(_require_dir(create=False))
+    if state.account is None:
+        return "signed_out"
+    return state.account.status(clock(), registered=state.client_id is not None)
 
 
 def readiness(*, clock: Callable[[], float] = time.time) -> Readiness:
@@ -170,7 +180,8 @@ def login(
     # can finish without a click.
     hint = previous.email if previous is not None and previous.email else None
     client_id = state.client_id or DYNAMIC_CLIENT
-    reauthorized = False
+    # Each fallback below runs at most once per sign-in, so a server that keeps refusing ends the attempt.
+    reauthorized = reregistered = False
     while True:
         pending, callback = _authorize_in_browser(
             state.host_id, client_id, open_url=open_url, timeout_s=timeout_s, consent=consent, login_hint=hint
@@ -181,14 +192,14 @@ def login(
         try:
             payload = _exchange(pending, callback, client_id, opener)
         except ChatGPTAuthError as exc:
-            if exc.code == "invalid_client":
-                # The registration may have come from a forged callback, or OpenAI dropped it; the next sign-in
-                # registers the host afresh instead of failing the same way forever.
+            if exc.code == "invalid_client" and not reregistered:
+                # OpenAI dropped the registration, or a forged callback named one. A dead client id at authorize
+                # shows an error page that never redirects, so forget it and register the host afresh, once.
                 with _locked() as current:
                     _save(_unregistered(current))
-                raise ChatGPTAuthError(
-                    f"OpenAI refused this registration, so it was reset; run `{LOGIN_COMMAND}` again", code=exc.code
-                ) from None
+                client_id = DYNAMIC_CLIENT
+                reregistered = True
+                continue
             # OpenAI can refuse the code once and expect a fresh authorization under the client it issued; that is
             # the protocol's step, not a retry, and a second refusal is final.
             if exc.code != "invalid_grant" or reauthorized:
@@ -240,6 +251,8 @@ def access_token(*, opener: Opener = https_open, clock: Callable[[], float] = ti
                 return account.access_token
             raise ChatGPTAuthError("the ChatGPT token cannot be refreshed yet; retry later", code="refresh_not_yet")
         if not account.refresh_token or state.client_id is None:
+            if account.usable(now):
+                return account.access_token
             raise ChatGPTAuthError(STATUS_DETAIL["expired"], code="expired")
         try:
             payload = _post_form(
@@ -254,18 +267,14 @@ def access_token(*, opener: Opener = https_open, clock: Callable[[], float] = ti
             )
             renewed = _credentials(payload, state.client_id, clock(), previous=account)
         except ChatGPTAuthError as exc:
+            # The stored sign-in is never cleared here: only a new sign-in or an explicit logout changes it. A dead
+            # registration is forgotten so the next sign-in registers afresh, and the account and tokens stay.
             if exc.code == "invalid_client":
                 _save(_unregistered(state))
-                raise ChatGPTAuthError(
-                    f"OpenAI no longer accepts this sign-in's registration; run `{LOGIN_COMMAND}`", code=exc.code
-                ) from None
-            if exc.code not in _TERMINAL_REFRESH_ERRORS:
-                raise
-            # A refused refresh token never works again; keeping it would only repeat the refusal.
-            _save(replace(state, account=account.signed_out()))
-            raise ChatGPTAuthError(
-                f"the ChatGPT sign-in was revoked or expired ({exc.code}); run `{LOGIN_COMMAND}`", code=exc.code
-            ) from None
+            # Refresh starts minutes before expiry, so a failed one leaves a token that still works for now.
+            if account.usable(clock()):
+                return account.access_token
+            raise _refresh_failure(exc) from None
         _save(replace(state, account=renewed))
     if PLAN_SCOPE not in renewed.scopes:
         raise ChatGPTAuthError(STATUS_DETAIL["no_plan"], code="plan_disabled")
@@ -429,8 +438,6 @@ def _decode(value: object) -> State:
         expires_at=_number(fields, "expires_at"),
         earliest_refresh_at=_number(fields, "earliest_refresh_at"),
     )
-    if account.access_token and client_id is None:
-        raise ValueError("tokens without a registration")
     return State(host_id, client_id, account)
 
 
@@ -730,7 +737,19 @@ def _issued_client(pending: _Pending, callback: dict[str, str]) -> str:
 
 
 def _unregistered(state: State) -> State:
-    return replace(state, client_id=None, account=None if state.account is None else state.account.signed_out())
+    return replace(state, client_id=None)
+
+
+def _refresh_failure(exc: ChatGPTAuthError) -> ChatGPTAuthError:
+    if exc.code == "invalid_client":
+        return ChatGPTAuthError(
+            f"OpenAI no longer accepts this sign-in's registration; run `{LOGIN_COMMAND}`", code=exc.code
+        )
+    if exc.code in _TERMINAL_REFRESH_ERRORS:
+        return ChatGPTAuthError(
+            f"the ChatGPT sign-in was revoked or expired ({exc.code}); run `{LOGIN_COMMAND}`", code=exc.code
+        )
+    return exc
 
 
 def _remember_client(client_id: str) -> None:
