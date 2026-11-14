@@ -4,7 +4,7 @@ from itertools import product
 
 import pytest
 
-from ytverbatim.text.numbers import itn, quantity_tokens
+from ytverbatim.text.numbers import _quantities, itn, quantity_tokens
 
 
 def surfaces(text: str) -> list[str]:
@@ -518,20 +518,27 @@ def test_words_after_a_numeral_that_are_not_counts(text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("text", "surface"),
+    ("text", "surface", "value", "kind"),
     [
-        ("三分之一", "三分之一"),
-        ("二十分之一", "二十分之一"),
-        ("千分之十五", "千分之十五"),
-        ("万分之一", "万分之一"),
-        ("几万分之一", "万分之一"),
-        ("一百分之一", "一百分之一"),
+        ("三分之一", "三分之一", "1/3", "cjk_quantity"),
+        ("二十分之一", "二十分之一", "1/20", "cjk_quantity"),
+        ("千分之十五", "千分之十五", "15/1000", "cjk_quantity"),
+        ("万分之一", "万分之一", "1/10000", "cjk_quantity"),
+        ("几万分之一", "万分之一", "1/10000", "cjk_quantity"),
+        ("一百分之一", "一百分之一", "1/100", "cjk_quantity"),
+        ("三四分之一", "三四分之一", "三四分之一", "cjk_quantity"),
+        ("1/3", "1/3", "1/3", "number"),
+        ("24/7", "24/7", "24/7", "number"),
     ],
 )
-def test_a_fraction_is_one_token_that_keeps_its_surface(text: str, surface: str) -> None:
-    (token,) = quantity_tokens(text)
-    assert (token.surface, token.value_itn, token.kind) == (surface, surface, "cjk_quantity")
-    assert itn(text) == text
+def test_a_fraction_is_one_token_written_over_under(text: str, surface: str, value: str, kind: str) -> None:
+    (quantity,) = _quantities(text)
+    assert (quantity.token.surface, quantity.token.value_itn, quantity.token.kind) == (surface, value, kind)
+    assert quantity.value is None
+
+
+def test_a_slash_date_is_not_a_fraction() -> None:
+    assert surfaces("2024/10/01") == ["2024", "10", "01"]
 
 
 @pytest.mark.parametrize("text", ["十万八千里", "相差十万八千里", "百度", "百度一下"])
@@ -540,27 +547,38 @@ def test_idioms_with_place_words_are_not_quantities(text: str) -> None:
 
 
 def test_baifenzhi_on_its_own_is_still_a_percent() -> None:
-    assert itn("涨了百分之二十，三分之一") == "涨了20%，三分之一"
+    assert itn("涨了百分之二十，三分之一") == "涨了20%，1/3"
 
 
 @pytest.mark.parametrize(
-    ("text", "surfaces"),
+    ("text", "expected"),
     [
-        ("二十几岁", ["二十"]),
-        ("数十个", ["十个"]),
-        ("几十个", ["十个"]),
-        ("数十亿", ["十亿"]),
+        ("二十几岁", [("二十", "~20")]),
+        ("20几岁", [("20", "~20")]),
+        ("数十个", [("十个", "~10个")]),
+        ("几十个", [("十个", "~10个")]),
+        ("数十亿", [("十亿", "~1000000000")]),
+        ("数10亿", [("10亿", "~1000000000")]),
+        ("数十亿美元", [("十亿美元", "~$1000000000")]),
+        ("数百万", [("百万", "~1000000")]),
+        ("数100万", [("100万", "~1000000")]),
         ("几千", []),
-        ("三千几百块", ["三千", "百块"]),
-        # After a noun ending in 数 a run of place words alone may be exact or rough, so it keeps no value either.
-        ("参与人数十万", ["十万"]),
-        ("股数十万股", ["十万股"]),
-        ("次数十次", ["十次"]),
+        ("三千几百块", [("三千", "~3000"), ("百块", "~100块")]),
+        # After a noun ending in 数 a run of place words alone may be exact or rough; both spellings read it as rough.
+        ("参与人数十万", [("十万", "~100000")]),
+        ("参与人数10万", [("10万", "~100000")]),
+        ("股数十万股", [("十万股", "~100000股")]),
+        ("次数十次", [("十次", "~10次")]),
     ],
 )
-def test_ji_and_shu_make_a_rough_figure_that_keeps_its_surface(text: str, surfaces: list[str]) -> None:
-    assert [(t.surface, t.value_itn) for t in quantity_tokens(text)] == [(s, s) for s in surfaces]
-    assert itn(text) == text
+def test_ji_and_shu_make_a_rough_figure(text: str, expected: list[tuple[str, str]]) -> None:
+    quantities = _quantities(text)
+    assert [(q.token.surface, q.token.value_itn) for q in quantities] == expected
+    assert all(q.value is None for q in quantities)
+
+
+def test_a_rough_figure_never_shares_a_value_with_an_exact_one() -> None:
+    assert itn("二十几岁") != itn("二十岁") and itn("二十几") != itn("二十")
 
 
 @pytest.mark.parametrize(
@@ -571,6 +589,8 @@ def test_ji_and_shu_make_a_rough_figure_that_keeps_its_surface(text: str, surfac
         ("人数十五万人", "人数150000人"),
         ("股数三十万股", "股数300000股"),
         ("二十几乎", "20几乎"),
+        ("指数1000点", "指数1000点"),
+        ("人数15万", "人数150000"),
     ],
 )
 def test_a_digit_after_a_word_ending_in_shu_makes_an_exact_figure(text: str, value: str) -> None:
@@ -593,8 +613,9 @@ def test_a_spoken_percent_takes_no_measure_word(text: str, surface: str) -> None
 
 @pytest.mark.parametrize("text", ["一百点二十", "三点五十年期", "二十五点三十"])
 def test_a_clock_time_needs_an_hour_and_minutes_and_no_unit(text: str) -> None:
-    assert "点" in quantity_tokens(text)[0].surface
-    assert len(quantity_tokens(text)) == 1
+    (quantity,) = _quantities(text)
+    assert "点" in quantity.token.surface and quantity.token.value_itn == quantity.token.surface
+    assert quantity.value is None
 
 
 @pytest.mark.parametrize("text", ["一亿五千零三", "三亿二千零五十"])

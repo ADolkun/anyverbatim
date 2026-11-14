@@ -249,7 +249,7 @@ _TOKEN = re.compile(
         (
             rf"(?P<idiom>{'|'.join(_IDIOM_PATTERNS)}|{_alternation(_IDIOMS)})",
             # 百分之 on its own is a percent; 三分之一 and 千分之五 are fractions.
-            rf"(?P<fraction>(?!百分之)[{_NUMERALS}]+分之[{_NUMERALS}]+)",
+            rf"(?P<fraction>(?!百分之)(?P<denominator>[{_NUMERALS}]+)分之(?P<numerator>[{_NUMERALS}]+))",
             # A percent takes no measure word: the 支 of 百分之六十支持 starts the next word.
             rf"(?P<cjk>(?P<pct>百分之)?(?P<ord>第)?(?P<run>[{_NUMERALS}]+(?:点[{_NUMERALS}]+)?)"
             rf"(?(pct)|(?P<unit>{_alternation((*_MEASURE_WORDS, '%'))})?))",
@@ -259,6 +259,8 @@ _TOKEN = re.compile(
             r"(?P<share_class>(?<![A-Za-z0-9])[A-Z](?=股))",
             rf"(?P<numeric_ticker>{_NO_ALNUM_BEFORE}\d{{2,}}\.[A-Z]{{2,}}{_NO_ALNUM_AFTER})",
             rf"(?P<symbol>{_NO_ALNUM_BEFORE}[A-Z][A-Z0-9]+(?:\.[A-Z]+)?{_NO_ALNUM_AFTER})",
+            # A date (2024/10/01) is not a fraction, so neither side of the slash may continue it.
+            rf"(?P<digit_fraction>(?<![A-Za-z0-9０-９/])(?P<over>{_DIGIT}+)/(?P<under>{_DIGIT}+)(?![A-Za-z0-9０-９/]))",
             rf"(?P<number>{_NO_ALNUM_BEFORE}(?P<sign>[-+−])?(?P<currency>[$¥€£])?(?P<sign2>[-+−])?"
             rf"(?P<digits>{_NUMBER})"
             r"(?P<en_magnitude>\s?(?i:thousand|million|billion|trillion)\b|(?:BN|MN|TN|MM|bn|mn|tn|[Kk]|M|B|T)(?![A-Za-z0-9]))?"
@@ -297,6 +299,11 @@ _YI_GROUP = re.compile("(?P<head>.*?(?P<unit>万?亿))(?P<group>(?![零〇])[^�
 _SHORTHAND_END = re.compile("[百千万亿][一二两三四五六七八九]$")
 _TENS = frozenset("十百千廿卅")
 _LAST_HOUR, _LAST_MINUTE = 24, 59
+# The digit forms of a run of place words alone: 数十 is 数10, and 数百万 or 数千亿 is 数100万 or 数1000亿.
+_ROUND_DIGITS = "10"
+_ROUND_DIGITS_BEFORE_MAGNITUDE = frozenset({"10", "100", "1000"})
+# Marks the value of a rough figure, so 二十几 and 20几 agree with each other but not with 二十.
+_ROUGH = "~"
 _SHORTHAND_AFTER_UNIT = re.compile("[万亿][一二三四五六七八九]$")
 _FRACTION = re.compile(rf"([{''.join(_DIGIT_VALUE)}]+)([万亿]*)")
 
@@ -426,7 +433,8 @@ def _cjk_quantity(text: str, start: int, prefix: str, run: tuple[int, int], unit
         return None
     end = run[1] + len(unit)
     surface = text[start:end]
-    value = None if _is_approximation(text, prefix, run, numerals) else _cjk_value(integer, fraction)
+    rough = _is_approximation(text, prefix, run, numerals)
+    value = _cjk_value(_with_leading_one(integer) if rough else integer, fraction)
     ordinal = "第" if prefix == "第" else ""
     if value is None:
         itn = surface
@@ -436,19 +444,49 @@ def _cjk_quantity(text: str, start: int, prefix: str, run: tuple[int, int], unit
         itn = f"{ordinal}${value}"
     else:
         itn = f"{ordinal}{value}{unit}"
+    if rough and value is not None:
+        itn = _ROUGH + itn
     kind: QKind = "percent" if prefix == "百分之" else "currency" if unit in _CURRENCY_WORDS else "cjk_quantity"
-    return _Quantity(QToken(start, end, surface, itn, kind), prefix, run, unit, value, _top_magnitude(numerals))
+    token = QToken(start, end, surface, itn, kind)
+    return _Quantity(token, prefix, run, unit, None if rough else value, _top_magnitude(numerals))
 
 
 def _is_approximation(text: str, prefix: str, run: tuple[int, int], numerals: str) -> bool:
     """几 or 数 next to a run makes it a rough figure: 二十几岁, 几十个, 数十亿, 一百几十.
 
     A run of place words alone after 数 may be rough (数十亿) or exact after a noun ending in 数 (人数十万), so it
-    keeps no value either way; a digit in the run makes it exact (人数十五万).
+    is read as rough either way, as the digit form 人数10万 is; a digit in the run makes it exact (人数十五万).
     """
-    if not prefix and text[run[0] - 1 : run[0]] in ("几", "数") and set(numerals) <= _PLACE_WORDS:
+    if not prefix and _ji_or_shu_before(text, run[0]) and set(numerals) <= _PLACE_WORDS:
         return True
-    return text[run[1] : run[1] + 1] == "几" and text[run[1] : run[1] + 2] != "几乎"
+    return _ji_after(text, run[1])
+
+
+def _with_leading_one(numerals: str) -> str:
+    """Read a run that starts with a bare 百, 千, 万 or 亿 with its 一: 数百万 shares its value with 数100万."""
+    return f"一{numerals}" if numerals[:1] in ("百", "千", "万", "亿") else numerals
+
+
+def _ji_or_shu_before(text: str, start: int) -> bool:
+    return text[start - 1 : start] in ("几", "数")
+
+
+def _ji_after(text: str, end: int) -> bool:
+    return text[end : end + 1] == "几" and text[end : end + 2] != "几乎"
+
+
+def _fraction(match: re.Match[str]) -> _Quantity:
+    """Read a fraction as over/under in digits, so 三分之一 and 1/3 agree; it never gets a run value."""
+    if match.group("fraction") is not None:
+        parts = [_with_leading_one(_normalized(match.group(name))) for name in ("numerator", "denominator")]
+        values = [_integer_value(part) if _is_quantity(part, "") else None for part in parts]
+        kind: QKind = "cjk_quantity"
+    else:
+        values = [_ascii_digits(match.group(name)) for name in ("over", "under")]
+        kind = "number"
+    over, under = values
+    itn = match.group(0) if over is None or under is None else f"{over}/{under}"
+    return _bare(QToken(match.start(), match.end(), match.group(0), itn, kind))
 
 
 def _per_unit_split(text: str, match: re.Match[str]) -> int | None:
@@ -522,6 +560,12 @@ def _number_quantity(match: re.Match[str]) -> _Quantity:
         symbol = symbol or "$"
         measure = "" if measure in _USD_WORDS else measure
     itn = f"{sign}{symbol}{digits}{'%' if percent else ''}{measure}"
+    text = match.string
+    written = _ascii_digits(match.group("digits"))
+    round_figure = written == _ROUND_DIGITS or (bool(magnitude) and written in _ROUND_DIGITS_BEFORE_MAGNITUDE)
+    rough = (_ji_or_shu_before(text, match.start()) and not sign and round_figure) or _ji_after(text, match.end())
+    if rough:
+        itn = _ROUGH + itn
     kind: QKind = "percent" if percent else "currency" if symbol or measure in _CURRENCY_WORDS else "number"
     run_end = match.end("magnitude") if magnitude else match.end("digits")
     return _Quantity(
@@ -529,7 +573,7 @@ def _number_quantity(match: re.Match[str]) -> _Quantity:
         "",
         (match.start("digits"), run_end),
         match.group("measure") or ("%" if percent else ""),
-        f"{sign}{digits}",
+        None if rough else f"{sign}{digits}",
         _top_magnitude(magnitude.translate(_VARIANT_NUMERALS)),
     )
 
@@ -632,14 +676,14 @@ def quantity_tokens(text: str) -> list[QToken]:
 
     A Chinese numeral run is a quantity only when it has two or more numeral characters, is
     attached to a measure word, or follows ``第``, and is neither an idiom nor a range of bare
-    digits. A fraction (``三分之一``) or a rough figure with ``几`` or ``数`` (``二十几岁``) is a
-    token whose ``value_itn`` is its surface, so it is still compared but never read as an exact
-    value. ``value_itn`` is the inverse text normalization of the token: ``一百五十期`` becomes
-    ``150期``, ``3.5亿`` becomes ``350000000`` and ``2万亿`` becomes ``2000000000000``. English
-    magnitudes scale the same way (``$1.5 billion`` and ``$1.5B`` become ``$1500000000``), a
-    dollar amount is ``$`` however it is written (``15 dollars``, ``15美元``), ``15 percent`` is
-    ``15%``, and spelled-out numbers convert
-    (``twenty-five`` is ``25``).
+    digits. A fraction is written over/under (``三分之一`` and ``1/3`` are ``1/3``) and a rough
+    figure with ``几`` or ``数`` carries ``~`` (``二十几岁`` and ``20几岁`` are ``~20``), so each
+    agrees with its other spelling but never with an exact value. ``value_itn`` is the inverse
+    text normalization of the token: ``一百五十期`` becomes ``150期``, ``3.5亿`` becomes
+    ``350000000`` and ``2万亿`` becomes ``2000000000000``. English magnitudes scale the same way
+    (``$1.5 billion`` and ``$1.5B`` become ``$1500000000``), a dollar amount is ``$`` however it
+    is written (``15 dollars``, ``15美元``), ``15 percent`` is ``15%``, and spelled-out numbers
+    convert (``twenty-five`` is ``25``).
     """
     return [quantity.token for quantity in _quantities(text)]
 
@@ -649,9 +693,8 @@ def _quantities(text: str) -> list[_Quantity]:
     for match in _TOKEN.finditer(text):
         if match.group("idiom") is not None:
             continue
-        if match.group("fraction") is not None:
-            surface = match.group(0)
-            found.append(_bare(QToken(match.start(), match.end(), surface, surface, "cjk_quantity")))
+        if match.group("fraction") is not None or match.group("digit_fraction") is not None:
+            found.append(_fraction(match))
         elif match.group("cjk") is not None:
             found.extend(_cjk_quantities(text, match))
         elif match.group("number") is not None:

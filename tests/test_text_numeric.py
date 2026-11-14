@@ -149,15 +149,34 @@ def test_a_figure_after_a_noun_ending_in_shu_is_still_verified(
 
 @pytest.mark.parametrize(
     ("asr", "caption"),
-    [("调查显示百分之六十支持这个方案", "调查显示60%支持这个方案"), ("利率从百分之三升到百分之五", "利率从3%升到5%")],
+    [
+        ("调查显示百分之六十支持这个方案", "调查显示60%支持这个方案"),
+        ("利率从百分之三升到百分之五", "利率从3%升到5%"),
+        ("他今年二十几岁了", "他今年20几岁了"),
+        ("公司亏了数十亿美元", "公司亏了数10亿美元"),
+        ("这个城市参与人数十万左右", "这个城市参与人数10万左右"),
+        ("大概有三分之一的人同意", "大概有1/3的人同意"),
+    ],
 )
-def test_a_spoken_percent_before_a_word_agrees_with_its_digit_form(asr: str, caption: str, tmp_path: Path) -> None:
+def test_a_chinese_figure_agrees_with_its_digit_form(asr: str, caption: str, tmp_path: Path) -> None:
     client = FakeClient()
     result = run(
         [TimedText(asr, 0.0, 3.0)], Evidence(PRIMARY, captions=(manual((0.0, 3.0, caption)),)), client, tmp_path
     )
     assert result.flags == ((),) and result.stats.disputed == 0
     assert client.requests == []
+
+
+def test_a_rough_figure_disputes_an_exact_one(tmp_path: Path) -> None:
+    result = verify_numbers(
+        [TimedText("他今年二十几岁了", 0.0, 3.0)],
+        language="zh",
+        evidence=Evidence(PRIMARY, captions=(manual((0.0, 3.0, "他今年二十岁了")),)),
+        client=None,
+        checkpoint_dir=tmp_path / "checkpoints",
+    )
+    (flag,) = result.flags[0]
+    assert flag.kind == "numeric_disputed" and span_text(result, 0, flag) == "二十"
 
 
 def test_without_an_llm_a_dispute_is_flagged_with_its_readings_and_nothing_changes(tmp_path: Path) -> None:
