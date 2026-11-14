@@ -215,7 +215,7 @@ def test_disputes_are_built_from_finished_runs_and_loaded_back_within_the_limits
         folder = root / "runs" / "diarization" / name / OWNER / "rec-01"
         folder.mkdir(parents=True)
         write_rttm(folder / "hypothesis.rttm", "rec-01", turns)
-    (root / OWNER / "words.json").write_text(
+    (root / OWNER / "rec-01" / "words.json").write_text(
         json.dumps([{"text": w.text, "start": w.start, "end": w.end} for w in WORDS]), encoding="utf-8"
     )
     found = build_disputes(
@@ -263,3 +263,28 @@ def test_the_command_refuses_a_single_hypothesis_and_an_empty_request(tmp_path: 
     assert "unknown ASR hypotheses" in unknown.output
     off_pivot = runner.invoke(disputes.main, ["build", "--asr-hyps", "w-prod,w-vad", "--pivot", "w-runs-lid"])
     assert "--pivot" in off_pivot.output
+
+
+def test_the_intermediate_cannot_be_written_outside_the_recordings_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv(EVAL_DIR_ENV, str(tmp_path / "eval"))
+    root = tmp_path / "eval" / "recordings"
+    make_owner(root, [("rec-01", 10, {})])
+    runner = CliRunner()
+    for outside in (tmp_path / "elsewhere.jsonl", root / ".." / ".." / "x.jsonl", root.parent / "x.jsonl"):
+        result = runner.invoke(disputes.main, ["build", "--asr-hyps", "w-prod,w-vad", "--out", str(outside)])
+        assert result.exit_code != 0 and "inside the recordings folder" in result.output
+    inside = runner.invoke(disputes.main, ["build", "--asr-hyps", "w-prod,w-vad", "--out", str(root / "d.jsonl")])
+    assert "inside the recordings folder" not in inside.output
+
+
+def test_the_command_says_the_file_is_a_full_text_intermediate():
+    help_text = " ".join(CliRunner().invoke(disputes.main, ["build", "--help"]).output.split())
+    assert "agents must not read" in help_text
+    assert "questions.jsonl" in help_text
+    assert "full-text intermediate" in help_text
+
+
+def test_attribution_sampling_makes_no_claim_about_bias():
+    assert "unbiased" not in (select_attribution.__doc__ or "")
