@@ -11,6 +11,8 @@ from ytverbatim.asr.models import ChunkHypothesis
 from ytverbatim.contract import Access, ContextDocument, Edit, Flag, Word, dump_document, load_document
 from ytverbatim.render import render_markdown
 from ytverbatim.stages import (
+    DocumentSource,
+    SourceInfo,
     Stretch,
     Transcribed,
     build_document,
@@ -20,6 +22,7 @@ from ytverbatim.stages import (
     numerals,
     with_results,
     word_confidence,
+    youtube_video,
 )
 from ytverbatim.text.numbers import quantity_tokens
 from ytverbatim.text.numerals import apply, conversions, readings
@@ -62,7 +65,7 @@ def flag_on(text: str, part: str, kind: str = "decoder_anomaly") -> Flag:
 
 
 def source_of(rows: list[ChunkHypothesis], language: str = "zh") -> Transcribed:
-    return from_asr_rows(rows, registry.get("w-prod"), metadata(language))
+    return from_asr_rows(rows, registry.get("w-prod"), language)
 
 
 def row(text: str, start: float, end: float, words: tuple[Word, ...] = (), language: str = "zh") -> ChunkHypothesis:
@@ -81,10 +84,9 @@ def row(text: str, start: float, end: float, words: tuple[Word, ...] = (), langu
 def document(
     source: Transcribed, stretches: tuple[Stretch, ...], language: str = "zh", *, llm_punctuated: bool = False
 ) -> ContextDocument:
+    meta = metadata(language)
     doc = build_document(
-        metadata=metadata(language),
-        tags=(),
-        access=ACCESS,
+        info=SourceInfo(meta.video_id, meta.chapters, lambda s: DocumentSource(youtube_video(meta, (), s), ACCESS)),
         source=source,
         stretches=stretches,
         chapters=False,
@@ -209,7 +211,7 @@ def test_a_manual_caption_track_is_a_source_of_its_own() -> None:
             CaptionSegment(start=3.0, end=5.0, text="today. Then they fell."),
         ),
     )
-    source = from_captions(track, metadata("en"))
+    source = from_captions(track, "en")
     assert source.run.kind == "caption_manual" and source.run.id == "caption_manual:en"
     doc = document(source, source.stretches, "en")
     assert [s.text for s in doc.segments] == ["Markets rose today.", "Then they fell."]
