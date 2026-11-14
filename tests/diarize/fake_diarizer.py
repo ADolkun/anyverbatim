@@ -57,6 +57,9 @@ class FakeDiarizer:
         probs = np.zeros((frames, CHANNELS), dtype=np.float32)
         probs[:half, 0] = 0.9
         probs[half:, 1] = 0.8
+        bad = self.variant.get("bad_prob")
+        if isinstance(bad, float):
+            probs[0, 0] = bad
         turns = (
             Turn(start=0.0, end=half * FRAME_S, speaker=0),
             Turn(start=half * FRAME_S, end=frames * FRAME_S, speaker=1),

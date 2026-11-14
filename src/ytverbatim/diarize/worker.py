@@ -30,8 +30,8 @@ from ytverbatim.diarize.protocol import (
     FileJob,
     RawDiarization,
     RunMetrics,
+    load,
     probs_path,
-    read_file_diarization,
     turns_path,
 )
 from ytverbatim.diarize.registry import build_diarizer
@@ -68,7 +68,7 @@ def run_request(
     audio_s = 0.0
     for job in request.files:
         if turns_path(out, job.id).is_file():
-            read_file_diarization(out, job.id)
+            load(out, job.id, spec.id)
             skipped += 1
             continue
         audio = load_wav(Path(job.wav))
@@ -129,6 +129,9 @@ class _Session:
         channels = self._request.diarizer.spec.max_speakers
         if raw.probs.ndim != _PROB_DIMS or raw.probs.shape[1] != channels:
             raise EngineError(f"{job.id}: expected (frames, {channels}) probabilities, got {raw.probs.shape}")
+        # NaN fails both comparisons, so this also refuses non-finite values.
+        if not ((raw.probs >= 0) & (raw.probs <= 1)).all():
+            raise EngineError(f"{job.id}: the diarizer returned probabilities outside [0, 1] or not finite")
         if any(turn.speaker >= channels for turn in raw.turns):
             raise EngineError(f"{job.id}: a turn names a speaker channel beyond the model's {channels}")
         return raw
