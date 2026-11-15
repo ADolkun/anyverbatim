@@ -540,3 +540,37 @@ def test_a_stretch_without_a_language_or_speaker_dumps_as_before() -> None:
     plain = Stretch(text="x", start=0.0, end=1.0)
     assert "language" not in plain.model_dump() and "speaker" not in plain.model_dump()
     assert Stretch(text="x", start=0.0, end=1.0, language="zh").model_dump()["language"] == "zh"
+
+
+SPEECH_HEAVY_ZH = [
+    lid_row(0, "我们开会", 0.0, 6.0, "zh"),
+    lid_row(1, "讨论预算", 6.0, 12.0, "zh"),
+    lid_row(2, "and that was the whole meeting really", 12.0, 15.0, "en"),
+]
+
+
+def test_a_recordings_document_language_is_the_one_spoken_longest_not_the_one_with_most_characters() -> None:
+    source = lid_source(SPEECH_HEAVY_ZH)
+    assert source.language == "zh"
+    assert [s.language for s in source.stretches] == [None, "en"]
+    assert lid_source(SPEECH_HEAVY_ZH, stretch_languages=False).language == "en", "YouTube still counts characters"
+
+
+def test_a_mixed_document_lists_its_languages_by_speech_and_reads_script_and_punctuation_per_language() -> None:
+    source = lid_source(EN_DOMINANT)
+    stretches = normalize(source.stretches, source.language, script="zh-Hans", fillers="keep")
+    punctuated = [s.model_copy(update={"text": s.text.capitalize() + "."}) for s in stretches]
+    punctuated[1] = punctuated[1].model_copy(update={"text": "我们开会了，嗯，三个人都在。"})
+    doc = document(source, tuple(punctuated), "en", llm_punctuated=True)
+    assert doc.transcript.language == "en" and doc.transcript.languages == ("en", "zh")
+    assert (doc.transcript.script, doc.transcript.punctuation) == ("zh-Hans", "llm")
+    unpunctuated = document(source, stretches, "en")
+    assert unpunctuated.transcript.punctuation == "none"
+    single = lid_source(EN_DOMINANT[:1])
+    assert document(single, single.stretches, "en").transcript.languages == ("en",)
+
+
+def test_a_row_with_nothing_to_read_takes_no_language_of_its_own() -> None:
+    rows = [lid_row(0, "我们今天讨论明年的预算。", 0.0, 6.0, "zh"), lid_row(1, "。", 6.0, 6.5, "en")]
+    source = lid_source(rows)
+    assert [(s.text, s.language) for s in source.stretches] == [("我们今天讨论明年的预算。。", None)]

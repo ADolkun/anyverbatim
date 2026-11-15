@@ -401,16 +401,31 @@ def segment_tokens(tokens: Sequence[Token], language: str) -> list[Sentence]:
 
 
 def _language_runs(tokens: list[Token]) -> list[tuple[str | None, list[Token]]]:
-    """Split tokens into runs of one language; bare punctuation joins the run before it, or after it at the start."""
+    """Split tokens into runs of one language.
+
+    Bare punctuation goes with a neighbouring run as at a change of speaker, and takes its language: an opening mark
+    leads the run after it, any other mark trails the run before it (the one after it, at the start).
+    """
     reading = [any(char.isalnum() for char in token.text) for token in tokens]
-    first = next((token.language for token, reads in zip(tokens, reading, strict=True) if reads), None)
+    following: list[tuple[bool, str | None]] = [(False, None)] * len(tokens)
+    upcoming: tuple[bool, str | None] = (False, None)
+    for index in range(len(tokens) - 1, -1, -1):
+        if reading[index]:
+            upcoming = (True, tokens[index].language)
+        following[index] = upcoming
     runs: list[tuple[str | None, list[Token]]] = []
-    for token, reads in zip(tokens, reading, strict=True):
-        code = token.language if reads else (runs[-1][0] if runs else first)
-        if runs and runs[-1][0] == code:
-            runs[-1][1].append(token)
+    for index, (token, reads) in enumerate(zip(tokens, reading, strict=True)):
+        if reads:
+            code = token.language
+        elif runs and not (_is_opener(token.text) and following[index][0]):
+            code = runs[-1][0]
         else:
-            runs.append((code, [token]))
+            code = following[index][1]
+        placed = token if token.language == code else replace(token, language=code)
+        if runs and runs[-1][0] == code:
+            runs[-1][1].append(placed)
+        else:
+            runs.append((code, [placed]))
     return runs
 
 

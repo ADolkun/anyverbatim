@@ -283,6 +283,9 @@ def punctuate(
     ``languages`` and ``speakers`` are per text when given: the language a text was spoken in (None for ``language``)
     and, for a diarized transcript, its speaker's id.
     """
+    for name, given in (("languages", languages), ("speakers", speakers)):
+        if given and len(given) != len(texts):
+            raise ValueError(f"{name} covers {len(given)} texts, but there are {len(texts)}")
     run = _Run(
         texts, language=language, client=client, checkpoint_dir=checkpoint_dir, languages=languages, speakers=speakers
     )

@@ -152,6 +152,9 @@ def correct_segments(
     """
     if confidence is not None and len(confidence) != len(segments):
         raise ValueError(f"confidence covers {len(confidence)} segments, but there are {len(segments)}")
+    for name, given in (("languages", languages), ("speakers", speakers)):
+        if given and len(given) != len(segments):
+            raise ValueError(f"{name} covers {len(given)} segments, but there are {len(segments)}")
     run = _Run(
         texts=list(segments),
         client=client,

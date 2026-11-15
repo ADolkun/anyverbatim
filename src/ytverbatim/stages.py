@@ -172,7 +172,7 @@ def from_asr_rows(
     stretches carry that language.
     """
     spec = definition.spec
-    language = _language(rows, language_hint)
+    language = _language(rows, language_hint, by_speech=stretch_languages)
     tokens, warnings = _tokens(rows, language, stretch_languages=stretch_languages)
     run: DiarizationRun | None = None
     if diarized is not None:
@@ -649,7 +649,7 @@ def _build(
         source=info.describe(source.stretches),
         transcript=Transcript(
             language=language,
-            languages=(language,),
+            languages=_languages(source.stretches, language),
             script=script,
             runs=(run,),
             punctuation=_punctuation(sentences, language, run, llm_punctuated=llm_punctuated),
@@ -663,6 +663,19 @@ def _build(
         quality=_quality(source, segments, notes),
         llm_usage=tuple(llm_usage),
     )
+
+
+def _languages(stretches: Sequence[Stretch], language: str) -> tuple[str, ...]:
+    """List the document's language, then every other language a stretch was decoded in, by the seconds it covers."""
+    seconds: dict[str, float] = {}
+    for stretch in stretches:
+        if stretch.language is not None and stretch.language != language:
+            seconds[stretch.language] = seconds.get(stretch.language, 0.0) + stretch.end - stretch.start
+    return (language, *sorted(seconds, key=lambda code: -seconds[code]))
+
+
+def _reads(text: str) -> bool:
+    return any(char.isalnum() for char in text)
 
 
 def _speakers(segments: Sequence[Segment], names: Mapping[str, str]) -> tuple[Speaker, ...]:
@@ -774,14 +787,20 @@ def _anomaly_flags(sentence: seg.Sentence, anomalies: Mapping[int, ChunkHypothes
     return tuple(flags)
 
 
-def _language(rows: Sequence[ChunkHypothesis], declared: str | None) -> str:
-    """Return the language the engine reports for most of the text, else the one YouTube declares."""
-    weight: collections.Counter[str] = collections.Counter()
+def _language(rows: Sequence[ChunkHypothesis], declared: str | None, *, by_speech: bool = False) -> str:
+    """Return the language the engine reports for most of the text, else the one YouTube declares.
+
+    With `by_speech`, "most" is by the seconds each language's rows cover: a CJK character is about a syllable and an
+    English word about five characters, so counting characters would favour English in a mixed decode.
+    """
+    weight: dict[str, float] = {}
     for row in rows:
         if row.language and row.text.strip():
-            weight[row.language] += len(row.text)
+            share = row.end - row.start if by_speech else len(row.text)
+            weight[row.language] = weight.get(row.language, 0.0) + share
     if weight:
-        return weight.most_common(1)[0][0]
+        # The first language to reach the top weight wins a tie, as it always has.
+        return max(weight, key=lambda code: weight[code])
     return declared or UNDETERMINED_LANGUAGE
 
 
@@ -800,7 +819,8 @@ def _tokens(
         text = row.text.strip()
         if not text:
             continue
-        own = row.language if stretch_languages and row.language and row.language != language else None
+        # A row with nothing to read (a lone "。") has no language of its own and takes its neighbours' spacing.
+        own = row.language if stretch_languages and row.language != language and _reads(text) else None
         spoken = own or language
         words = [word for word in row.words if word.text.strip()]
         if words:

@@ -195,7 +195,8 @@ class DiarizationRun(_Model):
 
 class Transcript(_Model):
     language: str
-    # Every language at least one stretch was decoded in, by descending text share; metadata, never a rule switch.
+    # Every language at least one stretch was decoded in, the document's first and the rest by descending speech
+    # share; metadata, never a rule switch.
     languages: tuple[str, ...]
     script: Literal["zh-Hans", "zh-Hant", "n/a"]
     runs: tuple[TranscriptRun, ...]
