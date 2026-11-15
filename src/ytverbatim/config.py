@@ -9,6 +9,17 @@ from ytverbatim import paths
 from ytverbatim.errors import ConfigError
 from ytverbatim.ytdlp.runner import redact
 
+__all__ = [
+    "AsrOptions",
+    "AuthOptions",
+    "LLMOptions",
+    "Options",
+    "Overrides",
+    "TextOptions",
+    "YtdlpOptions",
+    "load_options",
+]
+
 
 @dataclass(frozen=True)
 class AuthOptions:
