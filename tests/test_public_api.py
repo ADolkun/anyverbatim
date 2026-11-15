@@ -6,6 +6,7 @@
 import dataclasses
 import inspect
 import re
+import typing
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,12 +29,15 @@ EXPECTED_ALL = [
     "LLMOptions",
     "LLMRequest",
     "LLMResponse",
+    "LLM_STAGES",
     "Options",
     "ProgressEvent",
+    "ProgressStage",
     "QKind",
     "QToken",
     "RefKind",
     "Result",
+    "STAGES",
     "SUPPORTED_BROWSERS",
     "TextOptions",
     "Usage",
@@ -51,6 +55,22 @@ EXPECTED_ALL = [
 ]
 
 
+EXPECTED_STAGES = (
+    "fetch",
+    "skip",
+    "captions",
+    "asr",
+    "diarize",
+    "second_opinion",
+    "normalize",
+    "punctuate",
+    "correct",
+    "numeric",
+    "numerals",
+    "write",
+)
+
+
 def shown(signature: inspect.Signature) -> str:
     return re.sub(r"(?:[a-z_]+\.)+(?=[A-Za-z_])", "", str(signature))
 
@@ -59,6 +79,13 @@ def test_the_top_level_names_are_pinned() -> None:
     assert sorted(ytverbatim.__all__) == sorted(EXPECTED_ALL)
     for name in ytverbatim.__all__:
         assert getattr(ytverbatim, name) is not None, name
+
+
+def test_the_progress_stages_are_pinned() -> None:
+    assert ytverbatim.STAGES == EXPECTED_STAGES
+    assert typing.get_args(ytverbatim.ProgressStage) == EXPECTED_STAGES
+    assert set(ytverbatim.LLM_STAGES) == {"punctuate", "correct", "numeric"}
+    assert set(ytverbatim.STAGES).issuperset(ytverbatim.LLM_STAGES)
 
 
 def test_importing_the_package_loads_none_of_the_library() -> None:
@@ -106,7 +133,7 @@ DATACLASSES: dict[str, list[str]] = {
         "reused: tuple[str, ...]",
         "notices: tuple[str, ...]",
     ],
-    "ProgressEvent": ["id: str", "stage: str", "detail: str = ''"],
+    "ProgressEvent": ["id: str", f"stage: Literal[{', '.join(map(repr, EXPECTED_STAGES))}]", "detail: str = ''"],
     "YouTubeRef": ["kind: RefKind", "id: str", "url: str"],
     "Usage": ["input_tokens: int", "output_tokens: int"],
     "LLMRequest": [
