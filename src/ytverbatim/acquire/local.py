@@ -1,9 +1,10 @@
 """Local recordings: probe a file, choose the audio stream to transcribe, and derive the recording's id.
 
 The id hashes the chosen stream's encoded packets (`ffmpeg -c copy -f hash`), neither the file nor the decoded PCM: a
-rename, a metadata edit or a remux into another container keeps it, and no ffmpeg decoder or resampler change can
-move it. The source file is only read; nothing records where it lives, so audio needed on a rerun means passing the
-file again.
+rename, a metadata edit or a remux keeps it, and no ffmpeg decoder or resampler change can move it. Remuxes within and
+across the MP4 family, Matroska, Ogg/WebM and MP3 keep the packets; a raw ADTS `.aac` file frames them differently, so
+it gets its own id, and an ffmpeg release that changes how a demuxer splits packets could move ids. The source file is
+only read; nothing records where it lives, so audio needed on a rerun means passing the file again.
 """
 
 import json
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 from ytverbatim import ids, proc
-from ytverbatim.acquire.audio import DEFAULT_CONVERT_TIMEOUT_S, PROBE_TIMEOUT_S, to_wav16k
+from ytverbatim.acquire.audio import DEFAULT_CONVERT_TIMEOUT_S, PROBE_TIMEOUT_S, ffmpeg_input, to_wav16k
 from ytverbatim.contract import RecordingSource
 from ytverbatim.errors import MediaValidationError, stderr_preview
 from ytverbatim.ytdlp.runner import redact
@@ -48,7 +49,7 @@ class LocalRecording:
 
     @property
     def file_name(self) -> str:
-        return self.path.name
+        return _printable(self.path.name) or "recording"
 
     def source(self, language: str | None) -> RecordingSource:
         return RecordingSource(
@@ -108,6 +109,7 @@ def pick_stream(path: Path, streams: list[dict[str, object]]) -> int:
 
 
 def packet_sha256(path: Path, stream: int) -> str:
+    cwd, name = ffmpeg_input(path)
     result = proc.run(
         [
             "ffmpeg",
@@ -115,7 +117,7 @@ def packet_sha256(path: Path, stream: int) -> str:
             "-v",
             "error",
             "-i",
-            str(path),
+            name,
             "-map",
             f"0:a:{stream}",
             "-c",
@@ -127,6 +129,7 @@ def packet_sha256(path: Path, stream: int) -> str:
             "-",
         ],
         timeout_s=DEFAULT_CONVERT_TIMEOUT_S,
+        cwd=cwd,
     )
     line = result.stdout.strip()
     digest = line.removeprefix(_HASH_PREFIX).lower()
@@ -148,6 +151,7 @@ def to_wav(recording: LocalRecording, destination: Path) -> None:
 def _probe(path: Path) -> _Probe:
     if not path.is_file():
         raise MediaValidationError(f"no such file: {path.name}")
+    cwd, name = ffmpeg_input(path)
     result = proc.run(
         [
             "ffprobe",
@@ -159,9 +163,10 @@ def _probe(path: Path) -> _Probe:
             "stream=codec_name,duration:stream_tags:format=duration:format_tags",
             "-of",
             "json",
-            str(path),
+            name,
         ],
         timeout_s=PROBE_TIMEOUT_S,
+        cwd=cwd,
     )
     if result.returncode != 0:
         raise MediaValidationError(f"{path.name} is not a readable audio or video file\n{_stderr(result)}")
@@ -179,9 +184,11 @@ def _probe(path: Path) -> _Probe:
 
 
 def _decodes(path: Path, stream: int) -> bool:
+    cwd, name = ffmpeg_input(path)
     result = proc.run(
-        ["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-map", f"0:a:{stream}", "-t", "1", "-f", "null", "-"],
+        ["ffmpeg", "-nostdin", "-v", "error", "-i", name, "-map", f"0:a:{stream}", "-t", "1", "-f", "null", "-"],
         timeout_s=PROBE_TIMEOUT_S,
+        cwd=cwd,
     )
     return result.returncode == 0
 
@@ -196,7 +203,7 @@ def _tags(section: dict[str, object]) -> dict[str, str]:
 
 def _title(probed: _Probe, path: Path) -> str:
     title = _printable(_tags(probed.format).get("title", ""))
-    return title or path.stem
+    return title or _printable(path.stem) or "recording"
 
 
 def _printable(text: str) -> str:
@@ -228,7 +235,8 @@ def _aware(value: str | None) -> datetime | None:
 
 
 def _duration(probed: _Probe, stream: int, path: Path) -> float:
-    for section in (probed.format, probed.streams[stream]):
+    # The stream first: a video can run past its audio, and the WAV is checked against the audio's own length.
+    for section in (probed.streams[stream], probed.format):
         try:
             seconds = float(str(section.get("duration")))
         except ValueError:

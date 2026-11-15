@@ -175,6 +175,16 @@ def probe_duration(path: Path, *, kind: str = "audio") -> float:
     return duration
 
 
+def ffmpeg_input(path: Path) -> tuple[Path, str]:
+    """Return the folder to run ffmpeg or ffprobe in and the input argument that names `path` from there.
+
+    A bare name is read by ffmpeg as a protocol up to its first colon (`notes:1.m4a`, `concat:other.m4a`), and its
+    errors echo the input as given; `./<name>` from the file's own folder rules out the first and keeps every folder
+    name out of the second.
+    """
+    return path.parent, f"./{path.name}"
+
+
 def to_wav16k(
     source: Path,
     destination: Path,
@@ -189,6 +199,7 @@ def to_wav16k(
     """
     tmp = destination.with_name(f".{destination.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
     mapping = ["-map", f"0:a:{stream}"] if stream is not None else []
+    cwd, name = ffmpeg_input(source)
     try:
         result = proc.run(
             [
@@ -198,7 +209,7 @@ def to_wav16k(
                 "error",
                 "-y",
                 "-i",
-                str(source),
+                name,
                 *mapping,
                 "-vn",
                 "-acodec",
@@ -209,9 +220,11 @@ def to_wav16k(
                 "1",
                 "-f",
                 "wav",
-                str(tmp),
+                # Absolute, since ffmpeg runs in the source's folder.
+                str(tmp.absolute()),
             ],
             timeout_s=timeout_s,
+            cwd=cwd,
         )
         if result.returncode != 0:
             raise MediaValidationError(

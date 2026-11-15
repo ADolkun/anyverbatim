@@ -16,7 +16,7 @@ from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, FileJob, Run
 from ytverbatim.asr.runner import WorkerResult
 from ytverbatim.cli import main
 from ytverbatim.contract import RecordingSource, Word, load_document
-from ytverbatim.errors import MediaValidationError
+from ytverbatim.errors import ConfigError, DependencyError, EngineError, MediaValidationError
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from ytverbatim.pipeline import ProgressEvent, VideoResult, process, process_files
 
@@ -34,6 +34,8 @@ class Media:
     converted: list[str] = field(default_factory=list[str])
     # Deletes each file once it is hashed, as if it were moved away during the run.
     vanish: bool = False
+    # Fails every probe as ffmpeg does for an unreadable file, echoing the input as it was given.
+    unreadable: bool = False
 
     def add(self, path: Path, packets: str = "alpha", *, tags: dict[str, str] | None = None) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -41,16 +43,22 @@ class Media:
         self.tags[path.name] = tags or {}
         return path
 
-    def ffprobe(self, argv: list[str]) -> proc.ProcResult:
-        source = Path(argv[-1])
-        if "json" not in argv:
+    def __call__(self, argv: list[str], *, timeout_s: float, cwd: Path | None = None, **_: object) -> proc.ProcResult:
+        if argv[0] == "ffprobe" and "json" not in argv:
             return proc.ProcResult(0, "12.5\n", "", 0.0)
+        given = argv[argv.index("-i") + 1] if "-i" in argv else argv[-1]
+        assert cwd is not None and given.startswith("./") and "/" not in given[2:], "ffmpeg sees only ./<name>"
+        return (self.ffprobe if argv[0] == "ffprobe" else self.ffmpeg)(argv, cwd / given)
+
+    def ffprobe(self, argv: list[str], source: Path) -> proc.ProcResult:
+        if self.unreadable:
+            given = argv[-1]
+            return proc.ProcResult(1, "", f"{given}: Invalid data found when processing input", 0.0)
         streams = [] if source.read_text(encoding="utf-8").startswith("silent") else [{"codec_name": "aac"}]
         probe = {"streams": streams, "format": {"duration": "12.5", "tags": self.tags.get(source.name, {})}}
         return proc.ProcResult(0, json.dumps(probe), "", 0.0)
 
-    def ffmpeg(self, argv: list[str]) -> proc.ProcResult:
-        source = Path(argv[argv.index("-i") + 1])
+    def ffmpeg(self, argv: list[str], source: Path) -> proc.ProcResult:
         if "hash" in argv:
             packets = source.read_text(encoding="utf-8").splitlines()[0]
             if self.vanish:
@@ -65,9 +73,12 @@ class Media:
 @dataclass
 class Worker:
     calls: list[WorkerRequest] = field(default_factory=list[WorkerRequest])
+    error: EngineError | None = None
 
     def __call__(self, request: WorkerRequest, *, python: str | None = None) -> WorkerResult:
         self.calls.append(request)
+        if self.error is not None:
+            raise self.error
         out = Path(request.out_dir)
         out.mkdir(parents=True, exist_ok=True)
         words = tuple(Word(text=f" {w}", start=1.0 + i * 0.5, end=1.4 + i * 0.5) for i, w in enumerate(SPOKEN))
@@ -125,10 +136,9 @@ def engine_installed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def media(session_kit) -> Media:
+def media(session_kit, monkeypatch: pytest.MonkeyPatch) -> Media:
     fake = Media()
-    session_kit.proc.responses["ffprobe"] = fake.ffprobe
-    session_kit.proc.responses["ffmpeg"] = fake.ffmpeg
+    monkeypatch.setattr(proc, "run", fake)
     return fake
 
 
@@ -218,9 +228,16 @@ def test_the_same_audio_under_two_names_is_processed_once(
     second = media.add(tmp_path / "zoom" / "video.mp4")
     other = media.add(tmp_path / "zoom" / "other.m4a", "beta")
     report, results, events = run_files(session_kit, [first, second, other])
-    assert [r.outcome.video_id for r in results] == [rec_id(), rec_id("beta")]
+    assert [(r.outcome.video_id, r.name) for r in results] == [
+        (rec_id(), "audio.m4a"),
+        (rec_id(), "video.mp4"),
+        (rec_id("beta"), "other.m4a"),
+    ]
     assert len(worker.calls) == 2 and report.exit_code == 0
     assert ProgressEvent(rec_id(), "skip", "same audio as audio.m4a") in events
+    batch = json.loads((session_kit.out / "batch_report.json").read_text(encoding="utf-8"))
+    duplicate = batch["videos"][1]
+    assert (duplicate["reused"], duplicate["detail"]) == (["duplicate"], "same audio as audio.m4a")
 
 
 def test_a_file_that_cannot_be_read_is_an_error_keyed_by_its_name(
@@ -366,3 +383,79 @@ def test_cli_refuses_youtube_only_options_with_files(session_kit, tmp_path: Path
 def test_cli_refuses_a_target_that_names_nothing(session_kit, tmp_path: Path) -> None:
     result = cli(session_kit, str(tmp_path / "missing.m4a"))
     assert result.exit_code == 1 and "no such file or folder" in result.output
+
+
+def test_a_name_with_a_colon_is_a_file_and_errors_name_no_folder(
+    session_kit, media: Media, worker: Worker, tmp_path: Path
+) -> None:
+    folder = tmp_path / "Client Acme Secret"
+    path = media.add(folder / "notes:1.m4a")
+    _, results, _ = run_files(session_kit, [path])
+    assert results[0].outcome.status.value == "ok" and recording(results[0]).file_name == "notes:1.m4a"
+
+    media.unreadable = True
+    _, results, _ = run_files(session_kit, [media.add(folder / "broken.m4a", "gamma")])
+    report = (session_kit.out / "batch_report.json").read_text(encoding="utf-8")
+    assert results[0].outcome.error == "media_invalid" and "./broken.m4a: Invalid data" in report
+    assert "Client Acme Secret" not in report and str(tmp_path) not in report
+
+
+def test_a_missing_ffmpeg_stops_the_batch_once(session_kit, worker: Worker, tmp_path: Path, monkeypatch) -> None:
+    def missing(argv: list[str], **_: object) -> proc.ProcResult:
+        raise DependencyError(f"required executable not found: {argv[0]}")
+
+    monkeypatch.setattr(proc, "run", missing)
+    files = [tmp_path / "a.m4a", tmp_path / "b.m4a"]
+    for path in files:
+        path.write_bytes(b"x")
+    with pytest.raises(DependencyError, match="ffprobe"):
+        run_files(session_kit, files)
+    assert json.loads((session_kit.out / "batch_report.json").read_text(encoding="utf-8"))["videos"] == []
+
+
+def test_a_failed_run_leaves_no_copy_of_the_audio(session_kit, media: Media, worker: Worker, tmp_path: Path) -> None:
+    worker.error = EngineError("synthetic decode failure")
+    _, results, _ = run_files(session_kit, [media.add(tmp_path / "meeting.m4a")])
+    assert results[0].outcome.error == "engine"
+    assert media.converted == ["meeting.m4a"] and not (session_kit.out / rec_id() / "audio.wav").exists()
+
+
+def test_control_characters_in_a_file_name_are_dropped(
+    session_kit, media: Media, worker: Worker, tmp_path: Path
+) -> None:
+    _, results, _ = run_files(session_kit, [media.add(tmp_path / "team\x1b[31mcall.m4a")])
+    source = recording(results[0])
+    assert (source.title, source.file_name) == ("team [31mcall", "team [31mcall.m4a")
+
+
+@pytest.mark.parametrize(("given", "normalised"), [("zh-Hans", "zh"), ("EN", "en"), ("yue", "yue")])
+def test_a_forced_language_is_normalised_up_front(session_kit, given: str, normalised: str) -> None:
+    assert settings(session_kit, "recording", language=given).language == normalised
+
+
+@pytest.mark.parametrize("given", ["klingon", "xx", "z"])
+def test_an_unknown_forced_language_is_refused_before_any_work(session_kit, given: str) -> None:
+    with pytest.raises(ConfigError, match="is not a language code w-prod knows"):
+        settings(session_kit, "youtube", language=given)
+
+
+def test_cli_reports_a_duplicate_in_the_summary(session_kit, media: Media, worker: Worker, tmp_path: Path) -> None:
+    first = media.add(tmp_path / "audio.m4a")
+    second = media.add(tmp_path / "video.mp4")
+    result = cli(session_kit, str(first), str(second))
+    assert result.exit_code == 0, result.output
+    assert "= video.mp4  same audio as audio.m4a" in result.output
+    assert "1 ok, 0 failed, 1 duplicate" in result.output
+
+
+def test_cli_names_an_unreadable_folder_with_the_access_fix(session_kit, tmp_path: Path) -> None:
+    locked = tmp_path / "in" / "Recordings"
+    locked.mkdir(parents=True)
+    locked.chmod(0)
+    try:
+        result = cli(session_kit, str(tmp_path / "in"))
+    finally:
+        locked.chmod(0o700)
+    assert result.exit_code == 1
+    assert "cannot read" in result.output and "Recordings: permission denied" in result.output
+    assert "Full Disk Access" in result.output and "no audio or video files" not in result.output

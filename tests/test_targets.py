@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from ytverbatim import ids
+from ytverbatim.errors import ConfigError
 from ytverbatim.targets import MemoSelector, classify, expand
 
 VIDEO = "pubVideo001"
@@ -79,3 +80,27 @@ def test_folders_expand_recursively_to_sorted_media_files(tmp_path: Path) -> Non
     found = expand([root, single], exclude=root / "out")
     assert found == [root / "a.MP3", root / "b.m4a", root / "sub" / "c.mov", single]
     assert root / "out" / "rec.m4a" in expand([root])
+
+
+def test_expansion_skips_its_own_output_even_when_run_over_the_output_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("YTVERBATIM_HOME", str(tmp_path / "home"))
+    (tmp_path / "meeting.m4a").write_bytes(b"x")
+    for leftover in ("rec-0123456789abcdef/audio.wav", "home/videos/pubVideo001/audio.webm"):
+        path = tmp_path / leftover
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+    assert expand([tmp_path], exclude=tmp_path) == [tmp_path / "meeting.m4a"]
+
+
+def test_an_unreadable_folder_is_an_error_with_the_access_fix(tmp_path: Path) -> None:
+    locked = tmp_path / "Recordings"
+    locked.mkdir()
+    locked.chmod(0)
+    try:
+        with pytest.raises(ConfigError, match="Recordings: permission denied") as raised:
+            expand([tmp_path])
+    finally:
+        locked.chmod(0o700)
+    assert "Full Disk Access" in raised.value.fix

@@ -81,3 +81,11 @@ def test_the_index_is_regenerated_from_what_is_present(tmp_path: Path) -> None:
 
 def test_an_empty_root_says_so(tmp_path: Path) -> None:
     assert "No recordings yet." in write_index(tmp_path / "recordings").read_text(encoding="utf-8")
+
+
+def test_a_document_that_is_not_utf8_is_left_out(tmp_path: Path) -> None:
+    recording(tmp_path, "a", "Kept", None, 1.0)
+    (tmp_path / "rec-eeeeeeeeeeeeeeee").mkdir()
+    (tmp_path / "rec-eeeeeeeeeeeeeeee" / "context.json").write_bytes(b"\xff\xfe not utf-8")
+    text = write_index(tmp_path).read_text(encoding="utf-8")
+    assert "Kept" in text and "eeeeeeeeeeeeeeee" not in text

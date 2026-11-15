@@ -69,6 +69,7 @@ class FakeProc:
 
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
+        self.cwds: list[object] = []
         self.responses: dict[str, Callable[[list[str]], proc.ProcResult]] = {}
 
     def __call__(
@@ -82,6 +83,7 @@ class FakeProc:
     ) -> proc.ProcResult:
         args = list(argv)
         self.calls.append(args)
+        self.cwds.append(cwd)
         return self.responses[Path(args[0]).name](args)
 
     def probe_returns(self, stdout: str, returncode: int = 0, stderr: str = "") -> None:

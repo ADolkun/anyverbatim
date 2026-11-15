@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from collections.abc import Callable, Sequence
@@ -154,8 +155,11 @@ __all__ = [
 ]
 
 SourceKind = Literal["youtube", "recording"]
+# The `reused` mark of a file whose audio already ran in the same batch under another name.
+DUPLICATE = "duplicate"
 # The engine a source gets when `[asr] engine` is unset; recordings move to the language policy once it is chosen.
 _DEFAULT_ENGINE: dict[SourceKind, str] = {"youtube": "w-prod", "recording": "w-prod"}
+_WHISPER_FACTORY = "ytverbatim.asr.engines.whisper_mlx."
 
 
 @dataclass(frozen=True)
@@ -395,14 +399,14 @@ def process_files(
     started = clock()
     outcomes: list[VideoOutcome] = []
     seen: dict[str, str] = {}
+    listed = index.Index.scan(out)
     try:
         for path in files:
             result = _run_file(path, settings, seen)
-            if result is None:
-                continue
             outcomes.append(result.outcome)
             if result.document is not None and "context" not in result.outcome.reused:
-                index.write_index(out)
+                listed.add(result.document)
+                listed.write()
             if on_video is not None:
                 on_video(result)
     finally:
@@ -413,16 +417,21 @@ def process_files(
     return report
 
 
-def _run_file(path: Path, settings: "_Settings", seen: dict[str, str]) -> VideoResult | None:
-    """Run one file; None when its audio already ran in this batch under another name."""
+def _run_file(path: Path, settings: "_Settings", seen: dict[str, str]) -> VideoResult:
+    """Run one file; a file whose audio already ran in this batch under another name is reported as a duplicate."""
     began = time.monotonic()
     try:
         recording = local.open_recording(path)
+    except (DependencyError, EngineMemoryError):
+        # A missing ffprobe or ffmpeg would fail every file the same way.
+        raise
     except (YtverbatimError, ValueError, OSError) as exc:
         return replace(_failed(path.name, exc), name=path.name)
     if recording.id in seen:
-        settings.emit(ProgressEvent(recording.id, "skip", f"same audio as {seen[recording.id]}"))
-        return None
+        detail = f"same audio as {seen[recording.id]}"
+        settings.emit(ProgressEvent(recording.id, "skip", detail))
+        outcome = VideoOutcome(recording.id, VideoStatus.OK, reused=(DUPLICATE,), detail=detail)
+        return VideoResult(outcome, name=recording.file_name)
     seen[recording.id] = recording.file_name
     sdir = paths.source_dir(recording.id, settings.out)
     adapter = _FileRun(recording, sdir, settings)
@@ -536,9 +545,23 @@ def _settings(
         video=youtube and options.ytdlp.video,
         emit=emit,
         clock=clock,
-        language=options.asr.language,
+        language=_forced_language(options.asr.language, definition),
         languages=languages,
     )
+
+
+def _forced_language(code: str | None, definition: EngineDef) -> str | None:
+    """Return the forced language as the primary code the engines take, or raise for one the engine cannot take.
+
+    The Whisper adapter quietly auto-detects an unknown code, so a mistyped `--language` would go unnoticed.
+    """
+    if code is None:
+        return None
+    primary = re.split(r"[-_]", code.strip(), maxsplit=1)[0].lower()
+    whisper = definition.factory.startswith(_WHISPER_FACTORY)
+    if not re.fullmatch(r"[a-z]{2,3}", primary) or (whisper and primary not in registry.WHISPER_LANGUAGES):
+        raise ConfigError(f"asr.language = {code!r} is not a language code {definition.spec.id} knows (zh, en, ...)")
+    return primary
 
 
 def _allowed_languages(languages: tuple[str, ...], definition: EngineDef) -> tuple[str, ...]:
@@ -1009,7 +1032,12 @@ class _FileRun:
             ensure_wav=ensure_wav,
         )
         transcription = _Transcription(prepared, self.settings, trace)
-        document = transcription.run()
+        try:
+            document = transcription.run()
+        except BaseException:
+            # The source stays where it is and the WAV is quick to make again, so no copy of its audio is left.
+            (self.dir / WAV_NAME).unlink(missing_ok=True)
+            raise
         return VideoResult(
             self.outcome(),
             document,
