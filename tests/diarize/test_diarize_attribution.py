@@ -45,6 +45,7 @@ def test_the_larger_summed_probability_wins_among_active_channels() -> None:
     d = diarization(2, (0, 0, 1, 0.6), (1, 0, 1, 0.95))
     assert assign(words((0.2, 0.8)), d).speakers == ("S1",)
     assert assign(words((0.2, 0.8)), d).overlaps == (Span(0.2, 0.8),)
+    assert assign(words((0.2, 0.8)), d).overlapped == (True,)
 
 
 def test_a_word_in_a_short_gap_takes_the_nearest_speaker() -> None:
@@ -122,7 +123,7 @@ def test_silence_gives_no_speaker(smoothing: bool) -> None:
 
 
 def test_no_words_gives_nothing() -> None:
-    assert assign([], diarization(2, (0, 0, 2, 0.9))) == ((), ())
+    assert assign([], diarization(2, (0, 0, 2, 0.9))) == ((), (), ())
 
 
 def test_words_past_the_stored_frames_take_the_previous_speaker() -> None:

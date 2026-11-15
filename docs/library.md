@@ -71,7 +71,7 @@ Every error `process` and `expand` raise on purpose subclasses `YtverbatimError`
 
 ### Diarization
 
-`DiarizeOptions(mode="auto")`, the `[diarize]` section of `config.toml`, decides which sources get speaker labels. `"auto"` diarizes recordings and leaves YouTube videos alone; `"on"` diarizes every source transcribed with ASR, and `"off"` none. A diarized document lists its speakers in `document.speakers` (`S1`, `S2`, … by first appearance, each with `speech_s`), names one on every segment and paragraph, and describes the diarizer in `document.transcript.diarization`; an undiarized one has no speakers, `speaker` is `None` everywhere and `transcript.diarization` is `None`. An application that wants no diarization, whatever the source, sets `mode="off"` explicitly.
+`DiarizeOptions(mode="auto")`, the `[diarize]` section of `config.toml`, decides which sources get speaker labels. `"auto"` diarizes recordings and leaves YouTube videos alone; `"on"` diarizes every source transcribed with ASR, and `"off"` none. A diarized document lists its speakers in `document.speakers` (`S1`, `S2`, … numbered by first appearance when attributed, listed in id order, each with `speech_s`; a later text stage never renumbers them, so ids may have gaps and need not appear in order), names one on every segment and paragraph, and describes the diarizer in `document.transcript.diarization`; an undiarized one has no speakers, `speaker` is `None` everywhere and `transcript.diarization` is `None`. An application that wants no diarization, whatever the source, sets `mode="off"` explicitly.
 
 ## Versioning
 

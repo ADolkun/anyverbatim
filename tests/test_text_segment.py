@@ -603,3 +603,9 @@ def test_paragraphs_break_where_the_speaker_changes() -> None:
         (3, 3),
     ]
     assert seg.split_paragraphs(starts, ends, [None] * 4) == [(0, 3)]
+
+
+def test_an_opening_mark_at_a_turn_start_goes_with_the_turn_it_opens() -> None:
+    tokens = spoken_by([("好", "S1"), ("。", "S1"), ("“", "S1"), ("好", "S2"), ("的", "S2"), ("”", "S2")])
+    sentences = seg.segment_tokens(tokens, "zh")
+    assert [(s.text, s.speaker) for s in sentences] == [("好。", "S1"), ("“好的”", "S2")]

@@ -1079,6 +1079,7 @@
       "$ref": "#/$defs/Transcript"
     },
     "speakers": {
+      "description": "Empty when the transcript was not diarized. Ids are unique and listed in order of their number, with gaps allowed; their order of first appearance in the segments is not constrained.",
       "items": {
         "$ref": "#/$defs/Speaker"
       },

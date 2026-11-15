@@ -13,6 +13,7 @@ from test_pipeline_files import (  # noqa: F401
     FakeLLM,
     Media,
     Worker,
+    diarizer,
     engine_installed,
     media,
     rec_id,
@@ -433,7 +434,7 @@ def test_an_unreadable_composition_memo_gets_its_own_notice(
 
 
 def test_a_rerun_with_new_provenance_rebuilds_only_the_context_record(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit, media: Media, worker: Worker, diarizer, tmp_path: Path
 ) -> None:
     path = media.add(tmp_path / "memo.m4a", "alpha", tags={"title": "Container title"})
     llm = FakeLLM()
@@ -447,6 +448,7 @@ def test_a_rerun_with_new_provenance_rebuilds_only_the_context_record(
     assert (source.title, source.origin) == ("Renamed memo", "voice_memos")
     assert source.recorded_at == datetime.fromtimestamp(NEWEST, UTC)
     assert (len(worker.calls), len(llm.requests), media.converted) == (calls, requests, converted)
+    assert len(diarizer.calls) == 1 and [s.id for s in load_document(context(session_kit, "alpha")).speakers] == ["S1"]
     assert "skip" not in [e.stage for e in events]
     assert results[0].document is not None and results[0].document.source == source
     assert (session_kit.out / rec_id() / "context.md").read_text(encoding="utf-8").startswith("# Renamed memo\n")

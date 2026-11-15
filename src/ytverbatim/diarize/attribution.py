@@ -21,10 +21,14 @@ from typing import NamedTuple
 from ytverbatim.contract.models import Word
 from ytverbatim.diarize.protocol import Diarization
 
+# Part of every key that depends on what attribution decides: bump it on any change to the rules below.
+VERSION = "attribution-v1"
 GAP_S = 0.5
 OVERLAP_SHARE = 0.5
 SMOOTH_S = 0.5
 SMOOTH_WORDS = 2
+# What the pipeline runs; evals compare both settings.
+SMOOTHING = True
 _FRAME_DIGITS = 6
 
 
@@ -36,11 +40,13 @@ class Span(NamedTuple):
 class Attribution(NamedTuple):
     """`speakers[i]` is word i's speaker (`S1`, `S2`, … by first appearance), None only when nobody ever speaks.
 
-    `overlaps` are the merged spans of consecutive overlapped words.
+    `overlapped[i]` says whether another speaker talks over word i; `overlaps` are the merged spans of consecutive
+    overlapped words.
     """
 
     speakers: tuple[str | None, ...]
     overlaps: tuple[Span, ...]
+    overlapped: tuple[bool, ...]
 
 
 class _Scored(NamedTuple):
@@ -48,13 +54,13 @@ class _Scored(NamedTuple):
     overlapped: bool
 
 
-def assign(words: Sequence[Word], diarization: Diarization, *, smoothing: bool = True) -> Attribution:
+def assign(words: Sequence[Word], diarization: Diarization, *, smoothing: bool = SMOOTHING) -> Attribution:
     scored = [_score(word, diarization) for word in words]
     channels = _fill_gaps(words, [s.channel for s in scored], diarization)
     overlapped = [s.overlapped for s in scored]
     if smoothing:
         channels = _smooth(words, channels, overlapped)
-    return Attribution(_renumber(channels), _overlap_spans(words, overlapped))
+    return Attribution(_renumber(channels), _overlap_spans(words, overlapped), tuple(overlapped))
 
 
 def speech_seconds(segments: Iterable[tuple[float, float, str | None]]) -> dict[str, float]:

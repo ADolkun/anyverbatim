@@ -25,6 +25,7 @@ from ytverbatim.asr.models import (
 from ytverbatim.asr.runner import WorkerResult
 from ytverbatim.cli import main
 from ytverbatim.contract import RecordingSource, Word, load_document
+from ytverbatim.diarize import attribution
 from ytverbatim.diarize import protocol as diarize_protocol
 from ytverbatim.diarize import registry as diarize_registry
 from ytverbatim.diarize import runner as diarize_runner
@@ -144,9 +145,14 @@ class Diarizer:
 
     turns: list[tuple[int, int, int]] = field(default_factory=lambda: [(0, len(SPOKEN) - 1, 0)])
     calls: list[DiarizeRequest] = field(default_factory=list[DiarizeRequest])
+    error: EngineError | None = None
+    # Leaves a probabilities file that disagrees with its turns file.
+    truncated: bool = False
 
     def __call__(self, request: DiarizeRequest, *, python: str | None = None) -> DiarizeResult:
         self.calls.append(request)
+        if self.error is not None:
+            raise self.error
         out = Path(request.out_dir)
         out.mkdir(parents=True, exist_ok=True)
         spec = request.diarizer.spec
@@ -183,6 +189,8 @@ class Diarizer:
             max_rss_bytes=0,
         )
         atomic.write_json(out / diarize_protocol.METRICS_FILE, metrics.model_dump(mode="json"))
+        if self.truncated:
+            atomic.write_bytes(diarize_protocol.probs_path(out, job.id), b"\x00\x00")
         return DiarizeResult(out, metrics, 0, 0.0)
 
 
@@ -683,3 +691,66 @@ def test_youtube_with_auto_is_not_diarized_and_keeps_its_keys(session_kit) -> No
     )
     assert forced.diarizer is not None and forced.run_key() != youtube.run_key()
     assert settings(session_kit, "recording").diarizer is not None
+
+
+def test_a_failed_diarization_is_an_engine_error_and_a_rerun_keeps_the_decode(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    diarizer.error = EngineError("synthetic diarizer failure")
+    path = media.add(tmp_path / "meeting.m4a")
+    _, results, _ = run_files(session_kit, [path])
+    (failed,) = results
+    assert failed.outcome.error == "engine" and failed.error is not None
+    assert isinstance(failed.error, EngineError) and failed.error.stage == "diarize"
+    assert not (session_kit.out / rec_id() / "audio.wav").exists()
+
+    diarizer.error = None
+    report, results, _ = run_files(session_kit, [path])
+    assert report.exit_code == 0 and results[0].document is not None
+    assert len(worker.calls) == 1, "the finished decode is not repeated"
+    assert len(diarizer.calls) == 2 and [s.id for s in results[0].document.speakers] == ["S1"]
+
+
+def test_an_attribution_rule_change_rebuilds_the_document_without_either_worker(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    two_voices(diarizer)
+    path = media.add(tmp_path / "meeting.m4a")
+    run_files(session_kit, [path])
+    rdir = session_kit.out / rec_id()
+    before = json.loads((rdir / ".stages" / "asr.json").read_text(encoding="utf-8"))["input_hash"]
+
+    monkeypatch.setattr(attribution, "GAP_S", 0.4)
+    _, results, events = run_files(session_kit, [path])
+    stored = json.loads((rdir / ".stages" / "asr.json").read_text(encoding="utf-8"))
+    assert stored["input_hash"] != before and stored["output"]["diarization"]["params"]["attribution"]["gap_s"] == 0.4
+    assert "skip" not in [e.stage for e in events] and results[0].outcome.reused == ()
+    assert (len(worker.calls), len(diarizer.calls), media.converted) == (1, 1, ["meeting.m4a"])
+
+
+def test_a_moved_output_root_reuses_both_finished_worker_folders(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    two_voices(diarizer)
+    path = media.add(tmp_path / "meeting.m4a")
+    run_files(session_kit, [path])
+    moved = tmp_path / "moved"
+    session_kit.out.rename(moved)
+    (moved / rec_id() / ".stages" / "asr.json").unlink()
+    (moved / rec_id() / "context.json").unlink()
+
+    events: list[ProgressEvent] = []
+    report = process_files([path], out=moved, progress=events.append)
+    assert report.exit_code == 0 and "asr" in [e.stage for e in events]
+    assert (len(worker.calls), len(diarizer.calls), media.converted) == (1, 1, ["meeting.m4a"])
+    doc = load_document(moved / rec_id() / "context.json")
+    assert [s.id for s in doc.speakers] == ["S1", "S2"]
+
+
+def test_a_failure_reading_the_diarization_back_is_reported_at_the_asr_stage(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    diarizer.truncated = True
+    _, results, _ = run_files(session_kit, [media.add(tmp_path / "meeting.m4a")])
+    error = results[0].error
+    assert isinstance(error, EngineError) and error.stage == "asr" and "probs.f16" in str(error)

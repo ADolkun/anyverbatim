@@ -611,7 +611,8 @@ class _Settings:
         if self.languages:
             inputs["languages"] = list(self.languages)
         if self.diarizer is not None:
-            inputs["diarizer"] = _plain(asdict(self.diarizer))
+            # The attribution rules ride along, so a rule change rebuilds a finished document from its stored stages.
+            inputs["diarizer"] = stages.diarization_run(self.diarizer).model_dump(mode="json")
         return input_hash("context", versions["context"], inputs)
 
 
@@ -1059,6 +1060,8 @@ class _Decoding:
             hypotheses = asr_runner.finished(request)
             if hypotheses is None or (diarize is not None and diarize_runner.finished(diarize) is None):
                 return True
+            if self.settings.second_opinion is None:
+                return False
             source = self.transcribed(hypotheses, diarize)
         if self.settings.second_opinion is None:
             return False
@@ -1332,25 +1335,39 @@ class _Transcription:
         request = decoding.asr_request()
         diarize = decoding.diarize_request()
 
+        diarized_s = 0.0
+
         def compute() -> Transcribed:
+            nonlocal diarized_s
             hypotheses = asr_runner.finished(request) or asr_runner.run_worker(request).hypotheses
             if diarize is not None:
-                self._diarize(diarize)
+                diarized_s = self._diarize(diarize)
+                self.trace.stage = "asr"
             return decoding.transcribed(hypotheses, diarize)
 
         key = decoding.asr_key(request, diarize)
         engine = request.engine.spec.id
-        return self._stage("asr", key, Transcribed, compute, engine, keep=Path(request.out_dir))
+        source = self._stage("asr", key, Transcribed, compute, engine, keep=Path(request.out_dir))
+        if diarized_s:
+            # The diarize stage reports its own time; the asr stage's is what is left.
+            asr = self.trace.timings[-1]
+            self.trace.timings[-1] = replace(asr, seconds=max(asr.seconds - diarized_s, 0.0))
+        return source
 
-    def _diarize(self, request: DiarizeRequest) -> None:
-        """Run the diarization worker after the decode, never beside it; a finished folder of the request is reused."""
+    def _diarize(self, request: DiarizeRequest) -> float:
+        """Run the diarization worker after the decode, never beside it, and return the seconds it took.
+
+        A finished folder of the request is reused.
+        """
         began = time.monotonic()
         self.trace.emit("diarize", request.diarizer.spec.id)
         reused = diarize_runner.finished(request) is not None
         if not reused:
             diarize_runner.run_worker(request)
         _prune(self.store.work_dir("diarize"), Path(request.out_dir))
-        self.trace.timings.append(StageTiming("diarize", time.monotonic() - began, reused))
+        elapsed = time.monotonic() - began
+        self.trace.timings.append(StageTiming("diarize", elapsed, reused))
+        return elapsed
 
     def _from_captions(self, captions: Sequence[CaptionTrack]) -> Transcribed | None:
         language = self.prepared.language
