@@ -267,7 +267,7 @@ Whether your ChatGPT plan's data controls apply to this sign-in is unverified; s
 import ytverbatim
 
 ids = ytverbatim.expand("https://www.youtube.com/playlist?list=...", limit=20)
-result = ytverbatim.process(ids[0], llm=client)   # or process("meeting.m4a", llm=client)
+result = ytverbatim.process(ids[0], llm=client)  # or process("meeting.m4a", llm=client)
 document = result.document
 ```
 
