@@ -28,6 +28,7 @@ Lean contract for coding agents. Keep it short; link to docs for detail.
 ## Conventions
 - Conventional commits. No AI attribution and no `Co-Authored-By` trailers.
 - Comments explain why, never what.
+- The public API is `ytverbatim.__all__` plus `ytverbatim.errors|contract|config` ([docs/library.md](docs/library.md)); `tests/test_public_api.py` pins it, so change it deliberately and list a break in the docs.
 - Tests are offline: stub yt-dlp, network, and models. Use temporary directories.
 
 ## Shared checkouts

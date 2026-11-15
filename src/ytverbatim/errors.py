@@ -8,13 +8,39 @@ if TYPE_CHECKING:
     from ytverbatim.llm.protocol import Usage
 
 
+__all__ = [
+    "AuthError",
+    "AuthState",
+    "BatchStopError",
+    "BusyError",
+    "ConfigError",
+    "ContractError",
+    "DependencyError",
+    "EngineError",
+    "EngineMemoryError",
+    "LLMError",
+    "LLMOutputError",
+    "LLMUnavailableError",
+    "MediaValidationError",
+    "ProcMemoryExceeded",
+    "ProcTimeout",
+    "Signal",
+    "UnavailableError",
+    "YtDlpError",
+    "YtverbatimError",
+]
+
+
 class YtverbatimError(Exception):
     """Base class for every error raised on purpose by this package.
 
     `fix` is a one-line, actionable remedy for the caller to show; empty when there is nothing specific to say.
+    `stage` names where a failure happened when it is known: `info`, `captions`, `audio` or `video` while fetching a
+    video, otherwise the progress stage that was running (`asr`, `correct`, ...); None when unknown.
     """
 
     fix: str = ""
+    stage: str | None = None
 
 
 class ConfigError(YtverbatimError):

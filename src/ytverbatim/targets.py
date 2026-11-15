@@ -58,7 +58,7 @@ def classify(target: str | os.PathLike[str]) -> Target:
         return MemoSelector(target.removeprefix(MEMOS_PREFIX))
     text = target.strip()
     bare_id = ids.is_video_id(text)
-    ref = ids.classify(text)
+    ref = ids.parse_youtube(text)
     if ref is not None and not bare_id:
         return ref
     path = Path(target).expanduser()

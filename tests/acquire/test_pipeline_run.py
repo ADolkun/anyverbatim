@@ -1,13 +1,16 @@
 import json
 import logging
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
+from unittest import mock
 
 import pytest
 from click.testing import CliRunner
+from pipeline_fixture import FakeLLM
 from pydantic import JsonValue
 
 from ytverbatim import config, pipeline, proc
@@ -17,6 +20,7 @@ from ytverbatim.asr import registry
 from ytverbatim.asr import runner as asr_runner
 from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, RunMetrics, WorkerRequest
 from ytverbatim.asr.runner import WorkerResult
+from ytverbatim.auth.cooldown import stop_fix
 from ytverbatim.auth.fixes import fix_for
 from ytverbatim.auth.source import CookieFileSource
 from ytverbatim.auth.state import AuthState
@@ -24,6 +28,7 @@ from ytverbatim.cli import main
 from ytverbatim.contract import ContextDocument, Word, YouTubeSource, load_document
 from ytverbatim.errors import (
     AuthError,
+    BatchStopError,
     BusyError,
     ConfigError,
     ContractError,
@@ -36,9 +41,9 @@ from ytverbatim.errors import (
     UnavailableError,
     YtDlpError,
 )
-from ytverbatim.pipeline import ProgressEvent, VideoResult, process, process_many, video_lock
+from ytverbatim.pipeline import ProgressEvent, Result, VideoResult, process_many, video_lock
 from ytverbatim.store import input_hash
-from ytverbatim.ytdlp.types import Signal
+from ytverbatim.ytdlp.types import Signal, YtDlpRunner
 
 PUBLIC = "pubVideo001"
 MEMBERS = "memVideo001"
@@ -49,6 +54,18 @@ SENTENCES = (
     (" Markets", " rose", " today.", 5.0),
     (" Then", " they", " fell", " sharply.", 60.0),
 )
+
+
+def process(
+    target: str,
+    options: config.Options | None = None,
+    *,
+    runner_factory: Callable[[Sequence[str]], YtDlpRunner] | None = None,
+    **kwargs: Any,
+) -> Result:
+    """`pipeline.process` with a fake yt-dlp runner, which the public function takes from `default_runner`."""
+    with mock.patch.object(pipeline, "default_runner", runner_factory or pipeline.default_runner):
+        return pipeline.process(target, options, **kwargs)
 
 
 def youtube(document: ContextDocument | None) -> YouTubeSource:
@@ -209,7 +226,8 @@ def test_end_to_end_writes_a_valid_document_and_markdown(session_kit, worker: Fa
 
 def test_process_returns_the_document(session_kit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
-    doc = process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt, progress=lambda _event: None)
+    result = process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt, progress=lambda _event: None)
+    doc = result.document
     assert isinstance(doc, ContextDocument) and len(doc.segments) == 2
     assert load_document(session_kit.out / PUBLIC / "context.json") == doc
 
@@ -838,7 +856,7 @@ def test_process_returns_a_finished_document_despite_a_stop_on_a_successful_call
     yt = session_kit.yt()
     yt.secondary[("metadata", False)] = (Signal.BOT_CHECK,)
     with caplog.at_level(logging.WARNING, logger="ytverbatim.pipeline"):
-        doc = process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt)
+        doc = process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt).document
     assert isinstance(doc, ContextDocument) and len(doc.segments) == 2
     assert "back off" in caplog.text
     cooldown = session.read_cooldown()
@@ -966,3 +984,157 @@ def test_cli_exit_codes_follow_fetch(session_kit, worker: FakeWorker, monkeypatc
 def test_cli_rejects_non_youtube_targets(session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch) -> None:
     result = invoke(session_kit, session_kit.yt(), monkeypatch, "https://example.com/video")
     assert result.exit_code == 1 and "not a YouTube" in result.output
+
+
+def test_process_returns_a_result_that_matches_the_disk(session_kit, worker: FakeWorker) -> None:
+    yt = session_kit.yt()
+    events: list[ProgressEvent] = []
+    result = process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt, progress=events.append)
+
+    vdir = session_kit.out / PUBLIC
+    assert (result.id, result.kind) == (PUBLIC, "youtube")
+    assert result.directory == vdir and result.markdown_path == vdir / "context.md"
+    assert result.json_bytes == (vdir / "context.json").read_bytes()
+    assert load_document(result.json_bytes.decode("utf-8")) == result.document
+    assert result.video_path is None and result.reused == () and result.notices == ()
+    assert {event.id for event in events} == {PUBLIC}
+
+    again = process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt)
+    assert again.reused == ("context",) and again.json_bytes == result.json_bytes
+
+
+def test_process_names_the_video_file_when_the_video_was_requested(session_kit, worker: FakeWorker) -> None:
+    yt = session_kit.yt()
+    result = process(PUBLIC, video_options(on=True), out=session_kit.out, runner_factory=lambda _sleep: yt)
+    assert result.video_path == session_kit.out / PUBLIC / "video.mp4"
+
+
+def test_process_reads_the_document_under_the_source_lock(session_kit, worker: FakeWorker) -> None:
+    yt = session_kit.yt()
+    held: list[bool] = []
+    real_read = Path.read_bytes
+
+    def read_bytes(path: Path) -> bytes:
+        if path.name == "context.json":
+            try:
+                with video_lock(path.parent):
+                    held.append(False)
+            except BusyError:
+                held.append(True)
+        return real_read(path)
+
+    with mock.patch.object(Path, "read_bytes", read_bytes):
+        process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt)
+    assert held and all(held)
+
+
+def test_a_batch_stop_from_process_has_its_fix(session_kit, worker: FakeWorker) -> None:
+    yt = session_kit.yt()
+    yt.failures[("metadata", False)] = [session_kit.fail(Signal.BOT_CHECK)]
+    with pytest.raises(BatchStopError) as mid_run:
+        process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt)
+    assert mid_run.value.fix == stop_fix(Signal.BOT_CHECK, mid_run.value.until) and mid_run.value.fix
+
+    with pytest.raises(BatchStopError) as refused:
+        process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt)
+    assert refused.value.fix == stop_fix(Signal.BOT_CHECK, refused.value.until)
+
+
+def test_an_auth_error_from_process_has_its_fix_even_before_any_video_is_fetched(
+    session_kit, worker: FakeWorker
+) -> None:
+    always = config.load_options(overrides={"auth": {"policy": "always"}})
+    with pytest.raises(AuthError) as raised:
+        process(PUBLIC, always, out=session_kit.out, runner_factory=lambda _sleep: session_kit.yt())
+    assert raised.value.state is AuthState.NO_SOURCE and raised.value.fix == fix_for(AuthState.NO_SOURCE)
+
+
+@pytest.mark.parametrize(
+    ("label", "stage"), [("metadata", "info"), ("captions", "captions"), ("audio", "audio"), ("video", "video")]
+)
+def test_a_failed_fetch_names_its_stage(session_kit, worker: FakeWorker, label: str, stage: str) -> None:
+    yt = session_kit.yt()
+    yt.failures[(label, False)] = [session_kit.fail(Signal.NO_FORMATS)]
+    with pytest.raises(YtDlpError) as raised:
+        process(PUBLIC, video_options(on=True), out=session_kit.out, runner_factory=lambda _sleep: yt)
+    assert raised.value.stage == stage and raised.value.fix
+
+
+def test_a_failed_video_download_on_a_finished_document_is_the_video_stage(session_kit, worker: FakeWorker) -> None:
+    yt = session_kit.yt()
+    run(session_kit, yt)
+    yt.failures[("video", False)] = [session_kit.fail(Signal.NO_FORMATS)]
+    with pytest.raises(YtDlpError) as raised:
+        process(PUBLIC, video_options(on=True), out=session_kit.out, runner_factory=lambda _sleep: yt)
+    assert raised.value.stage == "video"
+
+
+def test_a_failure_after_the_fetch_names_the_stage_that_was_running(session_kit, worker: FakeWorker) -> None:
+    worker.error = EngineError("boom")
+    with pytest.raises(EngineError) as raised:
+        process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: session_kit.yt())
+    assert raised.value.stage == "asr"
+
+
+def test_a_caller_needs_only_the_public_names(session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Everything an application such as knowledge-flow does with this package, through `ytverbatim` and
+    `ytverbatim.errors` alone; only the yt-dlp runner is swapped, as the test cannot reach YouTube."""
+    import ytverbatim as yv
+    from ytverbatim.errors import AuthError, AuthState, BatchStopError, Signal, YtverbatimError
+
+    yt = session_kit.yt()
+    yt.playlist = [PUBLIC, "pubVideo002"]
+    monkeypatch.setattr(pipeline, "default_runner", lambda _sleep: yt)
+    monkeypatch.setattr(session, "default_runner", lambda _sleep: yt)
+    out = session_kit.out
+
+    members = yv.parse_youtube("https://www.youtube.com/playlist?list=UUMOxxxxxxxxxxxxxxxxxxxxxx")
+    assert members is not None and members.kind is yv.RefKind.PLAYLIST and members.members_only
+    video = yv.parse_youtube(f"https://youtu.be/{PUBLIC}")
+    assert video is not None and video.kind is yv.RefKind.VIDEO and video.url == yv.video_url(PUBLIC)
+
+    options = yv.Options(
+        auth=yv.AuthOptions(policy="auto", cookie_channels=()),
+        ytdlp=yv.YtdlpOptions(creator_note=False, video=True),
+        asr=yv.AsrOptions(engine="w-prod", source="captions", memory_cap_gib=None),
+        text=yv.TextOptions(correct=True, chapters="auto", numeric_second_opinion="off", script="zh-Hans"),
+        llm=yv.LLMOptions(provider="none"),
+    )
+    yv.check_dependencies(options)
+    assert yv.expand("https://www.youtube.com/playlist?list=PLsynthetic", auth="none", options=options) == [
+        PUBLIC,
+        "pubVideo002",
+    ]
+
+    stages: list[str] = []
+    result = yv.process(
+        video.url,
+        options,
+        llm=FakeLLM(),
+        out=out,
+        auth="none",
+        captions=True,
+        force=False,
+        cookies_first=False,
+        progress=lambda event: stages.append(event.stage),
+    )
+    assert stages[0] == "fetch" and stages[-1] == "write"
+    assert result.document.source.kind == "youtube" and result.document.source.id == PUBLIC
+    assert yv.load_document(result.json_bytes.decode("utf-8")) == result.document
+    assert (result.directory / "context.json").read_bytes() == result.json_bytes
+    assert result.video_path == yv.video_file(PUBLIC, out) and result.video_path is not None
+
+    yt.failures[("video", False)] = [session_kit.fail(Signal.NO_FORMATS)]
+    with pytest.raises(YtverbatimError) as failed:
+        yv.process(yv.video_url("pubVideo002"), options, llm=FakeLLM(), out=out, auth="none")
+    assert failed.value.stage == "video" and failed.value.fix
+
+    yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
+    with pytest.raises(AuthError) as refused:
+        yv.process(yv.video_url(MEMBERS), options, llm=FakeLLM(), out=out, auth="none", cookies_first=False)
+    assert refused.value.state is AuthState.AUTH_REQUIRED and refused.value.fix
+
+    yt.failures[("metadata", False)] = [session_kit.fail(Signal.BOT_CHECK)]
+    with pytest.raises(BatchStopError) as stopped:
+        yv.process(yv.video_url("pubVideo003"), options, llm=FakeLLM(), out=out, auth="none")
+    assert stopped.value.signal is Signal.BOT_CHECK and stopped.value.until is not None and stopped.value.fix

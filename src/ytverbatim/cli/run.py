@@ -195,7 +195,7 @@ def _run_files(
 
 def _print_progress(event: pipeline.ProgressEvent) -> None:
     detail = f" {event.detail}" if event.detail else ""
-    click.echo(f"… {event.video_id}  {event.stage}{detail}", err=True)
+    click.echo(f"… {event.id}  {event.stage}{detail}", err=True)
 
 
 def _print_result(result: pipeline.VideoResult) -> None:
