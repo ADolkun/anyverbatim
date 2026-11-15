@@ -12,6 +12,7 @@ from ytverbatim.ytdlp.runner import redact
 __all__ = [
     "AsrOptions",
     "AuthOptions",
+    "DiarizeOptions",
     "LLMOptions",
     "Options",
     "Overrides",
@@ -66,6 +67,12 @@ class TextOptions:
 
 
 @dataclass(frozen=True)
+class DiarizeOptions:
+    # "auto" labels speakers in recordings and leaves YouTube videos undiarized; "on" and "off" force it either way.
+    mode: Literal["auto", "on", "off"] = "auto"
+
+
+@dataclass(frozen=True)
 class LLMOptions:
     provider: Literal["none", "chatgpt", "claude-cli", "openai-compat"] = "chatgpt"
     # None means the provider's own default (chatgpt: gpt-6.1-sol at medium), so a config that switches provider
@@ -84,6 +91,7 @@ class Options:
     asr: AsrOptions = field(default_factory=AsrOptions)
     text: TextOptions = field(default_factory=TextOptions)
     llm: LLMOptions = field(default_factory=LLMOptions)
+    diarize: DiarizeOptions = field(default_factory=DiarizeOptions)
 
 
 Overrides = Mapping[str, Mapping[str, object]]
@@ -93,7 +101,14 @@ def load_options(path: Path | None = None, overrides: Overrides | None = None) -
     """Read the config file (absent means defaults); `overrides` win, and None values mean "not given"."""
     raw = _read(path if path is not None else paths.config_file())
     given = overrides or {}
-    sections = {"auth": AuthOptions, "ytdlp": YtdlpOptions, "asr": AsrOptions, "text": TextOptions, "llm": LLMOptions}
+    sections = {
+        "auth": AuthOptions,
+        "ytdlp": YtdlpOptions,
+        "asr": AsrOptions,
+        "text": TextOptions,
+        "llm": LLMOptions,
+        "diarize": DiarizeOptions,
+    }
     unknown = (set(raw) | set(given)) - set(sections)
     if unknown:
         raise ConfigError(f"unknown config section(s): {', '.join(sorted(unknown))}")
@@ -112,6 +127,7 @@ def load_options(path: Path | None = None, overrides: Overrides | None = None) -
         asr=AsrOptions(**_checked(AsrOptions, "asr", merged("asr"))),
         text=TextOptions(**_checked(TextOptions, "text", merged("text"))),
         llm=LLMOptions(**_checked(LLMOptions, "llm", merged("llm"))),
+        diarize=DiarizeOptions(**_checked(DiarizeOptions, "diarize", merged("diarize"))),
     )
 
 

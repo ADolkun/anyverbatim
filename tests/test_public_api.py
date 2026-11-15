@@ -16,12 +16,14 @@ import pytest
 import ytverbatim
 from ytverbatim import config, contract, errors, ids
 from ytverbatim.asr import registry
+from ytverbatim.diarize import registry as diarize_registry
 from ytverbatim.errors import DependencyError
 
 EXPECTED_ALL = [
     "AsrOptions",
     "AuthOptions",
     "ContextDocument",
+    "DiarizeOptions",
     "LLMClient",
     "LLMOptions",
     "LLMRequest",
@@ -128,6 +130,7 @@ DATACLASSES: dict[str, list[str]] = {
         "asr: AsrOptions = <factory>",
         "text: TextOptions = <factory>",
         "llm: LLMOptions = <factory>",
+        "diarize: DiarizeOptions = <factory>",
     ],
     "AuthOptions": ["policy: Literal['auto', 'always', 'never'] = 'auto'", "cookie_channels: tuple[str, ...] = ()"],
     "YtdlpOptions": [
@@ -151,6 +154,7 @@ DATACLASSES: dict[str, list[str]] = {
         "fillers: Literal['keep', 'remove'] = 'keep'",
         "numerals: Literal['digits', 'keep'] = 'digits'",
     ],
+    "DiarizeOptions": ["mode: Literal['auto', 'on', 'off'] = 'auto'"],
     "LLMOptions": [
         "provider: Literal['none', 'chatgpt', 'claude-cli', 'openai-compat'] = 'chatgpt'",
         "model: str | None = None",
@@ -182,7 +186,7 @@ def test_dataclass_fields_are_pinned_and_frozen(name: str) -> None:
 
 
 def test_the_stable_option_classes_are_the_config_ones() -> None:
-    for name in ("Options", "AuthOptions", "YtdlpOptions", "AsrOptions", "TextOptions", "LLMOptions"):
+    for name in ("Options", "AuthOptions", "YtdlpOptions", "AsrOptions", "TextOptions", "DiarizeOptions", "LLMOptions"):
         assert getattr(ytverbatim, name) is getattr(config, name)
     assert ytverbatim.ContextDocument is contract.ContextDocument
     assert ytverbatim.RefKind is ids.RefKind
@@ -223,6 +227,7 @@ def test_load_options_and_the_config_module_are_pinned() -> None:
     assert sorted(config.__all__) == [
         "AsrOptions",
         "AuthOptions",
+        "DiarizeOptions",
         "LLMOptions",
         "Options",
         "Overrides",
@@ -254,6 +259,7 @@ def libraries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> set[str]:
     monkeypatch.setenv("HOME", str(tmp_path))
     present = {"mlx_whisper", "mlx_audio"}
     monkeypatch.setattr(registry, "find_spec", lambda name: object() if name in present else None)
+    monkeypatch.setattr(diarize_registry, "find_spec", lambda name: object() if name in present else None)
     return present
 
 
@@ -269,12 +275,23 @@ def test_check_dependencies_names_the_extra_the_default_engine_needs(libraries: 
         ytverbatim.check_dependencies(source=source)  # type: ignore[arg-type]
 
 
-def test_a_recording_needs_the_asr_extra_only_when_its_engine_does(libraries: set[str]) -> None:
+def test_a_recording_needs_the_asr_extra_for_its_diarizer_or_its_engine(libraries: set[str]) -> None:
     libraries.discard("mlx_audio")
-    ytverbatim.check_dependencies(source="recording")
-    chosen = config.load_options(overrides={"asr": {"engine": "w-vad"}})
+    with pytest.raises(DependencyError, match=r"d-nemotron-8bit diarizer .* install ytverbatim\[asr\]"):
+        ytverbatim.check_dependencies(source="recording")
+    undiarized = config.load_options(overrides={"diarize": {"mode": "off"}})
+    ytverbatim.check_dependencies(undiarized, source="recording")
+    chosen = config.load_options(overrides={"asr": {"engine": "w-vad"}, "diarize": {"mode": "off"}})
     with pytest.raises(DependencyError, match=r"install ytverbatim\[asr\]"):
         ytverbatim.check_dependencies(chosen, source="recording")
+
+
+def test_youtube_needs_the_asr_extra_only_when_diarized_on_request(libraries: set[str]) -> None:
+    libraries.discard("mlx_audio")
+    ytverbatim.check_dependencies(source="youtube")
+    forced = config.load_options(overrides={"diarize": {"mode": "on"}})
+    with pytest.raises(DependencyError, match=r"install ytverbatim\[asr\]"):
+        ytverbatim.check_dependencies(forced, source="youtube")
 
 
 def test_check_dependencies_checks_the_second_opinion_engine(libraries: set[str]) -> None:

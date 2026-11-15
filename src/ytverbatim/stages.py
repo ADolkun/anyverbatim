@@ -1,21 +1,23 @@
 """The pure stages of `ytverbatim run`: source transcript → stretches → text stages → contract document.
 
 A *stretch* is the unit every text stage works on: one sentence-like piece of the source transcript, with its time
-range, the engine's timed words inside it, and the flags and edits raised on it so far. The source is cut into
-stretches once (at its own punctuation, or at pauses and a size limit where it has none). Text stages only replace a
-stretch's text; flags raised earlier are moved through each replacement by a diff, and every edit is kept.
+range, the engine's timed words inside it, its speaker when the source is diarized, and the flags and edits raised on
+it so far. The source is cut into stretches once (at its own punctuation, or at pauses and a size limit where it has
+none, and always at a change of speaker). Text stages only replace a stretch's text; flags raised earlier are moved
+through each replacement by a diff, and every edit is kept.
 
-`build_document` then re-times each stretch's final text against its words, re-cuts the whole transcript into
-sentences (punctuation restored by an LLM can merge or split stretches) and maps every flag and edit onto the
-sentence that holds it. Nothing here performs I/O.
+`build_document` then re-times each stretch's final text against its words, re-cuts the transcript into sentences
+within each run of same-speaker stretches (punctuation restored by an LLM can merge or split stretches) and maps every
+flag and edit onto the sentence that holds it. Nothing here performs I/O.
 """
 
 import collections
 import difflib
+import itertools
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
@@ -31,6 +33,7 @@ from ytverbatim.contract import (
     Access,
     Chapter,
     ContextDocument,
+    DiarizationRun,
     Edit,
     Flag,
     LLMUsage,
@@ -39,6 +42,7 @@ from ytverbatim.contract import (
     Segment,
     Source,
     SourceRef,
+    Speaker,
     Transcript,
     TranscriptRun,
     Word,
@@ -47,7 +51,10 @@ from ytverbatim.contract import (
 from ytverbatim.contract import CreatorNote as ContractCreatorNote
 from ytverbatim.contract import Generator as GeneratorInfo
 from ytverbatim.contract.models import SCHEMA_VERSION
+from ytverbatim.diarize import attribution
+from ytverbatim.diarize.protocol import Diarization, DiarizerDef
 from ytverbatim.errors import ContractError
+from ytverbatim.store import digest
 from ytverbatim.text import clean, numbers, offsets
 from ytverbatim.text import numerals as numerals_module
 from ytverbatim.text import segment as seg
@@ -79,6 +86,9 @@ class Stretch(_Model):
     flags: tuple[Flag, ...] = ()
     # Whole-stretch before/after texts, in the order the stages made them.
     edits: tuple[Edit, ...] = ()
+    # Left out of every dump while None, so the stage keys of undiarized documents stay what they were.
+    speaker: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    language: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class Transcribed(_Model):
@@ -92,6 +102,11 @@ class Transcribed(_Model):
     decoder_anomalies: int
     chunk_flags: dict[str, int]
     warnings: tuple[str, ...]
+    # Both set only for a diarized transcript, and left out of every dump otherwise, as for `Stretch.speaker`.
+    diarization: DiarizationRun | None = Field(default=None, exclude_if=lambda value: value is None)
+    # The digest of the speaker-attributed stretches (start, end, speaker), which speaker names are bound to: a rerun
+    # of a text stage keeps it, and anything that could move a speaker changes it.
+    assignment: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 @dataclass(frozen=True)
@@ -107,16 +122,59 @@ class SourceInfo:
     describe: Callable[[Sequence[Stretch]], Source]
 
 
+class Diarized(NamedTuple):
+    """A stored diarization of the source's audio and the diarizer that made it."""
+
+    definition: DiarizerDef
+    diarization: Diarization
+
+
 def run_id(definition: EngineDef) -> str:
     return f"asr:{definition.spec.id}"
 
 
-def from_asr_rows(rows: Sequence[ChunkHypothesis], definition: EngineDef, language_hint: str | None) -> Transcribed:
-    """Turn one engine's chunk rows (sorted by chunk) into stretches; `language_hint` is the source's declared one."""
+def diarization_run(definition: DiarizerDef) -> DiarizationRun:
+    """Describe the diarizer for the document; `params` include the attribution rules, so a rule change shows."""
+    rules: dict[str, JsonValue] = {
+        "gap_s": attribution.GAP_S,
+        "overlap_share": attribution.OVERLAP_SHARE,
+        "smoothing": True,
+        "smooth_s": attribution.SMOOTH_S,
+        "smooth_words": attribution.SMOOTH_WORDS,
+    }
+    spec = definition.spec
+    return DiarizationRun(
+        engine=spec.id,
+        model_repo=spec.repo,
+        model_revision=spec.revision,
+        params={**definition.variant, "attribution": rules},
+    )
+
+
+def from_asr_rows(
+    rows: Sequence[ChunkHypothesis],
+    definition: EngineDef,
+    language_hint: str | None,
+    diarized: Diarized | None = None,
+) -> Transcribed:
+    """Turn one engine's chunk rows (sorted by chunk) into stretches; `language_hint` is the source's declared one.
+
+    With `diarized`, every token gets the speaker attribution gives it, a stretch never crosses a change of speaker,
+    and the words a second speaker talks over are flagged `overlapping_speech`.
+    """
     spec = definition.spec
     language = _language(rows, language_hint)
     tokens, warnings = _tokens(rows, language)
+    overlapped: set[int] = set()
+    run: DiarizationRun | None = None
+    if diarized is not None:
+        tokens, overlapped = _attributed(tokens, diarized.diarization)
+        if any(token.speaker is not None for token in tokens):
+            run = diarization_run(diarized.definition)
+        elif tokens:
+            warnings.append("the diarizer heard no speaker anywhere, so the transcript has no speaker labels")
     sentences = seg.segment_tokens(tokens, language)
+    overlap_flags = _overlap_flags(sentences, overlapped)
     worded = {row.chunk for row in rows if any(word.text.strip() for word in row.words)}
     anomalies = {row.chunk: row for row in rows if _ANOMALY_FLAG in row.flags}
     stretches = tuple(
@@ -130,11 +188,12 @@ def from_asr_rows(rows: Sequence[ChunkHypothesis], definition: EngineDef, langua
                 if t.timed and t.text.strip()
             ),
             word_timed=any(t.origin in worded for t in sentence.tokens),
-            flags=_anomaly_flags(sentence, anomalies),
+            flags=_anomaly_flags(sentence, anomalies) + overlap_flags[number],
+            speaker=sentence.speaker,
         )
-        for sentence in sentences
+        for number, sentence in enumerate(sentences)
     )
-    run = TranscriptRun(
+    transcript_run = TranscriptRun(
         id=run_id(definition),
         kind="asr",
         engine=spec.id,
@@ -151,7 +210,7 @@ def from_asr_rows(rows: Sequence[ChunkHypothesis], definition: EngineDef, langua
         if not row.text.strip() and "empty_output" not in row.flags:
             counts["empty_output"] += 1
     return Transcribed(
-        run=run,
+        run=transcript_run,
         language=language,
         stretches=stretches,
         # Without a VAD (whole-file engines) there is no separate speech estimate; the transcribed span stands in.
@@ -159,7 +218,47 @@ def from_asr_rows(rows: Sequence[ChunkHypothesis], definition: EngineDef, langua
         decoder_anomalies=counts[_ANOMALY_FLAG],
         chunk_flags=dict(counts),
         warnings=tuple(warnings),
+        diarization=run,
+        assignment=digest([[s.start, s.end, s.speaker] for s in stretches]) if run is not None else None,
     )
+
+
+def _attributed(tokens: Sequence[seg.Token], diarization: Diarization) -> tuple[list[seg.Token], set[int]]:
+    """Each token with its speaker, and the indexes of the tokens another speaker talks over.
+
+    Tokens are attributed rather than the engine's words: they are the timed units sentences are cut from, and for an
+    engine without word timings they are the only timed units there are.
+    """
+    words = [Word(text=token.text.strip(), start=token.start, end=token.end) for token in tokens]
+    result = attribution.assign(words, diarization)
+    overlapped = {
+        index
+        for index, word in enumerate(words)
+        if any(span.start <= word.start and word.end <= span.end for span in result.overlaps)
+    }
+    attributed = [replace(token, speaker=speaker) for token, speaker in zip(tokens, result.speakers, strict=True)]
+    return attributed, overlapped
+
+
+def _overlap_flags(sentences: Sequence[seg.Sentence], overlapped: Collection[int]) -> list[tuple[Flag, ...]]:
+    """Per sentence, an `overlapping_speech` flag over each run of tokens another speaker talks over.
+
+    `overlapped` indexes the tokens given to `segment_tokens`, whose sentences hold them all, in order.
+    """
+    out: list[tuple[Flag, ...]] = []
+    cursor = 0
+    for sentence in sentences:
+        flags: list[Flag] = []
+        hits = [i for i in range(len(sentence.tokens)) if cursor + i in overlapped]
+        cursor += len(sentence.tokens)
+        for _, group in itertools.groupby(enumerate(hits), key=lambda pair: pair[1] - pair[0]):
+            run = [i for _, i in group]
+            span = sentence.span(run[0], run[-1])
+            if span is not None:
+                note = "another speaker talks at the same time here"
+                flags.append(Flag(kind="overlapping_speech", char_start=span[0], char_end=span[1], note=note))
+        out.append(tuple(flags))
+    return out
 
 
 def caption_run_id(track: CaptionTrack) -> str:
@@ -504,7 +603,10 @@ def _build(
             edits[k].append(edit)
 
     chapter_of, chapter_list = _chapters(info.chapters, sentences, enabled=chapters)
-    paragraph_ranges = seg.split_paragraphs([s.start for s in sentences], [s.end for s in sentences], chapter_of)
+    turns = [sentence.speaker for sentence in sentences] if source.diarization is not None else []
+    paragraph_ranges = seg.split_paragraphs(
+        [s.start for s in sentences], [s.end for s in sentences], chapter_of, speakers=turns
+    )
     paragraph_of = [index for index, (first, last) in enumerate(paragraph_ranges) for _ in range(first, last + 1)]
     run = source.run
     segments = tuple(
@@ -527,6 +629,7 @@ def _build(
             end=max(s.end for s in sentences[first : last + 1]),
             first_segment=first,
             last_segment=last,
+            speaker=sentences[first].speaker,
         )
         for index, (first, last) in enumerate(paragraph_ranges)
     )
@@ -542,15 +645,21 @@ def _build(
             runs=(run,),
             punctuation=_punctuation(text, language, run, llm_punctuated=llm_punctuated),
             correction_llm=correction_llm,
-            diarization=None,
+            diarization=source.diarization,
         ),
-        speakers=(),
+        speakers=_speakers(segments),
         chapters=chapter_list,
         paragraphs=paragraphs,
         segments=segments,
         quality=_quality(source, segments, notes),
         llm_usage=tuple(llm_usage),
     )
+
+
+def _speakers(segments: Sequence[Segment]) -> tuple[Speaker, ...]:
+    """List the final segments' speakers under their ids; one whose text a later stage removed simply drops out."""
+    talk = attribution.speech_seconds((s.start, s.end, s.speaker) for s in segments)
+    return tuple(Speaker(id=speaker, name=None, speech_s=seconds) for speaker, seconds in talk.items())
 
 
 def _layout(stretches: Sequence[Stretch], language: str) -> _Layout:
@@ -565,6 +674,8 @@ def _layout(stretches: Sequence[Stretch], language: str) -> _Layout:
         piece, complete = _retimed(stretch, text, index, language)
         if not complete:
             interpolated.add(index)
+        if stretch.speaker is not None:
+            piece = [replace(token, speaker=stretch.speaker) for token in piece]
         joined = _joined(tokens, piece, zh=zh)
         position = len(stretch.text) - len(stretch.text.lstrip()) - (len(joined[0].text) - len(piece[0].text))
         for token in joined:
@@ -763,6 +874,7 @@ def _segment(
         )
     return Segment(
         id=index,
+        speaker=sentence.speaker,
         start=sentence.start,
         end=sentence.end,
         text=sentence.text,

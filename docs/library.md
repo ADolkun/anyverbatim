@@ -15,7 +15,7 @@ Everything in `ytverbatim.__all__`, plus the modules `ytverbatim.errors`, `ytver
 | `parse_youtube(text) -> YouTubeRef \| None`, `YouTubeRef`, `RefKind`, `video_url(video_id)` | Classify a YouTube URL or id as a video, playlist or channel. |
 | `check_dependencies(options=None, *, source="youtube") -> None` | Raise `DependencyError` naming the missing extra, before any work. |
 | `load_document`, `ContextDocument` | Read and model `context.json` (contract 2.0); the sub-models are in `ytverbatim.contract`. |
-| `Options`, `AuthOptions`, `YtdlpOptions`, `AsrOptions`, `TextOptions`, `LLMOptions` | The options; also in `ytverbatim.config`. |
+| `Options`, `AuthOptions`, `YtdlpOptions`, `AsrOptions`, `TextOptions`, `DiarizeOptions`, `LLMOptions` | The options; also in `ytverbatim.config`. |
 | `LLMClient`, `LLMRequest`, `LLMResponse`, `Usage` | The protocol an injected LLM implements. |
 | `ProgressEvent` | What the `progress` callback receives: `id`, `stage`, `detail`. |
 | `quantity_tokens`, `QToken`, `QKind` | The quantity tokenizer that numeric verification uses. |
@@ -38,7 +38,7 @@ Everything in `ytverbatim.__all__`, plus the modules `ytverbatim.errors`, `ytver
 |---|---|
 | `fetch` | The video's metadata, captions, audio or video are being downloaded (a recording's audio is being converted). |
 | `skip` | A current `context.json` already exists, or the file is the same audio as another in the batch. |
-| `asr`, `diarize`, `second_opinion` | Speech recognition, speaker attribution, and the second engine's reading of numbers. |
+| `asr`, `diarize`, `second_opinion` | Speech recognition; speaker diarization, which runs after the decode for a diarized source (see `DiarizeOptions`); and the second engine's reading of numbers. |
 | `normalize`, `punctuate`, `correct`, `numeric`, `numerals` | The text stages. |
 | `write` | The document is being built and written. |
 
@@ -67,7 +67,11 @@ Every error `process` and `expand` raise on purpose subclasses `YtverbatimError`
 
 ### Dependencies
 
-`check_dependencies(options, source="youtube")` checks that the ASR engine the options select for that source (`"youtube"` or `"recording"`) can be imported, plus the numeric second-opinion engine when one is on, and names the extra that is missing: `whisper` for `w-prod`, the default, and `asr` for the other engines. `process` runs the same check before any request. Nothing is imported or downloaded; an unknown engine is a `ConfigError`, and an unknown source a `ValueError`.
+`check_dependencies(options, source="youtube")` checks that the ASR engine the options select for that source (`"youtube"` or `"recording"`) can be imported, plus the diarizer when that source is diarized and the numeric second-opinion engine when one is on, and names the extra that is missing: `whisper` for `w-prod`, the default, and `asr` for the other engines and the diarizer. With the default options a recording therefore needs both, `ytverbatim[whisper,asr]`. `process` runs the same check before any request. Nothing is imported or downloaded; an unknown engine is a `ConfigError`, and an unknown source a `ValueError`.
+
+### Diarization
+
+`DiarizeOptions(mode="auto")`, the `[diarize]` section of `config.toml`, decides which sources get speaker labels. `"auto"` diarizes recordings and leaves YouTube videos alone; `"on"` diarizes every source transcribed with ASR, and `"off"` none. A diarized document lists its speakers in `document.speakers` (`S1`, `S2`, … by first appearance, each with `speech_s`), names one on every segment and paragraph, and describes the diarizer in `document.transcript.diarization`; an undiarized one has no speakers, `speaker` is `None` everywhere and `transcript.diarization` is `None`. An application that wants no diarization, whatever the source, sets `mode="off"` explicitly.
 
 ## Versioning
 
@@ -85,7 +89,7 @@ Every error `process` and `expand` raise on purpose subclasses `YtverbatimError`
 3. Internal modules are no longer API. Of the modules an application may have imported, `ids`, `paths`, `pipeline`, `acquire.*`, `auth.*`, `asr.*`, `ytdlp.*` and `llm.*` are internal; the names below replace what they were used for.
 4. `BatchStopError.fix` is set by `process` as well as `expand`, and every error from either has a `stage` attribute.
 5. `AsrOptions.engine` defaults to `None`, meaning the source's default engine (YouTube still gets `w-prod`).
-6. A new `[diarize]` section; `auto` means no change for YouTube.
+6. A new `[diarize]` section (`DiarizeOptions`, a new `Options.diarize` field); `auto` means no change for YouTube.
 7. `ProgressEvent.video_id` is now `ProgressEvent.id`, since it also names recordings.
 8. `process` no longer takes `runner_factory`.
 

@@ -76,6 +76,8 @@ class Token:
     timed: bool = True
     # Opaque tag of where the token came from (the chunk index); `Sentence.span_of` finds a tag's characters.
     origin: int = 0
+    # The diarized speaker ("S1"), or None when the transcript is not diarized; sentences never cross a change.
+    speaker: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,12 +89,19 @@ class Sentence:
     # Offset into `text` where each token begins.
     offsets: tuple[int, ...]
 
+    @property
+    def speaker(self) -> str | None:
+        return self.tokens[0].speaker
+
     def span_of(self, origin: int) -> tuple[int, int] | None:
         """Half-open character range of the tokens tagged `origin`, or None when it has none in this sentence."""
         hits = [i for i, token in enumerate(self.tokens) if token.origin == origin]
         if not hits:
             return None
-        first, last = hits[0], hits[-1]
+        return self.span(hits[0], hits[-1])
+
+    def span(self, first: int, last: int) -> tuple[int, int] | None:
+        """Half-open character range of tokens `first..last`, without their outer whitespace; None when blank."""
         end = self.offsets[last + 1] if last + 1 < len(self.offsets) else len(self.text)
         start = self.offsets[first]
         covered = self.text[start:end]
@@ -360,14 +369,16 @@ def segment_tokens(tokens: Sequence[Token], language: str) -> list[Sentence]:
 
     Sentence-final punctuation decides first. Unpunctuated text (a whole document, or a long stretch with no marks)
     is also cut at pauses of 0.6 s and at about 40 CJK units or 20 English words. Whatever is still longer than 120
-    CJK units or 60 words is split at the comma nearest its middle.
+    CJK units or 60 words is split at the comma nearest its middle. A sentence never crosses a change of speaker; a
+    token with nothing to read (bare punctuation) belongs to the speaker before it.
     """
     kept = [token for token in tokens if token.text.strip()]
     if not kept:
         return []
     text = "".join(token.text for token in kept)
     cutter = _Cutter(kept, zh=uses_zh_rules(text, language))
-    cuts = cutter.terminator_cuts(text)
+    kept = _reading_speakers(kept, cutter)
+    cuts = cutter.terminator_cuts(text) | _speaker_cuts(kept)
     ranges = _ranges(len(kept), cuts)
     unpunctuated = not is_punctuated(text, language)
     ranges = [
@@ -382,11 +393,16 @@ def split_paragraphs(
     ends: Sequence[float],
     chapters: Sequence[int | None],
     *,
+    speakers: Sequence[str | None] = (),
     pause_s: float = PARAGRAPH_PAUSE_S,
     max_sentences: int = PARAGRAPH_MAX_SENTENCES,
     max_seconds: float = PARAGRAPH_MAX_S,
 ) -> list[tuple[int, int]]:
-    """Inclusive sentence index ranges. A paragraph ends at a pause, at a size limit, or at a chapter boundary."""
+    """Inclusive sentence index ranges.
+
+    A paragraph ends at a pause, at a size limit, at a chapter boundary, or where the speaker changes (`speakers`,
+    one per sentence, empty when the transcript is not diarized).
+    """
     ranges: list[tuple[int, int]] = []
     first = 0
     for i in range(1, len(starts)):
@@ -396,6 +412,7 @@ def split_paragraphs(
             or i - first >= max_sentences
             or ends[i - 1] - starts[first] >= max_seconds
             or chapters[i] != chapters[i - 1]
+            or (speakers and speakers[i] != speakers[i - 1])
         ):
             ranges.append((first, i - 1))
             first = i
@@ -419,6 +436,30 @@ def _sentence(tokens: Sequence[Token]) -> Sentence:
         offsets.append(min(max(position - lead, 0), len(text)))
         position += len(token.text)
     return Sentence(text, tokens[0].start, max(token.end for token in tokens), tuple(tokens), tuple(offsets))
+
+
+def _reading_speakers(tokens: list[Token], cutter: "_Cutter") -> list[Token]:
+    """Give each token with nothing to read the speaker of the token before it, or of the first one after it.
+
+    A speaker change then always falls before a token with something to read, so a range of bare punctuation never
+    starts a speaker's turn and `_attach_bare_punctuation` never merges across one.
+    """
+    if all(token.speaker is None for token in tokens):
+        return tokens
+    reading = [index for index in range(len(tokens)) if cutter.units(index, index + 1)]
+    if not reading:
+        return tokens
+    out: list[Token] = []
+    speaker = tokens[reading[0]].speaker
+    for index, token in enumerate(tokens):
+        if cutter.units(index, index + 1):
+            speaker = token.speaker
+        out.append(token if token.speaker == speaker else replace(token, speaker=speaker))
+    return out
+
+
+def _speaker_cuts(tokens: Sequence[Token]) -> set[int]:
+    return {i for i in range(len(tokens) - 1) if tokens[i].speaker != tokens[i + 1].speaker}
 
 
 def _ranges(count: int, cuts: set[int]) -> list[tuple[int, int]]:

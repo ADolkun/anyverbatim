@@ -6,7 +6,15 @@ if TYPE_CHECKING:
     from ytverbatim.acquire.session import expand
     from ytverbatim.acquire.video import video_file
     from ytverbatim.auth.chromium import SUPPORTED_BROWSERS
-    from ytverbatim.config import AsrOptions, AuthOptions, LLMOptions, Options, TextOptions, YtdlpOptions
+    from ytverbatim.config import (
+        AsrOptions,
+        AuthOptions,
+        DiarizeOptions,
+        LLMOptions,
+        Options,
+        TextOptions,
+        YtdlpOptions,
+    )
     from ytverbatim.contract import ContextDocument, load_document
     from ytverbatim.ids import RefKind, YouTubeRef, parse_youtube, video_url
     from ytverbatim.llm.protocol import LLMClient, LLMRequest, LLMResponse, Usage
@@ -21,6 +29,7 @@ _LAZY = {
     "AsrOptions": "ytverbatim.config",
     "AuthOptions": "ytverbatim.config",
     "ContextDocument": "ytverbatim.contract",
+    "DiarizeOptions": "ytverbatim.config",
     "LLMClient": "ytverbatim.llm.protocol",
     "LLMOptions": "ytverbatim.config",
     "LLMRequest": "ytverbatim.llm.protocol",
@@ -51,6 +60,7 @@ __all__ = [
     "AsrOptions",
     "AuthOptions",
     "ContextDocument",
+    "DiarizeOptions",
     "LLMClient",
     "LLMOptions",
     "LLMRequest",
