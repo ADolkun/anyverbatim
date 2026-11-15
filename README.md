@@ -1,73 +1,247 @@
 # ytverbatim
 
-Turn YouTube URLs into verified, timestamped transcripts for LLM context.
+Turn YouTube videos and your own recordings (meetings, iPhone Voice Memos) into verified, timestamped transcripts for LLM context.
 
-Language models need transcripts they can cite. `ytverbatim` aims to produce text where every line carries a timestamp, so a quote can be traced back to the exact moment in the video. It works with your own logged-in browser session, so Premium and members-only videos you can already watch are covered. Speech recognition runs locally on Apple Silicon (MLX), with a focus on Mandarin and English.
+Language models need transcripts they can cite. `ytverbatim` aims to produce text where every line carries a timestamp, so a quote can be traced back to the exact moment in a video or a meeting. Speech recognition runs locally on Apple Silicon (MLX), with a focus on Mandarin and English.
 
-**Status: pre-alpha.** `ytverbatim run` turns a video into a transcript with local Whisper and checks numbers against independent readings where there are any (the video's own captions, or an optional second engine). With an LLM (ChatGPT's gpt-6.1-sol by default, or one you choose), it also restores missing punctuation and corrects misheard words. An engine evaluation kept mlx-whisper large-v3 as the default ([result](evals/results/asr-2026-11-13.md)).
+- **YouTube** videos, playlists and channels. It works with your own logged-in browser session, so Premium and members-only videos you can already watch are covered.
+- **Local recordings:** audio or video files, folders of them, and iPhone Voice Memos synced to your Mac. Conversations get speaker labels.
 
-## Usage
+**Status: pre-alpha.** `ytverbatim run` turns a source into a transcript with local Whisper and checks numbers against independent readings where there are any (a video's own captions, or an optional second engine). With an LLM (ChatGPT's gpt-6.1-sol by default, or one you choose), it also restores missing punctuation and corrects misheard words. An engine evaluation kept mlx-whisper large-v3 as the default ([result](evals/results/asr-2026-11-13.md)). Recordings support is new and is still being checked on real meetings and memos.
+
+## Install
+
+Requirements:
+
+- macOS on Apple Silicon
+- `ffmpeg`, with `ffprobe`
+- For YouTube: a JavaScript runtime for yt-dlp, Deno or Node 22 or newer
+- `curl_cffi` (installed with ytverbatim, MIT): yt-dlp asks for browser impersonation on caption downloads, and without it YouTube rate-limits them (HTTP 429) more often and yt-dlp warns that no impersonate target is available
+
+Two extras hold the speech engines. `run` checks for the extra it needs before it downloads anything, and the error names it.
+
+| You want | Install |
+|---|---|
+| YouTube, with the default engine (`w-prod`, mlx-whisper large-v3) | `ytverbatim[whisper]` |
+| Recordings, which are diarized by default | `ytverbatim[whisper,asr]` |
+| The other engines, and diarizing YouTube videos | `ytverbatim[asr]` |
+
+Pre-alpha, so install from a checkout with [uv](https://docs.astral.sh/uv/):
+
+```
+uv sync --extra whisper --extra asr
+```
+
+## Quick start
+
+```
+ytverbatim login                                     # once, for the default LLM
+ytverbatim run https://www.youtube.com/watch?v=VIDEO_ID
+ytverbatim run meeting.m4a                           # a recording; folders work too
+ytverbatim run memos:new                             # new iPhone Voice Memos
+ytverbatim speakers rec-0123456789abcdef S1=Alice S2=Bob
+```
+
+| Command | What it does |
+|---|---|
+| `run TARGET...` | Transcribe YouTube URLs or ids, files, folders, or `memos:` selectors. |
+| `memos` | List the iPhone Voice Memos synced to this Mac. |
+| `speakers TARGET [ID=NAME]...` | List, name or merge a recording's speakers. |
+| `render CONTEXT.json` | Rewrite the markdown from a `context.json`. |
+| `fetch URL...` | Download a video's metadata, captions and audio without transcribing. |
+| `auth` | Set up your browser login for YouTube (see [docs/auth.md](docs/auth.md)). |
+| `login`, `logout` | Sign in to or out of ChatGPT, the default LLM. |
+| `status` | Show the YouTube login, the ChatGPT sign-in, the LLM in use and Voice Memos access, with no LLM call. |
+| `llm test` | One tiny live call to the configured LLM. |
+
+`status` exits 1 when a line needs attention. No browser login is fine: YouTube is then limited to public videos. The Voice Memos line is information only and never changes the exit code.
+
+A run takes one kind of target: YouTube, or local (files, folders and memos, which can be mixed). Exit codes: 0 ok, 1 some sources failed, 2 auth error, 3 batch stopped (a YouTube cooldown).
+
+## YouTube
 
 ```
 ytverbatim run URL... [--out DIR] [--auth SPEC] [--engine ID] [--source asr|captions] [--correct/--no-correct]
-                      [--chapters auto|none] [--diarize/--no-diarize] [--llm SPEC] [--captions/--no-captions]
-                      [--force] [--ignore-cooldown]
-ytverbatim render CONTEXT.json [--stdout]
-ytverbatim login [--switch] [--no-browser]
-ytverbatim logout
-ytverbatim status [--json] [--refresh]
-ytverbatim memos [--all] [--json] [--out DIR]
-ytverbatim run memos:new|latest|all|ID [--out DIR] [--llm SPEC] [--quiet] ...
-ytverbatim llm test [--provider P] [--model M] [--effort E]
+                      [--chapters auto|none] [--diarize/--no-diarize] [--language CODE] [--glossary TERMS]
+                      [--llm SPEC] [--captions/--no-captions] [--force] [--ignore-cooldown]
 ```
 
-Each video (playlists and channels are expanded) gets a folder `<out>/<video id>/` holding `context.json` (the versioned contract), `context.md` (the same transcript as markdown with a timestamped link per paragraph and YouTube chapters as headings) and the downloaded audio (plus `video.mp4` when [video](#library) is on). Exit codes: 0 ok, 1 some videos failed, 2 auth error, 3 batch stopped. `ytverbatim fetch` downloads without transcribing; `ytverbatim auth` sets up your browser login for YouTube (see [docs/auth.md](docs/auth.md)); `ytverbatim status` shows the YouTube login, the ChatGPT sign-in and the LLM in use on one screen, without an LLM call, and exits 1 when a line needs attention (no browser login is fine: YouTube is then limited to public videos); `ytverbatim render` rewrites the markdown from a `context.json`. `ytverbatim memos` lists the iPhone Voice Memos synced to this Mac (newest 20, or `--all`) with date, duration, title, status and a short id; it reads a private copy of the Voice Memos library (nothing is written into Apple's container), needs Full Disk Access for the app you run it from, and hashes nothing. `status` shows a matching informational Voice Memos line that never changes its exit code.
+Each video (playlists and channels are expanded) gets a folder `<out>/<video id>/` under `~/.local/share/ytverbatim/videos/`. It holds:
 
-`ytverbatim run memos:new`, `memos:latest`, `memos:all` or `memos:ID` transcribes Voice Memos through `run`, so every `run` option applies; ID is the start of a memo id as `memos` lists it (8 characters), and an ambiguous or unknown one is refused. `memos:new` runs the memos that have no document yet in the output root and hashes only the memos it has not seen before; it needs no terminal, which makes it safe for a cron or launchd job; add `--quiet` there so an idle run (no new memos, memos not downloaded, memos another run holds) prints nothing and cron sends no mail, while errors and finished work still print. Memos that are not downloaded to this Mac are skipped with a notice (open the memo once in Voice Memos to download it) and are never hashed. The memo's title and recording date from Voice Memos become the document's `title` and `recorded_at`, ahead of the file's own tags, and `source.origin` is `voice_memos`; a memo renamed in Voice Memos, or one first transcribed from a shared file, gets its record updated on the next run from the stored stages, with no ASR or LLM call. Selectors are case-insensitive, and several can be given: each memo runs once, newest first. A memo another run is still transcribing is skipped, not failed, so overlapping cron runs exit 0. When Voice Memos is not syncing or ytverbatim cannot read its library, the error says how to fix it. A cron or launchd job needs Full Disk Access for the program the job runs, not for your terminal: for cron that is `cron` itself, and for a launchd agent it is the executable in `ProgramArguments` (exact attribution is unverified); the job also needs `ytverbatim login` to have run once.
+- `context.json`, the versioned [contract](#contract-20)
+- `context.md`, the same transcript as markdown with a timestamped link per paragraph and YouTube chapters as headings
+- the downloaded audio, plus `video.mp4` when [video](docs/library.md#video) is on
 
-The stages run in this order: metadata, captions and audio; ASR (or, with `--source captions`, the manual caption track, falling back to ASR with a warning when there is none); for a diarized source, speaker diarization (see [Speakers](#speakers)); normalize (Simplified Chinese by default, `[text] script = "keep"` to leave the script alone; fillers are kept unless `[text] fillers = "remove"`); punctuation, only where the transcript has too few sentence marks; correction, whenever the text stages have an LLM (`--no-correct` or `[text] correct = false` turns it off); numeric verification against captions in the transcript's language (without such captions or a second opinion the numbers rest on the transcript alone, and a warning says so); for Mandarin, Chinese numerals written as digits per GB/T 15835-2011 (see [Numerals](#numerals)); then sentences, paragraphs, chapters and the documents. Every stage is stored under `<video>/.stages/` (the numerals stage only when it runs), keyed by what it read: a rerun with other options recomputes only the stages those options reach, an interrupted run resumes, and a video whose `context.json` is current is skipped. `--force` discards the stored stages and recomputes every one, including the paid LLM calls. The 16 kHz WAV is deleted once the transcript and the speaker turns are stored; the compressed audio stays.
+`--source captions` trusts the video's manual caption track and falls back to ASR with a warning when there is none.
 
-`--llm PROVIDER:MODEL` picks the text stages' LLM for one run and `--llm none` runs without one (see [LLM](#llm)). A provider other than the configured one starts from its own defaults, so a configured `base_url` or `effort` does not get in the way. The LLM's effort and endpoint host are part of its identity, so changing them redoes the LLM stages. Without one, punctuation is left as transcribed, correction is skipped and disputed numbers stay flagged with every reading; punctuation and numbers are recorded in `quality.warnings` and printed as a notice. With an LLM, correction runs unless switched off; `--correct` (or `[text] correct = true`) without an LLM is an error. `llm_usage` is what the document cost in LLM tokens, per stage: batches reused from earlier runs count too, so a rerun that reuses everything reports the same totals. It is not what one run spent. As a library, `ytverbatim.process(url, options, llm=client)` takes any object that satisfies `ytverbatim.LLMClient` (see [Library](#library) for running without one).
+When YouTube answers with a bot check or a rate limit, the batch stops and a cooldown starts (1 hour, doubling on repeats up to 24 hours). Until it ends, `run` and `fetch` refuse to start. Only a `run` whose targets are all single videos it has already finished goes ahead, because it requests nothing. `--ignore-cooldown` starts anyway, at the risk of your account being flagged; use it only when you know the block has lifted.
 
-When YouTube answers with a bot check or a rate limit, the batch stops and a cooldown starts (1 hour, doubling on repeats up to 24 hours). Until it ends, `run` and `fetch` refuse to start; only a `run` whose targets are all single videos it has already finished goes ahead, because it requests nothing. `--ignore-cooldown` starts anyway, at the risk of your account being flagged; use it only when you know the block has lifted.
+## Recordings
 
-The default engine, `w-prod`, is mlx-whisper large-v3 and needs the `whisper` extra (`uv sync --extra whisper`); the other engines need the `asr` extra. `run` checks for the engine's extra before it downloads anything.
+```
+ytverbatim run meeting.m4a standup.mp4 ~/Recordings/2026-11/
+```
 
-ASR runs in a separate worker process under a memory watch, so a runaway model cannot take down the Mac. The worker is killed if its physical footprint passes `memory_cap_gib` (default: half of physical memory) or if the system's available memory falls below 10%. The batch then stops with a fix for whichever one fired, and the next run resumes from the chunks already finished. On an 8 GiB Mac the default cap of 4 GiB may be too tight for `w-prod`; raise `asr.memory_cap_gib` (at most 90% of physical memory). To change the cap, set it in `~/.config/ytverbatim/config.toml`:
+Files and folders (searched recursively) work like YouTube videos, with no download and no cooldown. YouTube-only options (`--auth`, `--source`, `--captions`, `--ignore-cooldown`) are refused for them.
+
+- **Id.** A recording's id is `rec-` plus 16 hex digits: the first 16 of the SHA-256 of the transcribed audio stream's encoded packets. Renaming the file, editing its tags or remuxing it keeps the id. The same audio twice in a run is transcribed once.
+- **Folder.** `~/.local/share/ytverbatim/recordings/rec-0123456789abcdef/` holds `context.json`, `context.md` and, once you name speakers, `speakers.json`. Your file is only read, never copied or changed.
+- **`index.md`.** The recordings folder has an `index.md`: every recording by date, title, duration and speakers, newest first, each linking to its `context.md`. It is the one file to hand to another tool.
+- **Reruns.** A recording whose `context.json` is current is skipped. A rerun with other options redoes only the stages they reach. `--force` redoes everything, including paid LLM calls.
+- **Title and date** come from the file's tags, or its name, and never from its modification time.
+
+Everything else, including the folder layout, the markdown format and the file types read from folders, is in [docs/recordings.md](docs/recordings.md).
+
+## Voice Memos
+
+```
+ytverbatim memos [--all] [--json]
+ytverbatim run memos:new|latest|all|ID [--quiet] ...
+```
+
+- `memos` lists your memos, newest 20 or `--all`: date, duration, title, status and a short id. Status is `transcribed`, `new`, `not downloaded` or `unsupported`.
+- `memos:new` transcribes the memos that have no document yet. `memos:latest` and `memos:all` do what they say. `memos:ID` takes the start of an id as `memos` lists it (8 characters). Every `run` option applies.
+- The memo's title and recording date from Voice Memos become the document's `title` and `recorded_at`. A memo you rename in Voice Memos is updated on the next run with no ASR or LLM call.
+
+Setup:
+
+- Turn on Voice Memos in iCloud settings on the iPhone and the Mac, and open Voice Memos on the Mac once, so memos sync.
+- Give the app you run ytverbatim from Full Disk Access (System Settings → Privacy & Security → Full Disk Access), then restart it. ytverbatim reads a private copy of the Voice Memos library, so nothing is written into Apple's folder.
+- A memo that is not downloaded to this Mac is skipped with a notice. Open it once in Voice Memos to download it.
+
+To transcribe new memos on a schedule, see [Automation](docs/recordings.md#automation): `run memos:new --quiet`, which prints nothing when idle, skips memos another run holds, needs Full Disk Access for the program the job runs, and needs `ytverbatim login` to have run once.
+
+## How a run works
+
+The stages run in this order:
+
+1. Metadata, captions and audio for YouTube, or the file's audio for a recording.
+2. ASR (or, with `--source captions`, the manual caption track).
+3. For a diarized source, speaker diarization (see [Speakers](#speakers)).
+4. Normalize: Simplified Chinese by default (`[text] script = "keep"` leaves the script alone). Fillers are kept unless `[text] fillers = "remove"`.
+5. Punctuation, only where the transcript has too few sentence marks.
+6. Correction, whenever the text stages have an LLM (`--no-correct` or `[text] correct = false` turns it off).
+7. Numeric verification against captions in the transcript's language. Without such captions or a second opinion the numbers rest on the transcript alone, and a warning says so (recordings have no captions).
+8. For Mandarin, Chinese numerals written as digits (see [Numerals](#numerals)).
+9. Sentences, paragraphs, chapters and the documents.
+
+Every stage is stored under `.stages/` in the source's folder (the numerals stage only when it runs), keyed by what it read. A rerun with other options recomputes only the stages those options reach, an interrupted run resumes, and a source whose `context.json` is current is skipped. `--force` discards the stored stages and recomputes every one, including the paid LLM calls. The 16 kHz WAV is deleted once the transcript and the speaker turns are stored; the compressed audio of a video stays.
+
+**Engines and memory.** The default engine, `w-prod`, is mlx-whisper large-v3. ASR and diarization run in separate worker processes under a memory watch, so a runaway model cannot take down the Mac. The worker is killed if its physical footprint passes `memory_cap_gib` (default: half of physical memory) or if the system's available memory falls below 10%. The batch then stops with a fix for whichever one fired, and the next run resumes from the chunks already finished. On an 8 GiB Mac the default cap of 4 GiB may be too tight for `w-prod`; raise it (at most 90% of physical memory) in `~/.config/ytverbatim/config.toml`:
 
 ```toml
 [asr]
 memory_cap_gib = 8
 ```
 
-### Speakers
+## Speakers
 
-Local recordings are diarized: a local model (Nemotron-3-Diarization, 8-bit, through mlx-audio; about 107 MB, downloaded once into the Hugging Face cache) finds who speaks when, each word goes to the speaker most active over it, and very short runs between two stretches of the same speaker are smoothed into it. Sentences and paragraphs break at every change of speaker, and `context.md` labels each paragraph `**Speaker 1:**`, `**Speaker 2:**`, … in order of first appearance, with each speaker's share of the talk time in the header. A recording with one speaker records it in `context.json` but shows no labels. Speech where a second speaker talks at the same time is flagged `overlapping_speech` in `context.json` only. The model tells apart up to 8 speakers. YouTube videos are not diarized. To change that, set `[diarize] mode` in `~/.config/ytverbatim/config.toml` to `"on"` (every source) or `"off"` (none); the default `"auto"` diarizes recordings only, and `--diarize/--no-diarize` overrides it for one run. Diarization needs the `asr` extra.
+Recordings are diarized: a local model (Nemotron-3-Diarization, 8-bit, through mlx-audio; about 107 MB, downloaded once into the Hugging Face cache) finds who speaks when. Each word goes to the speaker most active over it, and very short runs between two stretches of the same speaker are smoothed into it.
+
+- Sentences and paragraphs break at every change of speaker. `context.md` labels each paragraph `**Speaker 1:**`, `**Speaker 2:**`, … in order of first appearance, with each speaker's share of the talk time in the header.
+- The model tells apart up to 8 speakers.
+- A recording with one speaker records it in `context.json` but shows no labels.
+- Speech where a second speaker talks at the same time is flagged `overlapping_speech` in `context.json` only.
+- `[diarize] mode` is `"auto"` (default: recordings only), `"on"` (every source) or `"off"` (none). `--diarize/--no-diarize` overrides it for one run. Diarization needs the `asr` extra.
 
 ```toml
 [diarize]
 mode = "auto"
 ```
 
-### Numerals
+**Name the speakers** once you have listened:
 
-Mandarin transcripts write amounts as digits, following GB/T 15835-2011 (出版物上数字用法): percentages (`百分之八十` → `80%`), currency (`六百五十六美元` → `656美元`), values in 万 or 亿 in the speaker's unit (`三万五` → `3.5万`, `一亿五千三` → `1.53亿`; 千 and 百 never stay beside digits, so `4千` → `4000`), years (`二零二六年` → `2026年`), counts of two and up (`三个`, `两年` → `3个`, `2年`), dates (`一月一日` → `1月1日`), clock times (`下午四点四十分` → `下午4点40分`, `三点半` → `3点半`, `两点零五分` → `2点05分`), index points (`涨了三点` → `涨了3点`, `指数两千八百点` → `指数2800点`), bare numbers (`三点五` → `3.5`) and ranges, whole (`三到五个` → `3到5个`, `下午两点到四点` → `下午2点到4点`). X点 up to 10 is written in digits only as a clock time (minutes, 半 or a time of day such as 下午 before it) or after a move such as 涨, 下跌 or 收涨, so `两点最重要` and `有三点需要注意` stay. These stay Chinese too: approximations (`三四个`, `几十`, `二十几岁`), idioms and set words (`一样`, `万一`, `三大`, `十二生肖`), ordinals (`第二十五期`, `二季度`), 一 before a count word (`一个`, `一次`), lunar dates (`腊月二十三`, `八月十五`), fractions (`三分之一`), spoken two-digit years (`九七年`), figures a following numeral continues (`三块五`, `一米八`), ranges that share a percent or 万 between their ends (`百分之三到五`, `三到五万`) or that cannot be rewritten whole, and 一到 meaning "as soon as" (`一到三月份就涨`). Only figures the [quantity tokenizer](#library) reads are rewritten, and a rewrite never changes a figure's value. The stage runs after numeric verification, so punctuation, correction and verification read the text as recognized, and a change to these rules never repeats an LLM call. Word timings, flags and edits follow the rewritten text; a figure its timed words only partly match stays as said. `[text] numerals = "keep"` leaves the numerals as recognized.
+```
+ytverbatim speakers rec-0123456789abcdef                    # list: id, name, talk time, first line
+ytverbatim speakers rec-0123456789abcdef S1=Alice S2=Bob    # name
+ytverbatim speakers rec-0123456789abcdef S2=                # clear a name
+ytverbatim speakers rec-0123456789abcdef S1=Alice S3=Alice  # merge: one name, one person
+```
+
+- Merging is for a person the model split in two: one label, summed talk time, consecutive paragraphs joined.
+- The names are saved in `speakers.json`, bound to the speaker attribution they were given for. Re-diarizing, or any change to attribution or ASR, drops them with a warning, so a speaker is never mislabelled. A rerun of the text stages keeps them.
+- Nothing is transcribed again, and names are never sent to an LLM.
+
+More in [docs/recordings.md](docs/recordings.md#speakers).
+
+## Languages
+
+- `--language CODE` forces one spoken language, for any source (`zh`, `en`, …). Force it only when the whole file is in that language.
+- `[asr] languages = ["zh", "en"]` is the set a language-detecting engine may choose from, for recordings only.
+
+The default engine for recordings is `w-prod`: it decodes the whole file and detects one language for it. So with the defaults a recording has one language, and `[asr] languages` has no effect. Per-stretch languages appear only with a chunked engine that detects each stretch, such as `--engine w-runs-lid` (needs `ytverbatim[whisper,asr]`).
+
+For a recording with stretches in more than one language, each stretch is normalized, punctuated in its own language's style and has its Chinese numerals written as digits by its own language's rules. The correction and number-check prompts say the transcript mixes languages. `transcript.languages` lists the languages the transcript was decoded in, the document's own first and the others by speech time. See [docs/recordings.md](docs/recordings.md#languages).
+
+## Glossary
+
+To steer correction toward names and jargon it would otherwise mishear, list them as `[text] glossary = ["Acme", "Kubernetes"]` (at most 20 terms), or pass `--glossary "Acme, Kubernetes"` for one run. For a YouTube video the configured terms come first and the video's tags follow, up to 20 terms in all. The terms are sent to the LLM.
+
+## Numerals
+
+Mandarin transcripts write amounts as digits, following GB/T 15835-2011 (出版物上数字用法). For recordings this applies to the Mandarin stretches. `[text] numerals = "keep"` leaves the numerals as recognized.
+
+| Kind | Example |
+|---|---|
+| Percentages | `百分之八十` → `80%` |
+| Currency | `六百五十六美元` → `656美元` |
+| Values in 万 or 亿, in the speaker's unit | `三万五` → `3.5万`, `一亿五千三` → `1.53亿` |
+| 千 and 百, which never stay beside digits | `4千` → `4000` |
+| Years | `二零二六年` → `2026年` |
+| Counts of two and up | `三个` → `3个`, `两年` → `2年` |
+| Dates | `一月一日` → `1月1日` |
+| Clock times | `下午四点四十分` → `下午4点40分`, `三点半` → `3点半`, `两点零五分` → `2点05分` |
+| Index points | `涨了三点` → `涨了3点`, `指数两千八百点` → `指数2800点` |
+| Bare numbers | `三点五` → `3.5` |
+| Ranges, whole | `三到五个` → `3到5个`, `下午两点到四点` → `下午2点到4点` |
+
+X点 up to 10 is written in digits only as a clock time (minutes, 半 or a time of day such as 下午 before it) or after a move such as 涨, 下跌 or 收涨, so `两点最重要` and `有三点需要注意` stay.
+
+These stay Chinese:
+
+- approximations (`三四个`, `几十`, `二十几岁`)
+- idioms and set words (`一样`, `万一`, `三大`, `十二生肖`)
+- ordinals (`第二十五期`, `二季度`)
+- 一 before a count word (`一个`, `一次`)
+- lunar dates (`腊月二十三`, `八月十五`)
+- fractions (`三分之一`)
+- spoken two-digit years (`九七年`)
+- figures a following numeral continues (`三块五`, `一米八`)
+- ranges that share a percent or 万 between their ends (`百分之三到五`, `三到五万`) or that cannot be rewritten whole
+- 一到 meaning "as soon as" (`一到三月份就涨`)
+
+Only figures the [quantity tokenizer](docs/library.md#quantities) reads are rewritten, and a rewrite never changes a figure's value. The stage runs after numeric verification, so punctuation, correction and verification read the text as recognized, and a change to these rules never repeats an LLM call. Word timings, flags and edits follow the rewritten text; a figure its timed words only partly match stays as said.
 
 ## LLM
 
 Punctuation, correction and numeric verdicts use an LLM. The default is ChatGPT's gpt-6.1-sol at medium reasoning effort, which needs a ChatGPT plan and one sign-in:
 
 ```
-ytverbatim login         # opens OpenAI's sign-in page and waits for it; --no-browser only prints the URL
+ytverbatim login           # opens OpenAI's sign-in page and waits for it; --no-browser only prints the URL
 ytverbatim login --switch  # signs in with another account; the current one stays until the new one is verified
-ytverbatim status        # the YouTube login, the ChatGPT sign-in and the LLM in use; no LLM call
-ytverbatim llm test      # one tiny live call to the configured LLM (--provider/--model/--effort override it)
-ytverbatim logout        # revokes the sign-in and removes its tokens from this machine
+ytverbatim status          # the YouTube login, the ChatGPT sign-in, the LLM in use; no LLM call
+ytverbatim llm test        # one tiny live call to the configured LLM (--provider/--model/--effort override it)
+ytverbatim logout          # revokes the sign-in and removes its tokens from this machine
 ```
 
-In the [correction evaluation](evals/results/correction-2026-11-13.md) gpt-6.1-sol led the screen, removing about 57.6 net errors per hour against 42.7 for Claude Sonnet, at a fix precision of 0.929. Medium effort matched high (57.6 against 57.8 net errors removed per hour, with overlapping intervals) in about 0.6 times the time, so medium is the default. The sign-in belongs to ytverbatim alone: its tokens stay in an owner-only file under `~/.local/state/ytverbatim/llm/chatgpt/` and are never printed. It is kept alive automatically: short-lived access tokens are renewed at the first moment OpenAI allows, both before a run starts and before each call, so one sign-in lasts as long as OpenAI keeps renewing it. The sign-in stays until you sign out: ytverbatim never signs you out on its own. If OpenAI refuses a renewal, the stored sign-in is kept and its access token is used until 30 seconds before it expires, but it is not renewed again: `ytverbatim status` says a new sign-in is needed, and `ytverbatim login` signs in again with your account preselected. When the sign-in is missing, refused or lapsed, an interactive `run` (a terminal on both stdin and stderr) opens the browser to sign in again and then continues; a ChatGPT request refused as unauthorized mid-run does the same, once. A non-interactive run (no terminal, cron, the library) never opens a browser: it stops before any download and tells you to run `ytverbatim login`.
+In the [correction evaluation](evals/results/correction-2026-11-13.md) gpt-6.1-sol led the screen, removing about 57.6 net errors per hour against 42.7 for Claude Sonnet, at a fix precision of 0.929. Medium effort matched high (57.6 against 57.8 net errors removed per hour, with overlapping intervals) in about 0.6 times the time, so medium is the default.
 
-The alternatives are `--llm claude-cli:claude-sonnet-5-5`, which runs through the `claude` CLI on your claude.ai subscription, and `--llm openai-compat:MODEL` with `[llm] base_url` set, for any OpenAI-compatible endpoint such as a local `mlx_lm.server`. `--llm none` skips the LLM stages and keeps everything on your machine. To change the default for every run, set it in `~/.config/ytverbatim/config.toml`; `effort` takes low, medium, high, xhigh or max for chatgpt and claude-cli:
+**The sign-in.**
+
+- It belongs to ytverbatim alone. Its tokens stay in an owner-only file under `~/.local/state/ytverbatim/llm/chatgpt/` and are never printed.
+- It is kept alive automatically: short-lived access tokens are renewed at the first moment OpenAI allows, both before a run starts and before each call, so one sign-in lasts as long as OpenAI keeps renewing it.
+- It stays until you sign out: ytverbatim never signs you out on its own.
+- If OpenAI refuses a renewal, the stored sign-in is kept and its access token is used until 30 seconds before it expires, but it is not renewed again. `ytverbatim status` says a new sign-in is needed, and `ytverbatim login` signs in again with your account preselected.
+- When the sign-in is missing, refused or lapsed, an interactive `run` (a terminal on both stdin and stderr) opens the browser to sign in again and then continues. A ChatGPT request refused as unauthorized mid-run does the same, once.
+- A non-interactive run (no terminal, cron, the library) never opens a browser: it stops before any download and tells you to run `ytverbatim login`.
+
+**Choosing another LLM.** `--llm PROVIDER:MODEL` picks the text stages' LLM for one run:
+
+- `--llm claude-cli:claude-sonnet-5-5` runs through the `claude` CLI on your claude.ai subscription.
+- `--llm openai-compat:MODEL`, with `[llm] base_url` set, uses any OpenAI-compatible endpoint, such as a local `mlx_lm.server`.
+- `--llm none` runs without an LLM and keeps everything on your machine.
+
+A provider other than the configured one starts from its own defaults, so a configured `base_url` or `effort` does not get in the way. The LLM's effort and endpoint host are part of its identity, so changing them redoes the LLM stages. To change the default for every run, set it in `~/.config/ytverbatim/config.toml`; `effort` takes low, medium, high, xhigh or max for chatgpt and claude-cli:
 
 ```toml
 [llm]
@@ -75,9 +249,31 @@ provider = "claude-cli"
 model = "claude-sonnet-5-5"
 ```
 
-To steer correction toward names and jargon it would otherwise mishear, list them as `[text] glossary = ["Acme", "Kubernetes"]` (at most 20 terms), or pass `--glossary "Acme, Kubernetes"` for one run; for a YouTube video the video's tags follow them, up to 20 terms in all.
+**Without an LLM,** punctuation is left as transcribed, correction is skipped and disputed numbers stay flagged with every reading. Punctuation and numbers are recorded in `quality.warnings` and printed as a notice. With an LLM, correction runs unless switched off; `--correct` (or `[text] correct = true`) without an LLM is an error.
 
-The LLM stages send transcript text, plus your glossary and, for a YouTube video, its tags and the uploader's pinned note when there is one, to the provider you chose. For a diarized recording each piece of text carries its speaker's id (`S1`, `S2`, …) and the prompt says it is a conversation; a recording's title, file name and speaker names are never sent. In a recording where the engine decoded some stretches in another language, each stretch is normalized, punctuated in its own language's style, and has its Chinese numerals written as digits by its own language's rules, and the correction and numeric-verdict prompts say the transcript mixes languages. Your cookies never leave your machine.
+`llm_usage` is what the document cost in LLM tokens, per stage. Batches reused from earlier runs count too, so a rerun that reuses everything reports the same totals: it is not what one run spent.
+
+## Privacy and responsible use
+
+**Recording other people.** Get everyone's consent before you record a conversation. In many places recording without it is illegal, and some require every participant's consent. ytverbatim does not check.
+
+What stays on your Mac, and what is sent:
+
+- **Local:** the audio, your files and your Voice Memos library, speech recognition and diarization. Your YouTube cookies never leave your machine.
+- **Sent to the LLM provider:** transcript text; for a diarized recording each piece of text carries its speaker's id (`S1`, `S2`, …) and the prompt says it is a conversation; your glossary terms; and, for a YouTube video, its tags and the uploader's pinned note when there is one.
+- **Never sent:** a recording's title, file name, recording date and speaker names.
+- **Where it goes:** by default ChatGPT, so to OpenAI. `claude-cli` sends it to Anthropic, and `openai-compat` to the endpoint you set.
+- **Model weights** are downloaded from Hugging Face on first use. Your audio and text are not uploaded.
+
+**To opt out,** use `--llm none` (or `[llm] provider = "none"`). No transcript text is then sent anywhere. A local `openai-compat` endpoint also keeps it on your Mac. `--no-correct` alone is not an opt-out, because punctuation still uses the LLM.
+
+With the default ChatGPT provider, check your ChatGPT plan's data controls (whether conversations may be used to improve models) before transcribing business meetings. Whether that setting applies to this sign-in path is unverified.
+
+The transcript files themselves contain the title, file name and speaker names, so check them before you share one.
+
+**YouTube.** Use `ytverbatim` only on content you can already access with your own account. It does not circumvent DRM. You are responsible for complying with YouTube's Terms of Service and with copyright law.
+
+More in [docs/recordings.md](docs/recordings.md#privacy-and-consent).
 
 ## Library
 
@@ -85,43 +281,52 @@ The LLM stages send transcript text, plus your glossary and, for a YouTube video
 import ytverbatim
 
 ids = ytverbatim.expand("https://www.youtube.com/playlist?list=...", limit=20)
-result = ytverbatim.process(ids[0], llm=client)
+result = ytverbatim.process(ids[0], llm=client)   # or process("meeting.m4a", llm=client)
 document = result.document
 ```
 
-The stable surface is every name in `ytverbatim.__all__`, plus the modules `ytverbatim.errors`, `ytverbatim.contract` and `ytverbatim.config`; everything else is internal. [docs/library.md](docs/library.md) lists it, with the versioning policy and the breaking changes of each release. `process` takes a YouTube video or a local audio or video file and returns a `Result`: the `document`, the exact `context.json` bytes (`json_bytes`), its `directory`, the `markdown_path`, the `video_path` when the video track was requested, and what was `reused`. The default engine needs `ytverbatim[whisper]`, and the other engines and the diarizer need `ytverbatim[asr]`, so recordings, which are diarized by default, need `ytverbatim[whisper,asr]`; `ytverbatim.check_dependencies(options, source="youtube")` (or `"recording"`) raises `DependencyError` naming the missing extra, and `process` runs the same check before any request.
+The stable surface is every name in `ytverbatim.__all__`, plus the modules `ytverbatim.errors`, `ytverbatim.contract` and `ytverbatim.config`; everything else is internal. [docs/library.md](docs/library.md) lists it, with the versioning policy and the breaking changes of each release.
 
-Without `llm=`, `process` uses the configured LLM, ChatGPT by default, and raises `ConfigError` before any work until `ytverbatim login` has run once (`process(..., interactive=True)` opens the browser to sign in instead, for an application with a person at the screen; the library never does so on its own); `process(url, Options(llm=LLMOptions(provider="none")))` (both from `ytverbatim.config`) runs without an LLM instead.
+`process` takes a YouTube video or a local audio or video file and returns a `Result`: the `document`, the exact `context.json` bytes (`json_bytes`), its `directory`, the `markdown_path`, the `video_path` when the video track was requested, and what was `reused`. It takes any object that satisfies `ytverbatim.LLMClient` as `llm=`. Without one it uses the configured LLM, ChatGPT by default, and raises `ConfigError` until `ytverbatim login` has run once; `process(url, Options(llm=LLMOptions(provider="none")))` runs without an LLM. The library never opens a browser unless you pass `interactive=True`.
 
-`expand(target, *, limit=0, auth=None, options=None)` returns the video ids behind one video, playlist or channel URL, in order and without repeats. A video id costs no request, and `limit` caps the listing (0 lists everything; the `max_videos_per_run` cap belongs to `run`). Like every request, it refuses to start during a cooldown and goes through the same stop guard, so a bot check or rate limit starts the cooldown and raises. Only a members playlist (`UUMO...`) is listed with cookies, from `auth` or the configured source; with none (or with `auth.policy = "always"` and none), it raises `AuthError` instead of listing anonymously. The ids carry no memory of where they came from, so for ids from a members playlist call `process(video_id, cookies_first=True)`: the video's first request then uses cookies, where otherwise each one is requested anonymously, refused, and only then retried with cookies.
+The default engine needs `ytverbatim[whisper]`, and the other engines and the diarizer need `ytverbatim[asr]`, so recordings, which are diarized by default, need `ytverbatim[whisper,asr]`. `ytverbatim.check_dependencies(options, source="youtube")` (or `"recording"`) raises `DependencyError` naming the missing extra, and `process` runs the same check before any request.
 
-**Video.** The video track is opt-in, for callers that need frames (screenshots, say). With `[ytdlp] video = true` (or `Options(ytdlp=YtdlpOptions(video=True))`), `run`, `process` and `fetch` also save `<out>/<video id>/video.mp4` after the audio: the best video-only stream up to 1080p, remuxed to MP4, requested on the same cookie path as the audio, so a members-only or Premium video needs nothing extra. It is validated like the audio (it decodes and covers at least 90% of the video's duration), a file that fails is downloaded again, and a valid one is reused. A video that is already transcribed is not transcribed again for this: `process` only fetches the missing file, which is one `video` download plus a fresh metadata extraction when the saved one is over an hour old (its signed URLs have expired), made with cookies if the earlier run used them; with the option off (the default) no video is ever requested. A failed video download fails the video. `ytverbatim.video_file(video_id, out=None)` returns the path of the validated file under `out` (default output root), or `None` when it is missing or fails validation; it never downloads. A probe that times out counts as absent; a missing `ffprobe` raises `DependencyError`, and a malformed id `ValueError`.
+Also in the library, all described in [docs/library.md](docs/library.md): `expand` for playlist and channel ids, the opt-in `video.mp4` track, `quantity_tokens`, and the errors, each with a `fix` and a `stage`.
 
-**Quantities.** `ytverbatim.quantity_tokens(text)` returns the numbers, currency amounts, percentages, tickers, Chinese numerals and spelled-out English numbers in `text` as `ytverbatim.QToken`s in order: `char_start` and `char_end` (half-open offsets into `text`), `surface`, `value_itn` (the normalized value two spellings share: `一百五十期` and `150期` are both `150期`, `$1.5B` is `$1500000000`, `twenty-five` is `25`) and `kind` (`ytverbatim.QKind`: `number`, `currency`, `percent`, `ticker` or `cjk_quantity`). A Chinese numeral is a quantity when it has two or more numeral characters (`三十`), follows `第` or `百分之`, or has a measure word: a currency, 个, 年, 次, a count classifier such as 家, 种 or 位, a time or measurement unit such as 分钟, 岁 or 公里, or a value unit such as 倍 or 个基点. 一 after a figure in 万 or 亿 starts a per-unit phrase, so `三万一个月` is `30000` and `1个月`, and 点 before tens is a clock time (`三点四十分` is `3点` and `40`). Ranges of adjacent digits (`三四个`), idioms (`万一`, `一样`, `十万八千里`) and weekdays are not quantities; a fraction's `value_itn` is over/under (`三分之一` and `1/3` are `1/3`) and a rough figure with 几 or 数 carries `~` (`二十几岁` and `20几岁` are `~20`, `数十亿` is `~1000000000`), so each agrees with its other spelling but never with an exact value. It is the tokenizer numeric verification and the correction guards use.
+## Contract 2.0
 
-**Errors.** Every error the package raises on purpose subclasses `ytverbatim.errors.YtverbatimError`, whose `fix` attribute is a one-line remedy to show the user (empty when there is none). `process` raises the video's own error as it happened: `AuthError` (with its `state`), `UnavailableError`, `YtDlpError` (with its `primary` signal), `MediaValidationError`, `ProcTimeout`, `EngineError`, `LLMError` or `ContractError`, and `fix` is set where a remedy exists. A failure also carries `stage`, where it happened: `info`, `captions`, `audio` or `video` while fetching, otherwise the stage that was running (`asr`, `correct`, ...). A bot check or rate limit raises `BatchStopError` (`signal`, `until`) after starting the cooldown, from `process` and `expand` alike, and both set its `fix`; so does every `AuthError` and `YtDlpError` they raise. Bad input raises `ValueError`, and a missing engine extra `DependencyError`.
+`context.json` carries `schema_version` `"2.0"`; the bundled schema, `ytverbatim/contract/context.v2.schema.json`, describes it.
 
-**Contract 2.0.** `context.json` carries `schema_version` `"2.0"`; the bundled schema, `ytverbatim/contract/context.v2.schema.json`, describes it. `source` says where the transcript came from, as a union on `source.kind`: `"youtube"` holds the video's `id`, `url`, `title`, `channel`, `channel_id`, `upload_date`, `duration_s`, `description`, `language`, `tags`, `creator_note` and `access` (how it was fetched: auth source, cookies, login, Premium, membership, availability, yt-dlp version, warnings), and `"recording"` holds a local recording's `id` (`rec-` plus the first 16 hex digits of `audio_sha256`, the hash of its audio stream's encoded packets), `title`, `file_name` (a basename, never a path), `origin` (`file` or `voice_memos`), `recorded_at` (or `None` when unknown), `duration_s` and `language`. `speakers` lists each diarized speaker (`id` `S1`, `S2`, …, numbered by first appearance when the speech is attributed and never renumbered, so a later text change can leave a gap or let a higher id speak first; the list is in id order, each id once; `name`; `speech_s`) and is empty when the transcript was not diarized; each segment and paragraph then names its `speaker`, and a paragraph never spans two. `transcript.languages` lists every language the transcript was decoded in, the document's own first and the others by the speech they cover, and `transcript.diarization` describes the diarizer run, or is `None`. The flag kind `overlapping_speech` marks speech under another speaker; like `timing_interpolated` it stays out of the markdown. Version 1.1 added `creator_note`: `{text, author, like_count, published}`, the uploader's own pinned comment (often an erratum), or `None`. It is only filled when `[ytdlp] creator_note = true`, which adds a bounded page of comments to the video's one metadata request; turning it on for a video fetched without it extracts its metadata once more and rebuilds the document from the stored stages. With the option off, which is the default, no extra request is made. Minor versions only add optional fields: `load_document` reads any `2.x` document, dropping the fields a newer minor version adds, and upgrades a 1.0 or 1.1 document in memory (`video` and `access` become a YouTube `source`, with no speakers and its one language as `transcript.languages`). Any other version is refused with `ContractError`, whose `fix` says to upgrade ytverbatim when the document is newer. Readers refuse enum values they do not know, so a new flag kind, `origin` or `source.kind` comes with a new major version, never a minor one.
+- **`source`** says where the transcript came from, as a union on `source.kind`:
+  - `"youtube"` holds the video's `id`, `url`, `title`, `channel`, `channel_id`, `upload_date`, `duration_s`, `description`, `language`, `tags`, `creator_note` and `access` (how it was fetched: auth source, cookies, login, Premium, membership, availability, yt-dlp version, warnings).
+  - `"recording"` holds a local recording's `id` (`rec-` plus the first 16 hex digits of `audio_sha256`, the hash of its audio stream's encoded packets), `title`, `file_name` (a basename, never a path), `origin` (`file` or `voice_memos`), `recorded_at` (or `None` when unknown), `duration_s` and `language`.
+- **`speakers`** lists each diarized speaker (`id` `S1`, `S2`, …; `name`; `speech_s`) and is empty when the transcript was not diarized. Ids are numbered by first appearance when the speech is attributed and are never renumbered, so a later text change can leave a gap or let a higher id speak first. The list is in id order, each id once. Each segment and paragraph then names its `speaker`, and a paragraph never spans two.
+- **`transcript.languages`** lists every language the transcript was decoded in, the document's own first and the others by the speech they cover. `transcript.diarization` describes the diarizer run, or is `None`.
+- **Flags.** `overlapping_speech` marks speech under another speaker; like `timing_interpolated` it stays out of the markdown.
+- **`creator_note`** (added in 1.1) is `{text, author, like_count, published}`, the uploader's own pinned comment (often an erratum), or `None`. It is only filled when `[ytdlp] creator_note = true`, which adds a bounded page of comments to the video's one metadata request. Turning it on for a video fetched without it extracts its metadata once more and rebuilds the document from the stored stages. With the option off, the default, no extra request is made.
+
+**Versions.** Minor versions only add optional fields. `load_document` reads any `2.x` document, dropping the fields a newer minor version adds, and upgrades a 1.0 or 1.1 document in memory (`video` and `access` become a YouTube `source`, with no speakers and its one language as `transcript.languages`). Any other version is refused with `ContractError`, whose `fix` says to upgrade ytverbatim when the document is newer. Readers refuse enum values they do not know, so a new flag kind, `origin` or `source.kind` comes with a new major version, never a minor one.
 
 **Upgrading from contract 1.1.** Every YouTube `context.json` becomes 2.0, and each video's `context.md` is written again. Its text changes only where two segments of a Mandarin transcript meet in Latin script on both sides, which is rare: an English sentence that follows another no longer runs into it ("end.Next" becomes "end. Next"), while a boundary at any Chinese character or punctuation still takes no space. The next `run` or `process` of each video rebuilds only the document from its stored stages: no download, no Whisper run and no LLM call. A reader of `document.video` reads `document.source` (after checking `source.kind == "youtube"`), and `document.access` is now `document.source.access`.
 
-## Planned for v1
+## What ships, and what is next
 
-- Auth status and a `doctor` command that explain problems with clear fixes
-- Local ASR by default, with YouTube captions used as cross-checking evidence
-- Timestamps on every segment, word-level where the engine provides them
-- A versioned JSON output plus a markdown rendering
+Shipped:
 
-## Requirements
+- YouTube and local recordings, each with local ASR, timestamps on every segment (word-level where the engine provides them) and number checks
+- Speaker diarization, with naming and merging
+- Voice Memos, with scheduled runs
+- A versioned JSON contract plus a markdown rendering
+- LLM punctuation and correction, with a glossary, and per-stretch language handling for mixed-language recordings
+- Login and status commands that explain problems with a fix (`login`, `status`, `auth doctor`)
 
-- macOS on Apple Silicon
-- `ffmpeg`
-- A JavaScript runtime for yt-dlp: Deno or Node 22 or newer
-- `curl_cffi` (installed with ytverbatim, MIT): yt-dlp asks for browser impersonation on caption downloads, and without it YouTube rate-limits them (HTTP 429) more often and yt-dlp warns that no impersonate target is available
+Not yet:
 
-## Responsible use
-
-Use `ytverbatim` only on content you can already access with your own account. It does not circumvent DRM. You are responsible for complying with YouTube's Terms of Service and with copyright law. Your cookies never leave your machine; transcript text reaches an LLM provider only through the LLM stages (see [LLM](#llm)).
+- Separate tracks for each participant of a call, and importing the transcripts meeting apps produce (with their speaker names)
+- Chapters for recordings
+- A speaker count hint for the diarizer
+- Voice Memos listing, speaker naming and folder expansion in the library; they stay CLI features
+- A release that carries the breaking changes listed in [docs/library.md](docs/library.md)
 
 ## License
 
