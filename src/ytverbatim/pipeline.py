@@ -161,6 +161,8 @@ __all__ = [
 SourceKind = Literal["youtube", "recording"]
 # The `reused` mark of a file whose audio already ran in the same batch under another name.
 DUPLICATE = "duplicate"
+# The `reused` mark of a file whose source another run holds the lock of: it is skipped, not failed.
+BUSY = "busy"
 # The engine a source gets when `[asr] engine` is unset; recordings move to the language policy once it is chosen.
 _DEFAULT_ENGINE: dict[SourceKind, str] = {"youtube": "w-prod", "recording": "w-prod"}
 _WHISPER_FACTORY = "ytverbatim.asr.engines.whisper_mlx."
@@ -516,8 +518,25 @@ def _run_file(
     seen[recording.id] = recording.file_name
     sdir = paths.source_dir(recording.id, settings.out)
     adapter = _FileRun(recording, sdir, settings)
-    result = _run_source(recording.id, sdir, settings, reuse=adapter.reuse, run=adapter.run)
+
+    def current(document: ContextDocument) -> bool:
+        # Caller-given metadata changes (a renamed memo) must reach the document; a plain file keeps the first run's.
+        return provenance is None or _same_record(document.source, recording.source(settings.language))
+
+    result = _run_source(recording.id, sdir, settings, reuse=adapter.reuse, run=adapter.run, current=current)
+    if isinstance(result.error, BusyError):
+        outcome = VideoOutcome(recording.id, VideoStatus.OK, reused=(BUSY,), detail="being transcribed by another run")
+        return VideoResult(outcome, name=recording.file_name)
     return replace(result, elapsed_s=time.monotonic() - began, name=recording.file_name)
+
+
+def _same_record(stored: object, wanted: RecordingSource) -> bool:
+    return isinstance(stored, RecordingSource) and (
+        stored.title,
+        stored.recorded_at,
+        stored.origin,
+        stored.file_name,
+    ) == (wanted.title, wanted.recorded_at, wanted.origin, wanted.file_name)
 
 
 def _no_progress(_event: ProgressEvent) -> None:
@@ -720,16 +739,20 @@ def _run_source(
     *,
     reuse: Callable[[ContextDocument], VideoResult],
     run: Callable[["_Trace"], VideoResult],
+    current: Callable[[ContextDocument], bool] | None = None,
 ) -> VideoResult:
     """Run one source of any kind under its directory lock, and record its own failure as its outcome.
 
     A current document is reused, its Markdown written again when missing, and handed to `reuse`; otherwise `run`
-    makes it, from a cleared stage store under `--force`. Only what ends the batch is raised.
+    makes it, from a cleared stage store under `--force`. `current` can reject a reusable document whose source
+    record is out of date: `run` then rebuilds it from the stored stages. Only what ends the batch is raised.
     """
     trace = _Trace(source_id, settings.emit)
     try:
         with video_lock(sdir):
             document = _reusable(sdir, settings)
+            if document is not None and current is not None and not current(document):
+                document = None
             if document is not None:
                 settings.emit(ProgressEvent(source_id, "skip", f"{CONTEXT_JSON} exists"))
                 if not (sdir / CONTEXT_MD).is_file():
