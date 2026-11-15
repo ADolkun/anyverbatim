@@ -136,9 +136,10 @@ def run_id(definition: EngineDef) -> str:
 def diarization_run(definition: DiarizerDef) -> DiarizationRun:
     """Describe the diarizer for the document; `params` include the attribution rules, so a rule change shows."""
     rules: dict[str, JsonValue] = {
+        "version": attribution.VERSION,
         "gap_s": attribution.GAP_S,
         "overlap_share": attribution.OVERLAP_SHARE,
-        "smoothing": True,
+        "smoothing": attribution.SMOOTHING,
         "smooth_s": attribution.SMOOTH_S,
         "smooth_words": attribution.SMOOTH_WORDS,
     }
@@ -165,16 +166,15 @@ def from_asr_rows(
     spec = definition.spec
     language = _language(rows, language_hint)
     tokens, warnings = _tokens(rows, language)
-    overlapped: set[int] = set()
     run: DiarizationRun | None = None
     if diarized is not None:
-        tokens, overlapped = _attributed(tokens, diarized.diarization)
+        tokens = _attributed(tokens, diarized.diarization)
         if any(token.speaker is not None for token in tokens):
             run = diarization_run(diarized.definition)
         elif tokens:
             warnings.append("the diarizer heard no speaker anywhere, so the transcript has no speaker labels")
     sentences = seg.segment_tokens(tokens, language)
-    overlap_flags = _overlap_flags(sentences, overlapped)
+    overlap_flags = [_overlap_flags(sentence) for sentence in sentences]
     worded = {row.chunk for row in rows if any(word.text.strip() for word in row.words)}
     anomalies = {row.chunk: row for row in rows if _ANOMALY_FLAG in row.flags}
     stretches = tuple(
@@ -223,42 +223,31 @@ def from_asr_rows(
     )
 
 
-def _attributed(tokens: Sequence[seg.Token], diarization: Diarization) -> tuple[list[seg.Token], set[int]]:
-    """Each token with its speaker, and the indexes of the tokens another speaker talks over.
+def _attributed(tokens: Sequence[seg.Token], diarization: Diarization) -> list[seg.Token]:
+    """Each token with its speaker, and marked when another speaker talks over it.
 
     Tokens are attributed rather than the engine's words: they are the timed units sentences are cut from, and for an
     engine without word timings they are the only timed units there are.
     """
     words = [Word(text=token.text.strip(), start=token.start, end=token.end) for token in tokens]
-    result = attribution.assign(words, diarization)
-    overlapped = {
-        index
-        for index, word in enumerate(words)
-        if any(span.start <= word.start and word.end <= span.end for span in result.overlaps)
-    }
-    attributed = [replace(token, speaker=speaker) for token, speaker in zip(tokens, result.speakers, strict=True)]
-    return attributed, overlapped
+    result = attribution.assign(words, diarization, smoothing=attribution.SMOOTHING)
+    return [
+        replace(token, speaker=speaker, overlapped=flagged)
+        for token, speaker, flagged in zip(tokens, result.speakers, result.overlapped, strict=True)
+    ]
 
 
-def _overlap_flags(sentences: Sequence[seg.Sentence], overlapped: Collection[int]) -> list[tuple[Flag, ...]]:
-    """Per sentence, an `overlapping_speech` flag over each run of tokens another speaker talks over.
-
-    `overlapped` indexes the tokens given to `segment_tokens`, whose sentences hold them all, in order.
-    """
-    out: list[tuple[Flag, ...]] = []
-    cursor = 0
-    for sentence in sentences:
-        flags: list[Flag] = []
-        hits = [i for i in range(len(sentence.tokens)) if cursor + i in overlapped]
-        cursor += len(sentence.tokens)
-        for _, group in itertools.groupby(enumerate(hits), key=lambda pair: pair[1] - pair[0]):
-            run = [i for _, i in group]
-            span = sentence.span(run[0], run[-1])
-            if span is not None:
-                note = "another speaker talks at the same time here"
-                flags.append(Flag(kind="overlapping_speech", char_start=span[0], char_end=span[1], note=note))
-        out.append(tuple(flags))
-    return out
+def _overlap_flags(sentence: seg.Sentence) -> tuple[Flag, ...]:
+    """Flag `overlapping_speech` over each run of the sentence's tokens another speaker talks over."""
+    flags: list[Flag] = []
+    hits = [i for i, token in enumerate(sentence.tokens) if token.overlapped]
+    for _, group in itertools.groupby(enumerate(hits), key=lambda pair: pair[1] - pair[0]):
+        run = [i for _, i in group]
+        span = sentence.span(run[0], run[-1])
+        if span is not None:
+            note = "another speaker talks at the same time here"
+            flags.append(Flag(kind="overlapping_speech", char_start=span[0], char_end=span[1], note=note))
+    return tuple(flags)
 
 
 def caption_run_id(track: CaptionTrack) -> str:

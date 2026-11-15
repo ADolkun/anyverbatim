@@ -281,8 +281,8 @@ Source = Annotated[YouTubeSource | RecordingSource, Field(discriminator="kind")]
 
 
 class Speaker(_Model):
-    # Numbered by first appearance when speakers are attributed; a later text change may leave a gap, never renumber,
-    # so names bound to the attribution stay on the right person.
+    # Numbered when speakers are attributed and never renumbered afterwards, so names bound to the attribution stay on
+    # the right person; a later text change may leave a gap or change who speaks first.
     id: str = Field(pattern=r"^S[1-9][0-9]*$")
     # Two ids may share a name; the render then treats them as one person.
     name: str | None
@@ -360,8 +360,12 @@ class ContextDocument(_Model):
     created_at: AwareDatetime
     source: Source
     transcript: Transcript
-    # Empty when the transcript was not diarized.
-    speakers: tuple[Speaker, ...]
+    speakers: tuple[Speaker, ...] = Field(
+        description=(
+            "Empty when the transcript was not diarized. Ids are unique and listed in order of their number, with "
+            "gaps allowed; their order of first appearance in the segments is not constrained."
+        )
+    )
     chapters: tuple[Chapter, ...]
     paragraphs: tuple[Paragraph, ...]
     segments: tuple[Segment, ...]
@@ -468,13 +472,15 @@ class ContextDocument(_Model):
                         f"paragraph {paragraph.index} is {paragraph.speaker!r} but its segment {segment.id} is "
                         f"{segment.speaker!r}; a paragraph never spans speakers"
                     )
-        appearance = list(dict.fromkeys(s.speaker for s in self.segments if s.speaker is not None))
+        self._check_speaker_list(listed)
+
+    def _check_speaker_list(self, listed: list[str]) -> None:
+        spoken = {s.speaker for s in self.segments if s.speaker is not None}
         for speaker in listed:
-            if speaker not in appearance:
+            if speaker not in spoken:
                 raise ValueError(f"speaker {speaker!r} is listed but has no segment")
+        if len(set(listed)) != len(listed):
+            raise ValueError(f"speakers lists an id twice: {listed}")
         numbers = [speaker.number for speaker in self.speakers]
-        if any(b <= a for a, b in itertools.pairwise(numbers)) or appearance != listed:
-            raise ValueError(
-                f"speaker ids must increase in order of first appearance (gaps allowed); listed {listed}, "
-                f"appearing {appearance}"
-            )
+        if any(b < a for a, b in itertools.pairwise(numbers)):
+            raise ValueError(f"speakers must be listed in order of their id number (gaps allowed); listed {listed}")

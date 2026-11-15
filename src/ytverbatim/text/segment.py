@@ -56,6 +56,7 @@ _OPENERS = "“‘(（「『《【〔["
 # abbreviation or an ellipsis, since every other one is already a terminator cut.
 _INNER_MARKS = re.compile(r"[,，、;；:：。！？]|[.!?…](?=\s+[^a-z\s]|\s*$)")
 _LEADING_PUNCTUATION = "([“\"'$"
+_TURN_OPENERS = frozenset(_OPENERS)
 
 # Lowercase, without the final period. "no" is left out on purpose: it is an ordinary word that ends sentences too.
 _ABBREVIATIONS = frozenset(
@@ -78,6 +79,8 @@ class Token:
     origin: int = 0
     # The diarized speaker ("S1"), or None when the transcript is not diarized; sentences never cross a change.
     speaker: str | None = None
+    # Whether another speaker talks over this token.
+    overlapped: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -439,23 +442,43 @@ def _sentence(tokens: Sequence[Token]) -> Sentence:
 
 
 def _reading_speakers(tokens: list[Token], cutter: "_Cutter") -> list[Token]:
-    """Give each token with nothing to read the speaker of the token before it, or of the first one after it.
+    """Give each token with nothing to read the speaker of a token next to it that has.
 
-    A speaker change then always falls before a token with something to read, so a range of bare punctuation never
-    starts a speaker's turn and `_attach_bare_punctuation` never merges across one.
+    An opening mark (“ or 《) leads what follows, so it takes the next reading token's speaker; any other bare
+    punctuation trails what came before, so it takes the previous one's (the next one's when nothing reads before it).
+    A speaker change then always falls at the edge of something to read, so a range of bare punctuation never starts a
+    speaker's turn and `_attach_bare_punctuation` never merges across one.
     """
     if all(token.speaker is None for token in tokens):
         return tokens
-    reading = [index for index in range(len(tokens)) if cutter.units(index, index + 1)]
-    if not reading:
+    reads = [bool(cutter.units(index, index + 1)) for index in range(len(tokens))]
+    if not any(reads):
         return tokens
+    following: list[str | None] = [None] * len(tokens)
+    upcoming: str | None = None
+    for index in range(len(tokens) - 1, -1, -1):
+        if reads[index]:
+            upcoming = tokens[index].speaker
+        following[index] = upcoming
     out: list[Token] = []
-    speaker = tokens[reading[0]].speaker
+    previous: str | None = None
+    seen = False
     for index, token in enumerate(tokens):
-        if cutter.units(index, index + 1):
-            speaker = token.speaker
+        if reads[index]:
+            speaker = previous = token.speaker
+            seen = True
+        elif not seen or (_is_opener(token.text) and following[index] is not None):
+            speaker = following[index]
+        else:
+            speaker = previous
         out.append(token if token.speaker == speaker else replace(token, speaker=speaker))
     return out
+
+
+def _is_opener(text: str) -> bool:
+    # Straight quotes are left out: they close as often as they open.
+    stripped = text.strip()
+    return bool(stripped) and all(char in _TURN_OPENERS for char in stripped)
 
 
 def _speaker_cuts(tokens: Sequence[Token]) -> set[int]:

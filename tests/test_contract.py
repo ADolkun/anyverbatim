@@ -486,8 +486,12 @@ def _paragraph_without_speaker(raw: Raw) -> None:
     raw["paragraphs"][1]["speaker"] = None
 
 
-def _speakers_out_of_appearance_order(raw: Raw) -> None:
+def _speakers_out_of_number_order(raw: Raw) -> None:
     raw["speakers"].reverse()
+
+
+def _speaker_listed_twice(raw: Raw) -> None:
+    raw["speakers"].append(dict(raw["speakers"][0]))
 
 
 def _renumber(raw: Raw, old: str, new: str) -> None:
@@ -495,10 +499,6 @@ def _renumber(raw: Raw, old: str, new: str) -> None:
         for key in ("id", "speaker"):
             if item.get(key) == old:
                 item[key] = new
-
-
-def _speaker_ids_decrease(raw: Raw) -> None:
-    _renumber(raw, "S1", "S5")
 
 
 def _speaker_id_zero(raw: Raw) -> None:
@@ -596,8 +596,8 @@ REJECTED_RECORDINGS: dict[str, tuple[Callable[[Raw], None], str]] = {
     "empty file name": (_empty_file_name, "file_name\n  String should match pattern"),
     "segment without speaker": (_segment_without_speaker, "segment 1 has no speaker"),
     "paragraph without speaker": (_paragraph_without_speaker, "paragraph 1 has no speaker"),
-    "speakers out of appearance order": (_speakers_out_of_appearance_order, "order of first appearance"),
-    "speaker ids decrease": (_speaker_ids_decrease, "increase in order of first appearance"),
+    "speakers out of number order": (_speakers_out_of_number_order, "in order of their id number"),
+    "speaker listed twice": (_speaker_listed_twice, "lists an id twice"),
     "speaker id zero": (_speaker_id_zero, "id\n  String should match pattern"),
     "speaker id shape": (_speaker_id_shape, "id\n  String should match pattern"),
     "blank speaker name": (_blank_speaker_name, "blank name"),
@@ -627,6 +627,14 @@ def test_recording_validator_rejects(name: str) -> None:
     mutate(raw)
     with pytest.raises(ValidationError, match=expected):
         ContextDocument.model_validate(raw)
+
+
+def test_a_later_speaker_id_may_speak_first() -> None:
+    raw = make_recording()
+    _renumber(raw, "S1", "S5")
+    raw["speakers"].reverse()
+    doc = ContextDocument.model_validate(raw)
+    assert [s.id for s in doc.speakers] == ["S2", "S5"] and doc.segments[0].speaker == "S5"
 
 
 def test_speaker_ids_may_skip_numbers() -> None:
