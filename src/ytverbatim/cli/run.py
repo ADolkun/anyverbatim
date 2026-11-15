@@ -5,6 +5,7 @@ from typing import NoReturn
 import click
 
 from ytverbatim import config, paths, pipeline, targets
+from ytverbatim.acquire import local, voicememos
 from ytverbatim.acquire.session import REPORT_FILE, BatchReport, VideoStatus, stop_fix
 from ytverbatim.auth.fixes import fix_for
 from ytverbatim.auth.preflight import fix_context
@@ -97,15 +98,14 @@ def run_command(  # noqa: PLR0913
     except ValueError as exc:
         _fail(str(exc))
     files = [target for target in found if isinstance(target, Path)]
-    if any(isinstance(target, targets.MemoSelector) for target in found):
-        _fail("memos: targets are not supported yet; share the memo out of Voice Memos and pass the file")
-    if files and len(files) != len(found):
+    selectors = [target.selector for target in found if isinstance(target, targets.MemoSelector)]
+    if (files or selectors) and len(files) + len(selectors) != len(found):
         _fail("run YouTube and local targets separately")
     overrides: dict[str, dict[str, object]] = {
         "asr": {"engine": engine, "source": transcript_source, "language": language},
         "text": {"correct": correct, "chapters": chapters},
     }
-    if files:
+    if files or selectors:
         youtube_only = {
             "--auth": auth_spec,
             "--source": transcript_source,
@@ -115,7 +115,7 @@ def run_command(  # noqa: PLR0913
         given = [flag for flag, value in youtube_only.items() if value is not None]
         if given:
             _fail(f"{', '.join(given)} only apply to YouTube targets")
-        _run_files(files, out, overrides, llm_spec, force=force)
+        _run_files(files, selectors, out, overrides, llm_spec, force=force)
     source = None
     try:
         source = resolve_source(auth_spec)
@@ -165,14 +165,25 @@ def _options(overrides: config.Overrides, llm_spec: str | None) -> config.Option
 
 
 def _run_files(
-    files: list[Path], out: Path | None, overrides: config.Overrides, llm_spec: str | None, *, force: bool
+    files: list[Path],
+    selectors: list[str],
+    out: Path | None,
+    overrides: config.Overrides,
+    llm_spec: str | None,
+    *,
+    force: bool,
 ) -> NoReturn:
     root = out if out is not None else paths.recordings_root()
     try:
         options = _options(overrides, llm_spec)
         media = targets.expand(files, exclude=root)
-        if not media:
+        memos = _select_memos(selectors, root)
+        if not media and not memos:
+            if selectors:
+                click.echo("no new memos to transcribe")
+                raise SystemExit(0)
             _fail("no audio or video files found in the folders given")
+        media += [memo.audio for memo in memos if memo.audio is not None]
         report = pipeline.process_files(
             media,
             options,
@@ -181,6 +192,11 @@ def _run_files(
             interactive=interactive(),
             progress=_print_progress,
             on_video=_print_result,
+            provenance={
+                memo.audio: local.Provenance("voice_memos", memo.title, memo.recorded_at)
+                for memo in memos
+                if memo.audio is not None
+            },
         )
     except EngineMemoryError as exc:
         click.echo(f"■ {redact(exc.detail)}", err=True)
@@ -191,6 +207,37 @@ def _run_files(
     _print_summary(report, root)
     click.echo(f"index: {redact(str(root / INDEX_MD))}")
     raise SystemExit(report.exit_code)
+
+
+def _select_memos(selectors: list[str], root: Path) -> list[voicememos.Memo]:
+    if not selectors:
+        return []
+    listing = voicememos.read_library()
+    for warning in listing.warnings:
+        click.echo(f"warning: {warning}", err=True)
+
+    def transcribed(recording_id: str) -> bool:
+        return (paths.source_dir(recording_id, root) / pipeline.CONTEXT_JSON).is_file()
+
+    cache = voicememos.MemoCache()
+    picked: dict[str, voicememos.Memo] = {}
+    skipped: dict[str, voicememos.Memo] = {}
+    for selector in selectors:
+        chosen = voicememos.select(
+            selector, listing.memos, cache=cache, recording_id=local.recording_id, transcribed=transcribed
+        )
+        picked.update((memo.unique_id, memo) for memo in chosen.memos)
+        skipped.update((memo.unique_id, memo) for memo in chosen.skipped)
+    absent = sum(memo.availability == "not_downloaded" for memo in skipped.values())
+    if absent:
+        click.echo(f"! {absent} memo(s) not downloaded, skipped: open Voice Memos to download them", err=True)
+    unreadable = len(skipped) - absent
+    if unreadable:
+        click.echo(
+            f"! {unreadable} memo(s) cannot be read (a .composition folder, or a file outside the library), skipped",
+            err=True,
+        )
+    return list(picked.values())
 
 
 def _print_progress(event: pipeline.ProgressEvent) -> None:

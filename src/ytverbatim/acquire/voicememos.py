@@ -12,7 +12,7 @@ import shutil
 import sqlite3
 import tempfile
 import unicodedata
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,7 +21,7 @@ from typing import Literal
 
 from ytverbatim import paths
 from ytverbatim.atomic import write_json
-from ytverbatim.errors import ConfigError
+from ytverbatim.errors import ConfigError, DependencyError, EngineMemoryError, YtverbatimError
 from ytverbatim.ytdlp.runner import redact
 
 CONTAINER = "~/Library/Group Containers/group.com.apple.VoiceMemos.shared"
@@ -289,6 +289,115 @@ class MemoCache:
         if len(kept) != len(self._entries):
             self._entries = kept
             write_json(self._file(create=True), kept, mode=0o600)
+
+
+@dataclass(frozen=True)
+class Selection:
+    memos: tuple[Memo, ...]
+    """The local memos to transcribe, newest first."""
+    skipped: tuple[Memo, ...] = ()
+    """Memos the selector covers that have no readable local audio; they are never hashed."""
+
+
+def select(
+    selector: str,
+    memos: Sequence[Memo],
+    *,
+    cache: MemoCache,
+    recording_id: RecordingId,
+    transcribed: Callable[[str], bool],
+) -> Selection:
+    """Resolve `new`, `latest`, `all` or a `ZUNIQUEID` prefix; `memos` is the listing, newest first.
+
+    Every selected memo's id is stored in `cache`, hashing only on a miss, so the listing can tell later which
+    memos are transcribed. `new` is the only selector that may select nothing.
+    """
+    local_memos = [memo for memo in memos if memo.availability == "local"]
+    if selector == "new":
+        picked = [memo for memo in local_memos if not _is_transcribed(memo, cache, recording_id, transcribed)]
+        return Selection(tuple(picked), _unavailable(memos))
+    if selector == "latest":
+        if not local_memos:
+            raise _nothing_local(memos)
+        newest = local_memos[0]
+        _remember(newest, cache, recording_id)
+        return Selection((newest,), _unavailable(memos[: memos.index(newest)]))
+    if selector == "all":
+        if not local_memos:
+            raise _nothing_local(memos)
+        for memo in local_memos:
+            _remember(memo, cache, recording_id)
+        return Selection(tuple(local_memos), _unavailable(memos))
+    memo = _by_prefix(selector, memos)
+    _remember(memo, cache, recording_id)
+    return Selection((memo,))
+
+
+def _unavailable(memos: Sequence[Memo]) -> tuple[Memo, ...]:
+    return tuple(memo for memo in memos if memo.availability != "local")
+
+
+def _is_transcribed(
+    memo: Memo, cache: MemoCache, recording_id: RecordingId, transcribed: Callable[[str], bool]
+) -> bool:
+    found = _remember(memo, cache, recording_id)
+    return found is not None and transcribed(found)
+
+
+def _remember(memo: Memo, cache: MemoCache, recording_id: RecordingId) -> str | None:
+    """Return the memo's id; a memo that cannot be hashed stays selected, so the run reports why it fails."""
+    try:
+        return cache.resolve(memo, recording_id)
+    except (DependencyError, EngineMemoryError):
+        raise
+    except (YtverbatimError, ValueError, OSError):
+        return None
+
+
+def _nothing_local(memos: Sequence[Memo]) -> ConfigError:
+    error = ConfigError("no Voice Memos are downloaded to this Mac" if memos else "there are no Voice Memos")
+    error.fix = (
+        "open a memo once in Voice Memos to download it; `ytverbatim memos` shows which are not downloaded"
+        if memos
+        else "record a memo, or turn on Voice Memos in iCloud settings on the iPhone and the Mac"
+    )
+    return error
+
+
+def _by_prefix(prefix: str, memos: Sequence[Memo]) -> Memo:
+    wanted = prefix.lower()
+    if not wanted:
+        error = ConfigError("memos: needs new, latest, all or the start of a memo id")
+        error.fix = "`ytverbatim memos` lists the memos with their ids"
+        raise error
+    found = [memo for memo in memos if memo.unique_id.lower().startswith(wanted)]
+    if not found:
+        error = ConfigError(f"no Voice Memo has an id starting with {prefix!r}")
+        error.fix = "`ytverbatim memos --all` lists every memo with its id"
+        raise error
+    if len(found) > 1:
+        lowered = [memo.unique_id.lower() for memo in found]
+        longest = max(map(len, lowered))
+        width = next(
+            (n for n in range(max(8, len(prefix) + 1), longest) if len({u[:n] for u in lowered}) == len(lowered)),
+            longest,
+        )
+        ids = ", ".join(u[:width] for u in lowered)
+        error = ConfigError(f"{prefix!r} matches {len(found)} memos: {ids}")
+        error.fix = "give more characters of the id"
+        raise error
+    (memo,) = found
+    if memo.availability == "not_downloaded":
+        error = ConfigError(f"memo {memo.unique_id[:8].lower()} is not downloaded to this Mac")
+        error.fix = "open the memo once in Voice Memos to download it"
+        raise error
+    if memo.availability == "unsupported":
+        error = ConfigError(
+            f"memo {memo.unique_id[:8].lower()} cannot be read (a .composition folder, or a file outside the library)"
+        )
+        error.fix = "share the memo out of Voice Memos and pass the file"
+        raise error
+    return memo
 
 
 @dataclass(frozen=True)
