@@ -628,7 +628,9 @@ def test_an_asr_version_bump_rereads_the_kept_rows_without_audio_or_decoding(ses
     bump(monkeypatch, "asr")
     real = stages.from_asr_rows
     monkeypatch.setattr(
-        stages, "from_asr_rows", lambda *args: real(*args).model_copy(update={"warnings": ("re-derived",)})
+        stages,
+        "from_asr_rows",
+        lambda *args, **kwargs: real(*args, **kwargs).model_copy(update={"warnings": ("re-derived",)}),
     )
     report, results, _ = run(session_kit, yt)
     assert report.exit_code == 0, results[0].outcome
