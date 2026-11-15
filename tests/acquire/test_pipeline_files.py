@@ -1,4 +1,4 @@
-"""Local recordings through `process_files`, `process` and `run`, with fake ffprobe/ffmpeg, workers and LLM."""
+"""Local recordings through `process_files`, `process`, `run` and `speakers`, with fake media, workers and LLM."""
 
 import hashlib
 import json
@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from ytverbatim import atomic, config, pipeline, proc, store
+from ytverbatim import atomic, config, pipeline, proc, speakers, store
 from ytverbatim.asr import registry
 from ytverbatim.asr import runner as asr_runner
 from ytverbatim.asr.models import (
@@ -24,7 +24,7 @@ from ytverbatim.asr.models import (
 )
 from ytverbatim.asr.runner import WorkerResult
 from ytverbatim.cli import main
-from ytverbatim.contract import RecordingSource, Word, load_document
+from ytverbatim.contract import ContextDocument, RecordingSource, Word, load_document
 from ytverbatim.diarize import attribution
 from ytverbatim.diarize import protocol as diarize_protocol
 from ytverbatim.diarize import registry as diarize_registry
@@ -32,6 +32,7 @@ from ytverbatim.diarize import runner as diarize_runner
 from ytverbatim.diarize.protocol import DiarizeRequest, FileDiarization, Turn
 from ytverbatim.diarize.runner import DiarizeResult
 from ytverbatim.errors import ConfigError, DependencyError, EngineError, MediaValidationError
+from ytverbatim.index import INDEX_MD
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from ytverbatim.mlx_worker import without_wav
 from ytverbatim.pipeline import ProgressEvent, VideoResult, process, process_files
@@ -754,3 +755,250 @@ def test_a_failure_reading_the_diarization_back_is_reported_at_the_asr_stage(
     _, results, _ = run_files(session_kit, [media.add(tmp_path / "meeting.m4a")])
     error = results[0].error
     assert isinstance(error, EngineError) and error.stage == "asr" and "probs.f16" in str(error)
+
+
+# Three voices of three words each, with short pauses between them.
+THREE_VOICES = [(0, 2, 0), (3, 5, 3), (6, 8, 5)]
+
+
+def speakers_cli(kit, *args: str):
+    return CliRunner().invoke(main, ["speakers", "--out", str(kit.out), *args])
+
+
+def diarized(kit, media: Media, diarizer: Diarizer, tmp_path: Path, turns=None, **kwargs) -> Path:
+    diarizer.turns = turns or THREE_VOICES
+    path = media.add(tmp_path / "meeting.m4a")
+    run_files(kit, [path], **kwargs)
+    return path
+
+
+def stored_document(kit) -> ContextDocument:
+    return load_document(kit.out / rec_id() / "context.json")
+
+
+def test_list_mode_shows_each_speakers_id_name_talk_time_and_a_short_first_line(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    worker.spoken = tuple(f"word{i}" for i in range(22))
+    diarized(session_kit, media, diarizer, tmp_path, turns=[(0, 10, 0), (11, 21, 3)])
+    result = speakers_cli(session_kit, rec_id())
+    assert result.exit_code == 0, result.output
+    first, second = result.output.splitlines()
+    assert first.startswith("S1  -  ") and "[0:01] word0 word1" in first and first.endswith("…")
+    assert second.startswith("S2  -  ") and "[0:06] word11" in second
+    assert all(len(line.split("] ", 1)[1]) <= 60 for line in (first, second))
+    assert "  0:05  " in first, "talk time is m:ss"
+
+    named = speakers_cli(session_kit, str(session_kit.out / rec_id() / "context.json"), "S2=Bob")
+    assert named.exit_code == 0, named.output
+    assert speakers_cli(session_kit, str(session_kit.out / rec_id())).output.splitlines()[1].startswith("S2  Bob  ")
+
+
+def test_a_rename_rewrites_json_markdown_record_and_index_and_a_rerun_skips(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    path = diarized(session_kit, media, diarizer, tmp_path)
+    rdir = session_kit.out / rec_id()
+    before = stored_document(session_kit)
+    mark = (rdir / ".stages" / "context.json").read_text(encoding="utf-8")
+
+    result = speakers_cli(session_kit, rec_id(), "S1=Alice", "S2=Bob")
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[0].startswith("S1  Alice  ") and lines[1].startswith("S2  Bob    ") and lines[2].startswith("S3  -")
+    assert lines[3] == str(rdir / "context.md")
+
+    after = stored_document(session_kit)
+    assert [(s.id, s.name, s.speech_s) for s in after.speakers] == [
+        ("S1", "Alice", before.speakers[0].speech_s),
+        ("S2", "Bob", before.speakers[1].speech_s),
+        ("S3", None, before.speakers[2].speech_s),
+    ]
+    assert after.segments == before.segments and after.created_at == before.created_at
+    markdown = (rdir / "context.md").read_text(encoding="utf-8")
+    assert "**Alice:**" in markdown and "**Bob:**" in markdown and "**Speaker 3:**" in markdown
+    assert "Speakers: Alice (" in markdown
+    assert "| Alice, Bob, Speaker 3 |" in (session_kit.out / INDEX_MD).read_text(encoding="utf-8")
+    saved = json.loads((rdir / "speakers.json").read_text(encoding="utf-8"))
+    assert saved["names"] == {"S1": "Alice", "S2": "Bob"}
+    assert (rdir / ".stages" / "context.json").read_text(encoding="utf-8") != mark
+
+    calls = (len(worker.calls), len(diarizer.calls), media.converted)
+    report, results, events = run_files(session_kit, [path])
+    assert report.exit_code == 0 and results[0].outcome.reused == ("context",)
+    assert [e.stage for e in events] == ["skip"]
+    assert (len(worker.calls), len(diarizer.calls), media.converted) == calls
+    assert stored_document(session_kit) == after
+
+
+def test_clearing_every_name_removes_the_file_and_keeps_the_key_documents_without_names_have(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    path = diarized(session_kit, media, diarizer, tmp_path)
+    rdir = session_kit.out / rec_id()
+    mark = (rdir / ".stages" / "context.json").read_text(encoding="utf-8")
+    assert speakers_cli(session_kit, rec_id(), "S1=Alice", "S2=Bob").exit_code == 0
+    assert speakers_cli(session_kit, rec_id(), "S1=", "S2=").exit_code == 0
+    assert not (rdir / "speakers.json").exists()
+    assert (rdir / ".stages" / "context.json").read_text(encoding="utf-8") == mark
+    assert all(s.name is None for s in stored_document(session_kit).speakers)
+    _, results, _ = run_files(session_kit, [path])
+    assert results[0].outcome.reused == ("context",)
+
+
+def test_sharing_a_name_merges_labels_talk_time_and_consecutive_paragraphs(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    diarized(session_kit, media, diarizer, tmp_path)
+    rdir = session_kit.out / rec_id()
+    before = stored_document(session_kit)
+    assert [p.speaker for p in before.paragraphs] == ["S1", "S2", "S3"]
+    talk = {s.id: s.speech_s for s in before.speakers}
+    total = sum(talk.values())
+
+    assert speakers_cli(session_kit, rec_id(), "S1=Alice", "S3=Alice").exit_code == 0
+    markdown = (rdir / "context.md").read_text(encoding="utf-8")
+    share = round(100 * (talk["S1"] + talk["S3"]) / total)
+    assert f"Speakers: Alice ({share}%) · Speaker 2 ({100 - share}%)" in markdown
+    assert markdown.count("**Alice:**") == 2 and markdown.count("**Speaker 2:**") == 1, "Bob sits between them"
+    assert "| Alice, Speaker 2 |" in (session_kit.out / INDEX_MD).read_text(encoding="utf-8")
+
+    assert speakers_cli(session_kit, rec_id(), "S1=Alice", "S2=Bob", "S3=Bob").exit_code == 0
+    merged = (rdir / "context.md").read_text(encoding="utf-8")
+    body = merged.split("## Transcript\n\n", 1)[1].split("\n\n")
+    assert len(body) == 2 and body[0].startswith("[00:01] **Alice:**") and body[1].startswith("[00:02] **Bob:**")
+    assert f"Bob ({round(100 * (talk['S2'] + talk['S3']) / total)}%)" in merged
+    segments = stored_document(session_kit).segments
+    assert [(s.speaker, s.paragraph) for s in segments] == [("S1", 0), ("S2", 1), ("S3", 2)], (
+        "the document keeps its speakers and paragraphs; only the render joins them"
+    )
+
+
+def test_one_name_for_everyone_shows_no_labels(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    diarized(session_kit, media, diarizer, tmp_path)
+    assert speakers_cli(session_kit, rec_id(), "S1=Alice", "S2=Alice", "S3=Alice").exit_code == 0
+    markdown = (session_kit.out / rec_id() / "context.md").read_text(encoding="utf-8")
+    assert "**" not in markdown and "Speakers:" not in markdown
+
+
+def test_a_text_stage_rerun_keeps_the_names_and_sends_none_to_the_llm(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    path = diarized(session_kit, media, diarizer, tmp_path)
+    assert speakers_cli(session_kit, rec_id(), "S1=Zelda", "S2=Quentin").exit_code == 0
+
+    llm = FakeLLM()
+    _, results, events = run_files(session_kit, [path], llm=llm)
+    stages = [e.stage for e in events]
+    assert "punctuate" in stages and "skip" not in stages
+    assert llm.requests, "the text stages ran with the LLM"
+    for request in llm.requests:
+        assert "Zelda" not in repr(request) and "Quentin" not in repr(request)
+    doc = results[0].document
+    assert doc is not None
+    assert [(s.id, s.name) for s in doc.speakers] == [("S1", "Zelda"), ("S2", "Quentin"), ("S3", None)]
+    assert "**Zelda:**" in (session_kit.out / rec_id() / "context.md").read_text(encoding="utf-8")
+    assert len(worker.calls) == 1 and len(diarizer.calls) == 1, "no worker ran again"
+
+    _, results, _ = run_files(session_kit, [path], llm=FakeLLM())
+    assert results[0].outcome.reused == ("context",)
+
+
+def test_a_changed_assignment_drops_the_names_with_a_warning_and_they_can_be_set_again(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    path = diarized(session_kit, media, diarizer, tmp_path)
+    rdir = session_kit.out / rec_id()
+    assert speakers_cli(session_kit, rec_id(), "S1=Alice", "S2=Bob").exit_code == 0
+    old = json.loads((rdir / "speakers.json").read_text(encoding="utf-8"))["assignment"]
+
+    diarizer.turns = [(0, 3, 0), (4, 8, 3)]
+    _, results, _ = run_files(session_kit, [path], force=True)
+    (result,) = results
+    assert result.document is not None and speakers.STALE_WARNING in result.notices
+    assert [s.name for s in result.document.speakers] == [None, None]
+    assert speakers.STALE_WARNING in result.document.quality.warnings
+    markdown = (rdir / "context.md").read_text(encoding="utf-8")
+    assert "Alice" not in markdown and "Bob" not in markdown and "**Speaker 1:**" in markdown
+    assert json.loads((rdir / "speakers.json").read_text(encoding="utf-8"))["assignment"] == old
+
+    _, results, _ = run_files(session_kit, [path])
+    assert results[0].outcome.reused == ("context",), "the stale file is a stable input, not a reason to rebuild"
+
+    listed = speakers_cli(session_kit, rec_id())
+    assert listed.exit_code == 0 and "were not applied" in listed.output and "Alice" not in listed.output
+
+    assert speakers_cli(session_kit, rec_id(), "S1=Carol").exit_code == 0
+    fixed = stored_document(session_kit)
+    assert [s.name for s in fixed.speakers] == ["Carol", None]
+    assert speakers.STALE_WARNING not in fixed.quality.warnings
+    assert json.loads((rdir / "speakers.json").read_text(encoding="utf-8"))["assignment"] != old
+
+
+def test_an_unknown_id_fails_and_lists_the_valid_ones_without_touching_anything(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    diarized(session_kit, media, diarizer, tmp_path)
+    rdir = session_kit.out / rec_id()
+    before = (rdir / "context.json").read_bytes()
+    result = speakers_cli(session_kit, rec_id(), "S1=Alice", "S9=Bob")
+    assert result.exit_code == 1
+    assert "no speaker S9; this recording has S1, S2, S3" in result.output
+    assert (rdir / "context.json").read_bytes() == before and not (rdir / "speakers.json").exists()
+
+
+def test_a_name_that_is_another_ids_default_label_is_refused(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    diarized(session_kit, media, diarizer, tmp_path)
+    result = speakers_cli(session_kit, rec_id(), "S1=Speaker 2")
+    assert result.exit_code == 1 and "default label of S2" in result.output
+    assert not (session_kit.out / rec_id() / "speakers.json").exists()
+    assert speakers_cli(session_kit, rec_id(), "S1=Speaker 1").exit_code == 0, "an id's own default label is fine"
+
+
+@pytest.mark.parametrize("argument", ["Alice", "=Alice", "X1=Alice", "S0=Alice"])
+def test_an_assignment_without_a_speaker_id_is_refused(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path, argument: str
+) -> None:
+    diarized(session_kit, media, diarizer, tmp_path)
+    result = speakers_cli(session_kit, rec_id(), argument)
+    assert result.exit_code == 1 and "is not ID=NAME" in result.output
+
+
+def test_a_recording_that_was_not_diarized_has_no_speakers_to_name(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    path = media.add(tmp_path / "meeting.m4a")
+    off = config.load_options(overrides={"diarize": {"mode": "off"}})
+    run_files(session_kit, [path], off)
+    result = speakers_cli(session_kit, rec_id(), "S1=Alice")
+    assert result.exit_code == 2 and "was not diarized" in result.output
+
+
+def test_the_run_key_changes_only_when_a_names_file_exists(session_kit, tmp_path: Path) -> None:
+    keyed = pipeline._settings(
+        config.load_options(),
+        None,
+        session_kit.out,
+        kind="recording",
+        force=False,
+        captions=False,
+        emit=lambda _e: None,
+        clock=lambda: NOW,
+    )
+    plain = keyed.run_key()
+    assert keyed.run_key(None) == plain
+    assert keyed.run_key(store.digest({"S1": "Alice"})) != plain
+    assert speakers.digest(tmp_path) is None
+
+
+def test_a_garbage_names_file_fails_the_run_loudly(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    path = diarized(session_kit, media, diarizer, tmp_path)
+    (session_kit.out / rec_id() / "speakers.json").write_text('{"names": 1}', encoding="utf-8")
+    _, results, _ = run_files(session_kit, [path])
+    assert results[0].outcome.error is not None and "speaker names file" in results[0].outcome.detail

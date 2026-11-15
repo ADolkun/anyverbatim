@@ -35,6 +35,15 @@ def test_a_matching_hash_skips_the_stage(tmp_path: Path) -> None:
     assert record == {"stage_version": "1", "input_hash": key, "output": {"value": 1}}
 
 
+def test_stored_returns_the_output_whatever_key_made_it(tmp_path: Path) -> None:
+    store = StageStore(tmp_path)
+    assert store.stored("demo", Output) is None
+    store.save("demo", "1", input_hash("demo", "1", {"text": "abc"}), Output(value=4))
+    assert store.stored("demo", Output) == Output(value=4)
+    (tmp_path / ".stages" / "demo.json").write_text('{"output": {"value": "x"}}', encoding="utf-8")
+    assert store.stored("demo", Output) is None
+
+
 def test_another_input_or_stage_version_recomputes(tmp_path: Path) -> None:
     store = StageStore(tmp_path)
     store.save("demo", "1", input_hash("demo", "1", {"text": "abc"}), Output(value=1))

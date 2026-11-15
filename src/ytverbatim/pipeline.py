@@ -30,7 +30,7 @@ from typing import Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
-from ytverbatim import atomic, config, ids, index, mlx_worker, paths, stages, store
+from ytverbatim import atomic, config, ids, index, mlx_worker, paths, speakers, stages, store
 from ytverbatim.acquire import local
 from ytverbatim.acquire.audio import WAV_NAME
 from ytverbatim.acquire.captions import CaptionKind, CaptionTrack
@@ -591,8 +591,11 @@ class _Settings:
     def llm_id(self) -> str | None:
         return self.llm.id if self.llm is not None else None
 
-    def run_key(self) -> str:
-        """Everything a finished document depends on besides the source itself; a change means a rerun."""
+    def run_key(self, names: str | None = None) -> str:
+        """Everything a finished document depends on besides the source itself; a change means a rerun.
+
+        `names` is the digest of the source's `speakers.json` (`speakers.digest`), None without one.
+        """
         versions = stage_versions()
         inputs: dict[str, JsonValue] = {
             "versions": dict[str, JsonValue](versions),
@@ -613,6 +616,8 @@ class _Settings:
         if self.diarizer is not None:
             # The attribution rules ride along, so a rule change rebuilds a finished document from its stored stages.
             inputs["diarizer"] = stages.diarization_run(self.diarizer).model_dump(mode="json")
+        if names is not None:
+            inputs["speaker_names"] = names
         return input_hash("context", versions["context"], inputs)
 
 
@@ -627,8 +632,11 @@ def _settings(
     emit: Callable[[ProgressEvent], None],
     clock: Callable[[], datetime],
     interactive: bool = False,
+    ready: bool = True,
 ) -> _Settings:
-    check_dependencies(options, source=kind)
+    """Resolve a batch's settings; `ready` checks that its engines and LLM can run, which only running needs."""
+    if ready:
+        check_dependencies(options, source=kind)
     definition = registry.get(options.asr.engine or _DEFAULT_ENGINE[kind])
     languages = _allowed_languages(options.asr.languages, definition) if kind == "recording" else ()
     second: EngineDef | None = None
@@ -646,7 +654,8 @@ def _settings(
             )
     if llm is None and options.llm.provider != "none":
         # A missing `claude` CLI or base URL must fail now, not after an hour of ASR.
-        check_ready(options.llm, interactive=interactive)
+        if ready:
+            check_ready(options.llm, interactive=interactive)
         llm = client_from_options(options.llm, interactive=interactive)
     if options.text.correct and llm is None:
         raise ConfigError("correction needs an LLM; pass --llm PROVIDER:MODEL or set [llm], or use --no-correct")
@@ -744,7 +753,8 @@ def _reusable(vdir: Path, settings: _Settings) -> ContextDocument | None:
     context = vdir / CONTEXT_JSON
     if settings.force or not context.is_file():
         return None
-    mark = StageStore(vdir).load("context", stage_versions()["context"], settings.run_key(), _ContextMark)
+    key = settings.run_key(speakers.digest(vdir))
+    mark = StageStore(vdir).load("context", stage_versions()["context"], key, _ContextMark)
     if mark is None:
         return None
     data = context.read_bytes()
@@ -1283,6 +1293,9 @@ class _Transcription:
         verified = self._numeric(corrected, source, second)
         displayed = self._numerals(verified.stretches, language)
         self.notices += [*punctuated.notices, *verified.notices]
+        names = speakers.bound(prepared.dir, source.assignment)
+        if names.stale:
+            self.notices.append(speakers.STALE_WARNING)
 
         self.trace.emit("write")
         began = time.monotonic()
@@ -1296,14 +1309,9 @@ class _Transcription:
             llm_punctuated=punctuated.llm_punctuated,
             warnings=self.notices,
             llm_usage=(*punctuated.usage, *corrected.usage, *verified.usage),
+            speaker_names=names.names,
         )
-        dumped = dump_document(document)
-        # The record goes first and comes back last, so it never vouches for a half-written pair of files.
-        self.store.discard("context")
-        atomic.write_text(prepared.dir / CONTEXT_MD, render_markdown(document))
-        atomic.write_text(prepared.dir / CONTEXT_JSON, dumped)
-        sha = hashlib.sha256(dumped.encode("utf-8")).hexdigest()
-        self.store.save("context", stage_versions()["context"], settings.run_key(), _ContextMark(sha256=sha))
+        _write_context(prepared.dir, document, settings)
         self.trace.timings.append(StageTiming("write", time.monotonic() - began, reused=False))
         return document
 
@@ -1525,6 +1533,40 @@ class _Transcription:
             return _Stretches(stretches=stages.numerals(previous, language))
 
         return self._stage("numerals", key, _Stretches, compute).stretches
+
+
+def _write_context(directory: Path, document: ContextDocument, settings: _Settings) -> None:
+    dumped = dump_document(document)
+    checkpoints = StageStore(directory)
+    # The record goes first and comes back last, so it never vouches for a half-written pair of files.
+    checkpoints.discard("context")
+    atomic.write_text(directory / CONTEXT_MD, render_markdown(document))
+    atomic.write_text(directory / CONTEXT_JSON, dumped)
+    sha = hashlib.sha256(dumped.encode("utf-8")).hexdigest()
+    key = settings.run_key(speakers.digest(directory))
+    checkpoints.save("context", stage_versions()["context"], key, _ContextMark(sha256=sha))
+
+
+def save_context(directory: Path, document: ContextDocument, options: config.Options | None = None) -> None:
+    """Replace a finished source's `context.json` and `context.md` with `document` and record it as current.
+
+    For a change that no stage reads, such as speaker names: no worker runs, no LLM is called, and a `run` with the
+    same options skips the source afterwards. The caller holds the source's lock. The record is made for `options`
+    (the config file's by default); a `run` with other options rebuilds the document once from its stored stages.
+    """
+    options = options or config.load_options()
+    settings = _settings(
+        options,
+        None,
+        directory.parent,
+        kind=document.source.kind,
+        force=False,
+        captions=True,
+        emit=_no_progress,
+        clock=utcnow,
+        ready=False,
+    )
+    _write_context(directory, document, settings)
 
 
 def _adopt(out_dir: Path, decode: JsonValue) -> None:
