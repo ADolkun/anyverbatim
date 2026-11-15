@@ -256,7 +256,7 @@ The default engine for recordings is `w-prod`, the same Whisper large-v3 as for 
 | `f-aed` | FireRedASR2 (AED). | `asr` |
 | `m-4bit` | MiMo-V2.5-ASR (4-bit). | `asr` |
 
-All of these were compared in the [engine evaluation](../evals/results/asr-2026-11-13.md), which kept `w-prod` as the default. `[asr] languages` applies only to `w-vad-lid` and `w-runs-lid`. Diarizing needs `asr` as well, so a diarized recording with the default engine needs both extras.
+The [engine evaluation](../evals/results/asr-2026-11-13.md) compared `w-prod`, `w-vad`, `q-base`, `q-ctx`, `f-aed` and `m-4bit` on YouTube videos and kept `w-prod` as the default; `w-vad-lid` and `w-runs-lid` are still being evaluated on meeting and mixed-language audio. `[asr] languages` applies only to `w-vad-lid` and `w-runs-lid`. Diarizing needs `asr` as well, so a diarized recording with the default engine needs both extras.
 
 Per-stretch languages need an engine that detects the language of each stretch:
 
