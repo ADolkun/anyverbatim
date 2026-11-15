@@ -216,14 +216,12 @@ def build_engine(definition: EngineDef) -> Engine:
     return factory(definition.spec, variant)
 
 
-def check_dependencies(definition: EngineDef, *, with_vad: bool = False) -> None:
+def check_dependencies(definition: EngineDef) -> None:
     """Raise `DependencyError` naming the extra to install when the engine's libraries are not importable.
 
-    `with_vad` adds the voice-activity detector's library, for a source whose pre-pass runs it whatever the engine.
     Checked by `find_spec` in this interpreter, which is the one the worker runs in; nothing is imported.
     """
-    modules = dict.fromkeys((*_MODULES[definition.spec.id], *(_MLX_AUDIO if with_vad else ())))
-    missing = [module for module in modules if find_spec(module) is None]
+    missing = [module for module in _MODULES[definition.spec.id] if find_spec(module) is None]
     if missing:
         extras = ",".join(dict.fromkeys(_EXTRAS[module] for module in missing))
         raise DependencyError(

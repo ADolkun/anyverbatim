@@ -1,7 +1,9 @@
 import json
 import logging
 import os
-from collections.abc import Callable, Sequence
+import time
+from collections.abc import Callable, Generator, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,7 +17,7 @@ from pydantic import JsonValue
 
 from ytverbatim import config, pipeline, proc
 from ytverbatim.acquire import audio, session
-from ytverbatim.acquire.metadata import Chapter, VideoMetadata
+from ytverbatim.acquire.metadata import Chapter, VideoMetadata, info_path
 from ytverbatim.asr import registry
 from ytverbatim.asr import runner as asr_runner
 from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, RunMetrics, WorkerRequest
@@ -1138,3 +1140,69 @@ def test_a_caller_needs_only_the_public_names(session_kit, worker: FakeWorker, m
     with pytest.raises(BatchStopError) as stopped:
         yv.process(yv.video_url("pubVideo003"), options, llm=FakeLLM(), out=out, auth="none")
     assert stopped.value.signal is Signal.BOT_CHECK and stopped.value.until is not None and stopped.value.fix
+
+
+def test_a_finished_call_takes_the_source_lock_once_and_probes_the_video_under_it(
+    session_kit, worker: FakeWorker
+) -> None:
+    yt = session_kit.yt()
+    real_lock, real_ready = pipeline.video_lock, pipeline.ready_video
+    entered: list[Path] = []
+    probed_under_lock: list[bool] = []
+
+    @contextmanager
+    def counting_lock(directory: Path) -> Generator[None]:
+        entered.append(directory)
+        with real_lock(directory):
+            yield
+
+    def ready_video(directory: Path) -> Path | None:
+        try:
+            with real_lock(directory):
+                probed_under_lock.append(False)
+        except BusyError:
+            probed_under_lock.append(True)
+        return real_ready(directory)
+
+    with (
+        mock.patch.object(pipeline, "video_lock", counting_lock),
+        mock.patch.object(pipeline, "ready_video", ready_video),
+    ):
+        result = process(PUBLIC, video_options(on=True), out=session_kit.out, runner_factory=lambda _sleep: yt)
+
+    assert entered == [session_kit.out / PUBLIC], "a second acquisition could meet another run of the same id"
+    assert probed_under_lock == [True] and result.video_path == session_kit.out / PUBLIC / "video.mp4"
+
+
+def test_a_video_that_cannot_be_probed_fails_with_the_video_stage(session_kit, worker: FakeWorker) -> None:
+    def timed_out(_directory: Path) -> Path | None:
+        raise ProcTimeout("ffprobe", 20.0)
+
+    with mock.patch.object(pipeline, "ready_video", timed_out), pytest.raises(MediaValidationError) as raised:
+        process(PUBLIC, video_options(on=True), out=session_kit.out, runner_factory=lambda _sleep: session_kit.yt())
+    assert raised.value.stage == "video" and "could not be probed" in str(raised.value)
+
+    with (
+        mock.patch.object(pipeline, "ready_video", lambda _directory: None),
+        pytest.raises(MediaValidationError) as gone,
+    ):
+        process(PUBLIC, video_options(on=True), out=session_kit.out, runner_factory=lambda _sleep: session_kit.yt())
+    assert gone.value.stage == "video" and "no valid video file" in str(gone.value)
+
+
+def test_the_whole_video_only_fetch_of_a_finished_document_is_the_video_stage(session_kit, worker: FakeWorker) -> None:
+    yt = session_kit.yt()
+    run(session_kit, yt)
+    stale = time.time() - 2 * audio.INFO_MAX_AGE_S
+    os.utime(info_path(session_kit.out / PUBLIC), (stale, stale))
+    yt.failures[("metadata", False)] = [session_kit.fail(Signal.GEO)]
+    with pytest.raises(YtDlpError) as raised:
+        process(PUBLIC, video_options(on=True), out=session_kit.out, runner_factory=lambda _sleep: yt)
+    assert raised.value.stage == "video" and raised.value.primary is Signal.GEO
+
+
+def test_a_memory_stop_names_the_stage_it_ended_in(session_kit, worker: FakeWorker) -> None:
+    worker.error = memory_kill()
+    with pytest.raises(EngineMemoryError) as raised:
+        process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: session_kit.yt())
+    assert raised.value.stage == "asr"

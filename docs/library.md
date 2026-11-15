@@ -1,6 +1,6 @@
 # Using ytverbatim as a library
 
-`ytverbatim` is also a Python library. This page lists what is stable, how it is versioned, and what each release breaks. `tests/test_public_api.py` pins every name and signature below, so a change to the surface is always deliberate.
+`ytverbatim` is also a Python library. This page lists what is stable, how it is versioned, and what each release breaks. `tests/test_public_api.py` pins the names, the signatures and the dataclass fields below, and the error attributes an application reads, so a change to them is always deliberate.
 
 ## The stable surface
 
@@ -52,7 +52,7 @@ Everything in `ytverbatim.__all__`, plus the modules `ytverbatim.errors`, `ytver
 | `json_bytes` | The exact bytes of `context.json`, read while the source's lock was held. Store these, not a re-dump of `document`: a document of an older contract minor re-dumps differently. |
 | `directory` | The source's folder, holding `context.json`, `context.md` and the downloaded media. |
 | `markdown_path` | `directory / "context.md"`. |
-| `video_path` | The validated `video.mp4` when the video track was requested (`ytdlp.video`), else `None`. |
+| `video_path` | The validated `video.mp4` when the video track was requested (`ytdlp.video`), else `None`. It is probed under the same lock as `json_bytes`; a video that is missing or cannot be probed fails the call with `stage == "video"`. |
 | `reused` | What an earlier run already had: `context` when the whole document was current, otherwise any of `info`, `captions`, `audio`, `wav`, `video`. |
 | `notices` | The stages that could not run as asked (for example punctuation without an LLM). They are also in `document.quality.warnings`. |
 
@@ -61,13 +61,13 @@ Everything in `ytverbatim.__all__`, plus the modules `ytverbatim.errors`, `ytver
 Every error `process` and `expand` raise on purpose subclasses `YtverbatimError`, and carries:
 
 - `fix`: a one-line remedy to show the user, or `""` when there is nothing specific to say. It is set for every `BatchStopError`, `AuthError` and `YtDlpError` they raise.
-- `stage`: where the failure happened, or `None` when unknown. While fetching a video it is `info` (the metadata request), `captions`, `audio` or `video`; after the fetch it is the stage that was running (`asr`, `punctuate`, `correct`, ...). A failed video download is `stage == "video"`, so a caller can retry without the video track.
+- `stage`: where the failure happened, or `None` when unknown. While fetching a video it is `info` (the metadata request), `captions`, `audio` or `video`; after the fetch it is the stage that was running (`asr`, `punctuate`, `correct`, ...). A failed video download is `stage == "video"`, and so is every failure of the video-only fetch that a finished document needs when the video track is requested later, so a caller can retry without the video track.
 
 `BatchStopError` (`signal`, `until`) means YouTube asked to back off; the cooldown is already written, and every later request refuses until it ends. `AuthError` carries an `AuthState`, and `YtDlpError` its primary `Signal`; both enums are importable from `ytverbatim.errors`. Bad input raises `ValueError`.
 
 ### Dependencies
 
-`check_dependencies(options, source="youtube")` checks that the ASR engine the options select for that source can be imported, plus the numeric second-opinion engine when one is on. YouTube's default engine needs `ytverbatim[whisper]`. A recording also needs the `asr` extra, for the voice-activity detection and diarization it runs, so it needs `ytverbatim[whisper,asr]`. Nothing is imported or downloaded; an unknown engine is a `ConfigError`.
+`check_dependencies(options, source="youtube")` checks that the ASR engine the options select for that source (`"youtube"` or `"recording"`) can be imported, plus the numeric second-opinion engine when one is on, and names the extra that is missing: `whisper` for `w-prod`, the default, and `asr` for the other engines. `process` runs the same check before any request. Nothing is imported or downloaded; an unknown engine is a `ConfigError`, and an unknown source a `ValueError`.
 
 ## Versioning
 

@@ -74,6 +74,7 @@ from ytverbatim.errors import (
     EngineMemoryError,
     LLMError,
     MediaValidationError,
+    ProcTimeout,
     YtDlpError,
     YtverbatimError,
 )
@@ -200,6 +201,8 @@ class VideoResult:
     name: str | None = None
     # The exact `context.json` that `document` was read from, taken under the source's lock; None without a document.
     json_bytes: bytes | None = None
+    # The validated `video.mp4`, probed under the same lock; None unless the video track was requested.
+    video_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -209,8 +212,8 @@ class Result:
     `json_bytes` is the exact `context.json` on disk, read while the source's lock was held, so it is the file
     `document` was loaded from even when another process rewrites it a moment later. `video_path` is the validated
     `video.mp4`, set only when the video track was requested (`ytdlp.video`). `reused` names what an earlier run
-    already had (`context` when the whole document was current, and `info`, `captions`, `audio` or `video` for the
-    fetched parts); `notices` say which stages could not run as asked.
+    already had (`context` when the whole document was current, and `info`, `captions`, `audio`, `wav` or `video`
+    for the fetched parts); `notices` say which stages could not run as asked.
     """
 
     id: str
@@ -292,7 +295,7 @@ def process(
             if report.stopped is not None:
                 # The cooldown file is already written, so later runs wait; this video itself finished.
                 log.warning("%s is done, but YouTube asked to back off: %s", found.id, report.stopped)
-            return _finished(result, "youtube", out, video=options.ytdlp.video)
+            return _finished(result, "youtube", out)
         if report.stopped is not None:
             raise report.stopped
         _raise(result)
@@ -324,23 +327,15 @@ def _process_file(
     )
     (result,) = results
     if result.document is not None:
-        return _finished(result, "recording", out, video=False)
+        return _finished(result, "recording", out)
     _raise(result)
 
 
-def _finished(result: VideoResult, kind: SourceKind, out: Path | None, *, video: bool) -> Result:
-    assert result.document is not None
-    assert result.json_bytes is not None
+def _finished(result: VideoResult, kind: SourceKind, out: Path | None) -> Result:
+    if result.document is None or result.json_bytes is None:
+        raise YtverbatimError(f"{result.outcome.video_id} finished without a document")
     source_id = result.outcome.video_id
     directory = paths.source_dir(source_id, out)
-    video_path: Path | None = None
-    if video:
-        with video_lock(directory):
-            video_path = ready_video(directory)
-        if video_path is None:
-            error = MediaValidationError(f"{source_id} finished with the video track requested but no valid video file")
-            error.stage = "video"
-            raise error
     return Result(
         id=source_id,
         kind=kind,
@@ -348,24 +343,24 @@ def _finished(result: VideoResult, kind: SourceKind, out: Path | None, *, video:
         json_bytes=result.json_bytes,
         directory=directory,
         markdown_path=directory / CONTEXT_MD,
-        video_path=video_path,
+        video_path=result.video_path,
         reused=result.outcome.reused,
         notices=result.notices,
     )
 
 
 def check_dependencies(options: config.Options | None = None, *, source: SourceKind = "youtube") -> None:
-    """Raise `DependencyError` naming the extra to install when an engine this source would run is missing.
+    """Raise `DependencyError` naming the extra to install when an engine a run of this source needs is missing.
 
     Checks the ASR engine `options` select for `source` (`w-prod` unless `[asr] engine` is set), and the numeric
-    second-opinion engine when one is on. A recording also needs the `asr` extra, for the voice-activity detection
-    and diarization it runs on, so it needs `ytverbatim[whisper,asr]`. Nothing is imported or downloaded, and an
-    unknown engine is a `ConfigError`.
+    second-opinion engine when one is on; each names the extra its library comes from (`whisper` or `asr`). Nothing
+    is imported or downloaded. An unknown engine is a `ConfigError`, an unknown `source` a `ValueError`. `process`
+    runs the same check before any request.
     """
+    if source not in _DEFAULT_ENGINE:
+        raise ValueError(f"source must be one of {', '.join(_DEFAULT_ENGINE)}, not {source!r}")
     options = options or config.load_options()
-    registry.check_dependencies(
-        registry.get(options.asr.engine or _DEFAULT_ENGINE[source]), with_vad=source == "recording"
-    )
+    registry.check_dependencies(registry.get(options.asr.engine or _DEFAULT_ENGINE[source]))
     if options.text.numeric_second_opinion != "off":
         registry.check_dependencies(registry.get(options.text.numeric_second_opinion))
 
@@ -587,8 +582,8 @@ def _settings(
     clock: Callable[[], datetime],
     interactive: bool = False,
 ) -> _Settings:
+    check_dependencies(options, source=kind)
     definition = registry.get(options.asr.engine or _DEFAULT_ENGINE[kind])
-    registry.check_dependencies(definition)
     languages = _allowed_languages(options.asr.languages, definition) if kind == "recording" else ()
     second: EngineDef | None = None
     if options.text.numeric_second_opinion != "off":
@@ -603,7 +598,6 @@ def _settings(
                 f"text.numeric_second_opinion = {second.spec.id!r} merges same-language spans into runs, so it would "
                 "decode the audio between the numeric spans too; choose a chunk-by-chunk engine such as w-vad"
             )
-        registry.check_dependencies(second)
     if llm is None and options.llm.provider != "none":
         # A missing `claude` CLI or base URL must fail now, not after an hour of ASR.
         check_ready(options.llm, interactive=interactive)
@@ -744,13 +738,34 @@ def _run_source(
                 result = run(trace)
             if result.document is None:
                 return result
-            return replace(result, json_bytes=(sdir / CONTEXT_JSON).read_bytes())
-    except (BatchStopError, DependencyError, EngineMemoryError):
-        raise
-    except (YtverbatimError, ValueError, OSError) as exc:
-        if isinstance(exc, YtverbatimError) and exc.stage is None:
+            return replace(
+                result, json_bytes=(sdir / CONTEXT_JSON).read_bytes(), video_path=_requested_video(sdir, settings)
+            )
+    except YtverbatimError as exc:
+        if exc.stage is None:
             exc.stage = trace.stage
+        if isinstance(exc, BatchStopError | DependencyError | EngineMemoryError):
+            raise
         return _failed(source_id, exc)
+    except (ValueError, OSError) as exc:
+        return _failed(source_id, exc)
+
+
+def _requested_video(sdir: Path, settings: _Settings) -> Path | None:
+    """Return the validated video file when the video track was requested; a missing or unprobeable one is an error."""
+    if not settings.video:
+        return None
+    try:
+        path = ready_video(sdir)
+    except ProcTimeout as exc:
+        error = MediaValidationError(f"the video file of {sdir.name} could not be probed: {exc}")
+        error.stage = "video"
+        raise error from exc
+    if path is None:
+        error = MediaValidationError(f"{sdir.name} finished with the video track requested but no valid video file")
+        error.stage = "video"
+        raise error
+    return path
 
 
 def _failed(source_id: str, exc: YtverbatimError | ValueError | OSError) -> VideoResult:
@@ -789,6 +804,9 @@ def _reused_video(
         cookies_first = planned.cookies_first or (access is not None and access.cookies_used)
         fetched = session.fetch_video(video_id, cookies_first=cookies_first, audio=False, captions=False)
         if fetched.status is not VideoStatus.OK:
+            if fetched.cause is not None:
+                # Whatever of this fetch failed, the video is what the caller was waiting for.
+                fetched.cause.stage = "video"
             return VideoResult(fetched)
         outcome = replace(outcome, reused=("context", *fetched.reused))
         timings = (StageTiming("fetch", time.monotonic() - began, reused=False),)
@@ -822,7 +840,7 @@ def _error_for(outcome: VideoOutcome) -> YtverbatimError:
     error = outcome.cause or YtverbatimError(
         f"{outcome.video_id}: {outcome.error}: {outcome.detail or outcome.error or 'failed'}"
     )
-    error.fix = outcome.fix
+    error.fix = outcome.fix or error.fix
     return error
 
 

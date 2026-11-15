@@ -7,6 +7,7 @@ import dataclasses
 import inspect
 import re
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -103,18 +104,68 @@ DATACLASSES: dict[str, list[str]] = {
         "reused: tuple[str, ...]",
         "notices: tuple[str, ...]",
     ],
-    "ProgressEvent": ["id: str", "stage: str", "detail: str"],
+    "ProgressEvent": ["id: str", "stage: str", "detail: str = ''"],
     "YouTubeRef": ["kind: RefKind", "id: str", "url: str"],
     "Usage": ["input_tokens: int", "output_tokens: int"],
     "LLMRequest": [
         "system: str",
         "user: str",
-        "json_schema: Mapping[str, object] | None",
-        "max_output_tokens: int",
-        "temperature: float | None",
+        "json_schema: Mapping[str, object] | None = None",
+        "max_output_tokens: int = 4096",
+        "temperature: float | None = None",
     ],
     "LLMResponse": ["text: str", "usage: Usage | None", "elapsed_s: float"],
+    "QToken": [
+        "char_start: int",
+        "char_end: int",
+        "surface: str",
+        "value_itn: str",
+        "kind: Literal['number', 'currency', 'percent', 'ticker', 'cjk_quantity']",
+    ],
+    "Options": [
+        "auth: AuthOptions = <factory>",
+        "ytdlp: YtdlpOptions = <factory>",
+        "asr: AsrOptions = <factory>",
+        "text: TextOptions = <factory>",
+        "llm: LLMOptions = <factory>",
+    ],
+    "AuthOptions": ["policy: Literal['auto', 'always', 'never'] = 'auto'", "cookie_channels: tuple[str, ...] = ()"],
+    "YtdlpOptions": [
+        "max_videos_per_run: int = 50",
+        "premium_probe_id: str = 'BaW_jenozKc'",
+        "creator_note: bool = False",
+        "video: bool = False",
+    ],
+    "AsrOptions": [
+        "engine: str | None = None",
+        "source: Literal['asr', 'captions'] = 'asr'",
+        "language: str | None = None",
+        "languages: tuple[str, ...] = ()",
+        "memory_cap_gib: float | None = None",
+    ],
+    "TextOptions": [
+        "correct: bool | None = None",
+        "chapters: Literal['auto', 'none'] = 'auto'",
+        "numeric_second_opinion: str = 'off'",
+        "script: Literal['zh-Hans', 'keep'] = 'zh-Hans'",
+        "fillers: Literal['keep', 'remove'] = 'keep'",
+        "numerals: Literal['digits', 'keep'] = 'digits'",
+    ],
+    "LLMOptions": [
+        "provider: Literal['none', 'chatgpt', 'claude-cli', 'openai-compat'] = 'chatgpt'",
+        "model: str | None = None",
+        "effort: str | None = None",
+        "base_url: str | None = None",
+        "api_key_env: str | None = None",
+        "timeout_s: float = 900.0",
+    ],
 }
+
+
+def default_text(field: dataclasses.Field[Any]) -> str:
+    if field.default is not dataclasses.MISSING:
+        return f" = {field.default!r}"
+    return " = <factory>" if field.default_factory is not dataclasses.MISSING else ""
 
 
 def type_text(annotation: object) -> str:
@@ -125,7 +176,8 @@ def type_text(annotation: object) -> str:
 @pytest.mark.parametrize("name", sorted(DATACLASSES))
 def test_dataclass_fields_are_pinned_and_frozen(name: str) -> None:
     cls = getattr(ytverbatim, name)
-    assert [f"{f.name}: {type_text(f.type)}" for f in dataclasses.fields(cls)] == DATACLASSES[name]
+    fields = [f"{f.name}: {type_text(f.type)}{default_text(f)}" for f in dataclasses.fields(cls)]
+    assert fields == DATACLASSES[name]
     assert cls.__dataclass_params__.frozen
 
 
@@ -146,6 +198,38 @@ def test_errors_export_every_error_class_with_the_auth_vocabulary() -> None:
     for name in classes:
         error = getattr(errors, name)
         assert error.fix == "" and error.stage is None, "both default to unset, for the caller to read"
+
+
+def test_the_error_attributes_an_application_reads_are_pinned() -> None:
+    auth = errors.AuthError(errors.AuthState.LOGGED_OUT, "detail")
+    assert (auth.state, auth.detail) == (errors.AuthState.LOGGED_OUT, "detail")
+    until = datetime(2030, 1, 1, tzinfo=UTC)
+    stop = errors.BatchStopError(errors.Signal.BOT_CHECK, until)
+    assert (stop.signal, stop.until) == (errors.Signal.BOT_CHECK, until)
+    ytdlp = errors.YtDlpError(errors.Signal.GEO, (errors.Signal.TRANSIENT,), "preview", 1)
+    assert (ytdlp.primary, ytdlp.secondary, ytdlp.preview, ytdlp.returncode) == (
+        errors.Signal.GEO,
+        (errors.Signal.TRANSIENT,),
+        "preview",
+        1,
+    )
+    assert errors.UnavailableError("live").kind == "live"
+
+
+def test_load_options_and_the_config_module_are_pinned() -> None:
+    assert shown(inspect.signature(config.load_options)) == (
+        "(path: Path | None = None, overrides: Mapping[str, Mapping[str, object]] | None = None) -> Options"
+    )
+    assert sorted(config.__all__) == [
+        "AsrOptions",
+        "AuthOptions",
+        "LLMOptions",
+        "Options",
+        "Overrides",
+        "TextOptions",
+        "YtdlpOptions",
+        "load_options",
+    ]
 
 
 def test_a_members_playlist_is_told_from_other_references() -> None:
@@ -178,27 +262,28 @@ def test_check_dependencies_passes_when_the_engine_is_installed(libraries: set[s
     ytverbatim.check_dependencies(source="recording")
 
 
-def test_check_dependencies_names_the_extra_the_youtube_engine_needs(libraries: set[str]) -> None:
+@pytest.mark.parametrize("source", ["youtube", "recording"])
+def test_check_dependencies_names_the_extra_the_default_engine_needs(libraries: set[str], source: str) -> None:
     libraries.discard("mlx_whisper")
     with pytest.raises(DependencyError, match=r"install ytverbatim\[whisper\]"):
-        ytverbatim.check_dependencies()
+        ytverbatim.check_dependencies(source=source)  # type: ignore[arg-type]
 
 
-def test_a_recording_needs_both_extras(libraries: set[str]) -> None:
-    libraries.clear()
-    with pytest.raises(DependencyError, match=r"install ytverbatim\[whisper,asr\]"):
-        ytverbatim.check_dependencies(source="recording")
-    libraries.add("mlx_whisper")
-    with pytest.raises(DependencyError, match=r"install ytverbatim\[asr\]"):
-        ytverbatim.check_dependencies(source="recording")
-    ytverbatim.check_dependencies()
-
-
-def test_check_dependencies_checks_the_chosen_engine_and_the_second_opinion(libraries: set[str]) -> None:
+def test_a_recording_needs_the_asr_extra_only_when_its_engine_does(libraries: set[str]) -> None:
     libraries.discard("mlx_audio")
+    ytverbatim.check_dependencies(source="recording")
     chosen = config.load_options(overrides={"asr": {"engine": "w-vad"}})
-    with pytest.raises(DependencyError, match=r"ytverbatim\[asr\]"):
-        ytverbatim.check_dependencies(chosen)
+    with pytest.raises(DependencyError, match=r"install ytverbatim\[asr\]"):
+        ytverbatim.check_dependencies(chosen, source="recording")
+
+
+def test_check_dependencies_checks_the_second_opinion_engine(libraries: set[str]) -> None:
+    libraries.discard("mlx_audio")
     second = config.load_options(overrides={"text": {"numeric_second_opinion": "w-vad"}})
     with pytest.raises(DependencyError, match=r"ytverbatim\[asr\]"):
         ytverbatim.check_dependencies(second)
+
+
+def test_an_unknown_source_is_a_value_error(libraries: set[str]) -> None:
+    with pytest.raises(ValueError, match="source must be one of"):
+        ytverbatim.check_dependencies(source="bogus")  # type: ignore[arg-type]
