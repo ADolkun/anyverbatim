@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from ytverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from ytverbatim.text.correct import CorrectionContext, correct_segments
@@ -223,3 +225,19 @@ def test_a_mixed_language_transcript_says_so_to_correction_and_to_the_numeric_ve
     correction, verdicts = client.requests
     assert line in correction.user and "The transcript language is" not in correction.user
     assert verdicts.user.startswith(line)
+
+
+def test_per_text_languages_and_speakers_must_cover_every_text(tmp_path: Path) -> None:
+    client = EchoClient()
+    with pytest.raises(ValueError, match="speakers covers 1 texts, but there are 2"):
+        punctuate([EN_BARE, EN_BARE], language="en", client=client, checkpoint_dir=tmp_path, speakers=["S1"])
+    with pytest.raises(ValueError, match="languages covers 1 segments, but there are 2"):
+        correct_segments(
+            [EN_BARE, EN_BARE],
+            client=client,
+            language="en",
+            context=CorrectionContext(),
+            checkpoint_dir=tmp_path,
+            languages=["zh"],
+        )
+    assert client.requests == []

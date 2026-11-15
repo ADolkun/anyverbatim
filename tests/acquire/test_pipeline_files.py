@@ -1291,3 +1291,29 @@ def test_the_glossary_is_trimmed_deduplicated_and_capped(session_kit) -> None:
             emit=lambda _e: None,
             clock=lambda: NOW,
         )
+
+
+def test_only_a_diarized_documents_punctuate_and_correct_keys_say_it_is_a_conversation(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    keyed: list[tuple[str, dict[str, object]]] = []
+    real_key = pipeline._key
+
+    def recording_key(stage: str, inputs: dict[str, object]) -> str:
+        keyed.append((stage, dict(inputs)))
+        return real_key(stage, inputs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(pipeline, "_key", recording_key)
+    two_voices(diarizer)
+    path = media.add(tmp_path / "meeting.m4a")
+    run_files(session_kit, [path], llm=FakeLLM())
+    diarized_keys = {stage: inputs for stage, inputs in keyed if stage in ("punctuate", "correct")}
+    assert set(diarized_keys) == {"punctuate", "correct"}
+    assert all(inputs.get("conversation") is True for inputs in diarized_keys.values())
+
+    keyed.clear()
+    off = config.load_options(overrides={"diarize": {"mode": "off"}})
+    run_files(session_kit, [path], off, llm=FakeLLM())
+    plain_keys = {stage: inputs for stage, inputs in keyed if stage in ("punctuate", "correct")}
+    assert set(plain_keys) == {"punctuate", "correct"}
+    assert all("conversation" not in inputs for inputs in plain_keys.values())

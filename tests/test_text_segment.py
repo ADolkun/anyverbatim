@@ -616,3 +616,11 @@ def test_a_sentence_never_crosses_a_change_of_token_language_and_each_run_has_it
     mandarin = [Token(c, 1.0 + i * 0.1, 1.05 + i * 0.1, language="zh") for i, c in enumerate("我们回家了。")]
     sentences = seg.segment_tokens([*english, *mandarin, Token(" .", 2.0, 2.0)], "en")
     assert [(s.text, s.language) for s in sentences] == [("we went home", None), ("我们回家了。 .", "zh")]
+
+
+def test_an_opening_mark_at_a_language_change_goes_with_the_run_it_opens() -> None:
+    english = [Token(f" {w}", i * 0.3, i * 0.3 + 0.2) for i, w in enumerate(["we", "left."])]
+    quoted = [Token(c, 1.0 + i * 0.1, 1.05 + i * 0.1, language="zh") for i, c in enumerate("“我们走吧。”")]
+    english.append(Token(quoted[0].text, quoted[0].start, quoted[0].end))
+    sentences = seg.segment_tokens([*english, *quoted[1:]], "en")
+    assert [(s.text, s.language) for s in sentences] == [("we left.", None), ("“我们走吧。”", "zh")]

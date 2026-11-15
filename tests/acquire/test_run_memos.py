@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 from test_pipeline_files import (  # noqa: F401
+    SPOKEN,
     FakeLLM,
     Media,
     Worker,
@@ -25,6 +26,9 @@ from voicememos_fakes import Row, make_library
 from ytverbatim import pipeline
 from ytverbatim.acquire import local, voicememos
 from ytverbatim.acquire.voicememos import MemoCache, select
+from ytverbatim.asr import runner as asr_runner
+from ytverbatim.asr.models import WorkerRequest
+from ytverbatim.asr.runner import WorkerResult
 from ytverbatim.cli import main
 from ytverbatim.contract import RecordingSource, load_document
 from ytverbatim.errors import DependencyError, MediaValidationError
@@ -461,6 +465,14 @@ def test_a_rerun_with_new_provenance_rebuilds_only_the_context_record(
     assert plain[0].outcome.reused == ("context",), "a plain file never overwrites the memo's record"
 
 
+class SecondOpinionWorker(Worker):
+    """Hears "50" where the first decode heard "5" whenever it re-decodes chosen spans."""
+
+    def __call__(self, request: WorkerRequest, *, python: str | None = None) -> WorkerResult:
+        self.spoken = tuple("50" if w == "5" else w for w in SPOKEN) if request.files[0].chunks else SPOKEN
+        return super().__call__(request, python=python)
+
+
 def test_no_title_file_name_memo_title_or_speaker_name_reaches_the_llm_but_the_glossary_does(
     session_kit, media: Media, worker: Worker, diarizer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -468,6 +480,10 @@ def test_no_title_file_name_memo_title_or_speaker_name_reaches_the_llm_but_the_g
     media.tags["AAAA1111.m4a"] = {"title": "Container secret title"}
     # "we met 5 people today" is one voice, "and then we left" another.
     diarizer.turns = [(0, 4, 0), (5, 8, 3)]
+    # A second opinion that hears "50" disputes the "5", so a numeric verdict is asked for too.
+    config_file = session_kit.home / ".config" / "ytverbatim" / "config.toml"
+    config_file.write_text(config_file.read_text() + '[text]\nnumeric_second_opinion = "w-vad"\n')
+    monkeypatch.setattr(asr_runner, "run_worker", SecondOpinionWorker())
     llm = FakeLLM()
     monkeypatch.setattr(pipeline, "check_ready", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(pipeline, "client_from_options", lambda *_args, **_kwargs: llm)
@@ -484,9 +500,10 @@ def test_no_title_file_name_memo_title_or_speaker_name_reaches_the_llm_but_the_g
 
     sent = [request.system + request.user for request in llm.requests]
     assert any('"speaker": "S2"' in text for text in sent), "the text stages ran on the diarized memo twice"
+    assert any("ITEMS:" in text and '"50"' in text for text in sent), "a numeric verdict was asked for"
     for secret in (SECRET, "Container secret title", "AAAA1111", ".m4a", "Zelda", "Quentin"):
         assert not any(secret in text for text in sent), secret
-    corrections = [text for text in sent if '"fixed"' in text]
+    corrections = [text for text in sent if '"fixed"' in text and "SEGMENTS:" in text]
     assert corrections and all("Prefer these domain terms when relevant: Zorblax, Quuxcorp." in t for t in corrections)
     assert [(s.id, s.name) for s in load_document(context(session_kit, "alpha")).speakers] == [
         ("S1", "Zelda"),

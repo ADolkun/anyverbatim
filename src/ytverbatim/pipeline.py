@@ -713,7 +713,8 @@ def _glossary(terms: Sequence[str]) -> tuple[str, ...]:
     glossary = tuple(dict.fromkeys(term.strip() for term in terms if term.strip()))
     if len(glossary) > _GLOSSARY_MAX_TERMS:
         raise ConfigError(
-            f"text.glossary has {len(glossary)} terms; the correction prompt takes at most {_GLOSSARY_MAX_TERMS}"
+            f"the glossary has {len(glossary)} terms; the correction prompt takes at most {_GLOSSARY_MAX_TERMS}: "
+            "shorten [text] glossary or --glossary"
         )
     return glossary
 
@@ -1442,7 +1443,9 @@ class _Transcription:
 
     def _punctuate(self, previous: _Stretches, language: str) -> _TextResult:
         llm = self.settings.llm
-        key = _key("punctuate", {"text": _text_key(previous.stretches), "llm": self.settings.llm_id})
+        inputs: dict[str, JsonValue] = {"text": _text_key(previous.stretches), "llm": self.settings.llm_id}
+        _mark_conversation(inputs, previous.stretches)
+        key = _key("punctuate", inputs)
 
         def compute() -> _TextResult:
             stretches = previous.stretches
@@ -1489,6 +1492,7 @@ class _Transcription:
             "glossary": list(context.glossary),
             "creator_note": context.creator_note,
         }
+        _mark_conversation(inputs, previous.stretches)
 
         def compute() -> _TextResult:
             stretches = previous.stretches
@@ -1663,6 +1667,13 @@ def _remove(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
     else:
         path.unlink(missing_ok=True)
+
+
+def _mark_conversation(inputs: dict[str, JsonValue], stretches: Sequence[Stretch]) -> None:
+    # Diarized prompts say the text is a conversation, so a stage stored before they did is not reused. Added only
+    # then, so an undiarized document keeps its key.
+    if any(stretch.speaker is not None for stretch in stretches):
+        inputs["conversation"] = True
 
 
 def _text_key(stretches: Sequence[Stretch]) -> str:
