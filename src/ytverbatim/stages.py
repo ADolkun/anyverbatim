@@ -488,8 +488,11 @@ def build_document(
     llm_punctuated: bool = False,
     warnings: Sequence[str] = (),
     llm_usage: Sequence[LLMUsage] = (),
+    speaker_names: Mapping[str, str] | None = None,
 ) -> ContextDocument:
     """Assemble and validate the document from the final stretches; `llm_punctuated` says an LLM added punctuation.
+
+    `speaker_names` maps speaker ids to the names the user gave them; an id the final segments no longer have is unused.
 
     Raises `ContractError` when the inputs cannot make a valid document, such as a chapter that ends before it starts.
     """
@@ -504,6 +507,7 @@ def build_document(
             llm_punctuated=llm_punctuated,
             warnings=warnings,
             llm_usage=llm_usage,
+            speaker_names=speaker_names or {},
         )
     except ValidationError as exc:
         raise ContractError(f"{info.id}: the transcript does not fit the contract:\n{exc}") from exc
@@ -565,6 +569,7 @@ def _build(
     llm_punctuated: bool,
     warnings: Sequence[str],
     llm_usage: Sequence[LLMUsage],
+    speaker_names: Mapping[str, str],
 ) -> ContextDocument:
     language = source.language
     layout = _layout(stretches, language)
@@ -636,7 +641,7 @@ def _build(
             correction_llm=correction_llm,
             diarization=source.diarization,
         ),
-        speakers=_speakers(segments),
+        speakers=_speakers(segments, speaker_names),
         chapters=chapter_list,
         paragraphs=paragraphs,
         segments=segments,
@@ -645,10 +650,10 @@ def _build(
     )
 
 
-def _speakers(segments: Sequence[Segment]) -> tuple[Speaker, ...]:
+def _speakers(segments: Sequence[Segment], names: Mapping[str, str]) -> tuple[Speaker, ...]:
     """List the final segments' speakers under their ids; one whose text a later stage removed simply drops out."""
     talk = attribution.speech_seconds((s.start, s.end, s.speaker) for s in segments)
-    return tuple(Speaker(id=speaker, name=None, speech_s=seconds) for speaker, seconds in talk.items())
+    return tuple(Speaker(id=speaker, name=names.get(speaker), speech_s=seconds) for speaker, seconds in talk.items())
 
 
 def _layout(stretches: Sequence[Stretch], language: str) -> _Layout:

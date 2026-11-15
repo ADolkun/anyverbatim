@@ -51,6 +51,17 @@ class StageStore:
 
     def load[M: BaseModel](self, stage: str, version: str, key: str, model: type[M]) -> M | None:
         """Return the stored output if this stage version made it from these inputs, else None."""
+        raw = self._record(stage)
+        if raw is None or raw.get("stage_version") != version or raw.get("input_hash") != key:
+            return None
+        return self._output(stage, raw, model)
+
+    def stored[M: BaseModel](self, stage: str, model: type[M]) -> M | None:
+        """Return the stored output whatever it was keyed by: for a reader that follows the stage as it stands."""
+        raw = self._record(stage)
+        return None if raw is None else self._output(stage, raw, model)
+
+    def _record(self, stage: str) -> dict[str, object] | None:
         path = self.path(stage)
         try:
             raw: object = json.loads(path.read_text(encoding="utf-8"))
@@ -59,15 +70,14 @@ class StageStore:
         except (OSError, ValueError) as exc:
             log.warning("ignoring an unreadable stage checkpoint %s: %s", path.name, exc)
             return None
-        if not isinstance(raw, dict):
-            return None
-        if raw.get("stage_version") != version or raw.get("input_hash") != key:
-            return None
+        return raw if isinstance(raw, dict) else None
+
+    def _output[M: BaseModel](self, stage: str, raw: dict[str, object], model: type[M]) -> M | None:
         try:
             return model.model_validate(raw.get("output"))
         except ValidationError as exc:
             # Written only by this module, atomically: an output that no longer validates predates a model change.
-            log.warning("ignoring a stage checkpoint %s that no longer validates: %s", path.name, exc)
+            log.warning("ignoring a stage checkpoint %s that no longer validates: %s", self.path(stage).name, exc)
             return None
 
     def save(self, stage: str, version: str, key: str, output: BaseModel) -> None:
