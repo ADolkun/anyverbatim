@@ -313,16 +313,17 @@ def select(
     memos are transcribed. `new` is the only selector that may select nothing.
     """
     local_memos = [memo for memo in memos if memo.availability == "local"]
-    if selector == "new":
+    keyword = selector.lower()
+    if keyword == "new":
         picked = [memo for memo in local_memos if not _is_transcribed(memo, cache, recording_id, transcribed)]
         return Selection(tuple(picked), _unavailable(memos))
-    if selector == "latest":
+    if keyword == "latest":
         if not local_memos:
             raise _nothing_local(memos)
         newest = local_memos[0]
         _remember(newest, cache, recording_id)
         return Selection((newest,), _unavailable(memos[: memos.index(newest)]))
-    if selector == "all":
+    if keyword == "all":
         if not local_memos:
             raise _nothing_local(memos)
         for memo in local_memos:
@@ -345,7 +346,10 @@ def _is_transcribed(
 
 
 def _remember(memo: Memo, cache: MemoCache, recording_id: RecordingId) -> str | None:
-    """Return the memo's id; a memo that cannot be hashed stays selected, so the run reports why it fails."""
+    """Return the memo's id; a memo that cannot be hashed stays selected, so the run reports why it fails.
+
+    A hashing timeout takes the same path: the run hashes that memo once more and records the timeout against it.
+    """
     try:
         return cache.resolve(memo, recording_id)
     except (DependencyError, EngineMemoryError):

@@ -67,11 +67,17 @@ class LocalRecording:
 
 @dataclass(frozen=True)
 class Provenance:
-    """What the caller already knows about a file; it takes precedence over the container's own tags."""
+    """What the caller already knows about a file; it takes precedence over the container's own tags.
+
+    `stream` and `audio_sha256` come from an earlier `open_recording` of the same unchanged file; with them the
+    packets are not hashed again.
+    """
 
     origin: Origin
     title: str | None = None
     recorded_at: datetime | None = None
+    stream: int | None = None
+    audio_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,11 +90,11 @@ def open_recording(path: Path, provenance: Provenance | None = None) -> LocalRec
     """Probe `path` and hash its transcribed stream; raises `MediaValidationError` for a file it cannot use."""
     known = provenance or Provenance("file")
     probed = _probe(path)
-    stream = pick_stream(path, probed.streams)
+    stream = known.stream if known.stream is not None else pick_stream(path, probed.streams)
     return LocalRecording(
         path=path,
         stream=stream,
-        audio_sha256=packet_sha256(path, stream),
+        audio_sha256=known.audio_sha256 or packet_sha256(path, stream),
         title=known.title or _title(probed, path),
         recorded_at=known.recorded_at or _recorded_at(probed, stream),
         duration_s=_duration(probed, stream, path),

@@ -68,6 +68,14 @@ from ytverbatim.ytdlp.runner import redact
 @click.option(
     "--ignore-cooldown", is_flag=True, help="YouTube: start even though a bot or rate-limit cooldown is active."
 )
+@click.option(
+    "--quiet",
+    is_flag=True,
+    help=(
+        "Local targets and memos: print nothing when there is nothing to transcribe (no new memos, memos that are not "
+        "downloaded, sources another run holds), so a cron job sends no mail. Errors and finished work still print."
+    ),
+)
 def run_command(  # noqa: PLR0913
     raw_targets: tuple[str, ...],
     out: Path | None,
@@ -82,12 +90,15 @@ def run_command(  # noqa: PLR0913
     captions: bool | None,
     force: bool,
     ignore_cooldown: bool,
+    quiet: bool,
 ) -> None:
     """Turn YouTube videos, playlists or channels, or local recordings, into context.json and context.md.
 
     TARGETS are YouTube URLs or video ids, or local audio or video files and folders (searched recursively for media
-    files); one run takes one kind. Each source is transcribed locally, its punctuation restored and its numbers
-    verified. Videos go to one folder per video id; recordings to one folder per id derived from their audio, so a
+    files), or iPhone Voice Memos synced to this Mac: memos:new (those not yet transcribed), memos:latest, memos:all,
+    or memos:ID with the start of an id that `ytverbatim memos` lists; one run takes one kind (memos and files mix).
+    Each source is transcribed locally, its punctuation restored and its numbers verified. Videos go to one folder
+    per video id; recordings to one folder per id derived from their audio, so a
     renamed or re-saved file is still recognised, with an index.md listing them all. Every stage is stored, so a
     rerun redoes only what changed options reach; a source whose context.json is current is skipped unless --force
     is given.
@@ -115,7 +126,9 @@ def run_command(  # noqa: PLR0913
         given = [flag for flag, value in youtube_only.items() if value is not None]
         if given:
             _fail(f"{', '.join(given)} only apply to YouTube targets")
-        _run_files(files, selectors, out, overrides, llm_spec, force=force)
+        _run_files(files, selectors, out, overrides, llm_spec, force=force, quiet=quiet)
+    if quiet:
+        _fail("--quiet only applies to local and Voice Memos targets")
     source = None
     try:
         source = resolve_source(auth_spec)
@@ -172,31 +185,28 @@ def _run_files(
     llm_spec: str | None,
     *,
     force: bool,
+    quiet: bool,
 ) -> NoReturn:
     root = out if out is not None else paths.recordings_root()
     try:
         options = _options(overrides, llm_spec)
         media = targets.expand(files, exclude=root)
-        memos = _select_memos(selectors, root)
-        if not media and not memos:
-            if selectors:
-                click.echo("no new memos to transcribe")
-                raise SystemExit(0)
+        if files and not media:
             _fail("no audio or video files found in the folders given")
-        media += [memo.audio for memo in memos if memo.audio is not None]
+        memos = _select_memos(selectors, root, quiet=quiet)
+        if not media and not memos:
+            if not quiet:
+                click.echo("no new memos to transcribe")
+            raise SystemExit(0)
         report = pipeline.process_files(
-            media,
+            [*media, *memos],
             options,
             out=root,
             force=force,
             interactive=interactive(),
             progress=_print_progress,
-            on_video=_print_result,
-            provenance={
-                memo.audio: local.Provenance("voice_memos", memo.title, memo.recorded_at)
-                for memo in memos
-                if memo.audio is not None
-            },
+            on_video=lambda result: _print_result(result, quiet=quiet),
+            provenance=memos,
         )
     except EngineMemoryError as exc:
         click.echo(f"■ {redact(exc.detail)}", err=True)
@@ -204,17 +214,30 @@ def _run_files(
         raise SystemExit(EXIT_FAILED) from None
     except YtverbatimError as exc:
         _fail(str(exc), exc.fix)
-    _print_summary(report, root)
-    click.echo(f"index: {redact(str(root / INDEX_MD))}")
+    if not (quiet and all(pipeline.BUSY in video.reused for video in report.videos)):
+        _print_summary(report, root)
+        click.echo(f"index: {redact(str(root / INDEX_MD))}")
     raise SystemExit(report.exit_code)
 
 
-def _select_memos(selectors: list[str], root: Path) -> list[voicememos.Memo]:
+def _select_memos(selectors: list[str], root: Path, *, quiet: bool) -> dict[Path, local.Provenance]:
+    """Resolve the memo selectors to audio files, newest first, each with what Voice Memos knows about it."""
     if not selectors:
-        return []
+        return {}
     listing = voicememos.read_library()
     for warning in listing.warnings:
         click.echo(f"warning: {warning}", err=True)
+    known = {
+        memo.audio: local.Provenance("voice_memos", memo.title, memo.recorded_at)
+        for memo in listing.memos
+        if memo.audio is not None
+    }
+
+    def hash_memo(path: Path) -> str:
+        # The probe and packet hash are kept, so the run does not hash this memo again.
+        recording = local.open_recording(path, known[path])
+        known[path] = replace(known[path], stream=recording.stream, audio_sha256=recording.audio_sha256)
+        return recording.id
 
     def transcribed(recording_id: str) -> bool:
         return (paths.source_dir(recording_id, root) / pipeline.CONTEXT_JSON).is_file()
@@ -224,20 +247,30 @@ def _select_memos(selectors: list[str], root: Path) -> list[voicememos.Memo]:
     skipped: dict[str, voicememos.Memo] = {}
     for selector in selectors:
         chosen = voicememos.select(
-            selector, listing.memos, cache=cache, recording_id=local.recording_id, transcribed=transcribed
+            selector, listing.memos, cache=cache, recording_id=hash_memo, transcribed=transcribed
         )
         picked.update((memo.unique_id, memo) for memo in chosen.memos)
         skipped.update((memo.unique_id, memo) for memo in chosen.skipped)
-    absent = sum(memo.availability == "not_downloaded" for memo in skipped.values())
+    if not quiet:
+        _print_skipped(list(skipped.values()))
+    newest_first = {memo.unique_id: position for position, memo in enumerate(listing.memos)}
+    return {
+        memo.audio: known[memo.audio]
+        for memo in sorted(picked.values(), key=lambda memo: newest_first[memo.unique_id])
+        if memo.audio is not None
+    }
+
+
+def _print_skipped(skipped: list[voicememos.Memo]) -> None:
+    absent = sum(memo.availability == "not_downloaded" for memo in skipped)
     if absent:
         click.echo(f"! {absent} memo(s) not downloaded, skipped: open Voice Memos to download them", err=True)
-    unreadable = len(skipped) - absent
-    if unreadable:
+    if len(skipped) - absent:
         click.echo(
-            f"! {unreadable} memo(s) cannot be read (a .composition folder, or a file outside the library), skipped",
+            f"! {len(skipped) - absent} memo(s) cannot be read (a .composition folder, or a file outside the "
+            "library), skipped",
             err=True,
         )
-    return list(picked.values())
 
 
 def _print_progress(event: pipeline.ProgressEvent) -> None:
@@ -245,16 +278,18 @@ def _print_progress(event: pipeline.ProgressEvent) -> None:
     click.echo(f"… {event.id}  {event.stage}{detail}", err=True)
 
 
-def _print_result(result: pipeline.VideoResult) -> None:
+def _print_result(result: pipeline.VideoResult, *, quiet: bool = False) -> None:
     outcome = result.outcome
     name = result.name or outcome.video_id
+    if quiet and pipeline.BUSY in outcome.reused:
+        return
     if outcome.status is not VideoStatus.OK:
         detail = f": {outcome.detail}" if outcome.detail else ""
         click.echo(f"✗ {name}  {outcome.error}{detail}")
         if outcome.fix:
             click.echo(f"    Fix: {outcome.fix}")
         return
-    if pipeline.DUPLICATE in outcome.reused:
+    if pipeline.DUPLICATE in outcome.reused or pipeline.BUSY in outcome.reused:
         click.echo(f"= {name}  {outcome.detail}")
         return
     document, markdown = result.document, result.markdown
@@ -292,12 +327,15 @@ def _timing(timing: pipeline.StageTiming) -> str:
 
 def _print_summary(report: BatchReport, root: Path) -> None:
     duplicates = sum(pipeline.DUPLICATE in v.reused for v in report.videos)
-    ok = sum(v.status is VideoStatus.OK for v in report.videos) - duplicates
+    busy = sum(pipeline.BUSY in v.reused for v in report.videos)
+    ok = sum(v.status is VideoStatus.OK for v in report.videos) - duplicates - busy
     failed = sum(v.status is VideoStatus.ERROR for v in report.videos)
     skipped = sum(v.status is VideoStatus.NOT_ATTEMPTED for v in report.videos)
     parts = [f"{ok} ok", f"{failed} failed"]
     if duplicates:
         parts.append(f"{duplicates} duplicate{'s' if duplicates > 1 else ''}")
+    if busy:
+        parts.append(f"{busy} busy in another run")
     if skipped:
         parts.append(f"{skipped} not attempted")
     click.echo(f"{', '.join(parts)} · report: {redact(str(root / REPORT_FILE))}")
