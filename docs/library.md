@@ -18,6 +18,7 @@ Everything in `ytverbatim.__all__`, plus the modules `ytverbatim.errors`, `ytver
 | `Options`, `AuthOptions`, `YtdlpOptions`, `AsrOptions`, `TextOptions`, `DiarizeOptions`, `LLMOptions` | The options; also in `ytverbatim.config`. |
 | `LLMClient`, `LLMRequest`, `LLMResponse`, `Usage` | The protocol an injected LLM implements. |
 | `ProgressEvent` | What the `progress` callback receives: `id`, `stage`, `detail`. |
+| `STAGES`, `ProgressStage`, `LLM_STAGES` | The stage names in run order, their type, and the frozenset of stages that may call your `LLMClient`. |
 | `quantity_tokens`, `QToken`, `QKind` | The quantity tokenizer that numeric verification uses. |
 | `SUPPORTED_BROWSERS`, `__version__` | The browsers `--auth` accepts, and the installed version. |
 | `ytverbatim.errors` | Every error class, plus `AuthState` and `Signal`. |

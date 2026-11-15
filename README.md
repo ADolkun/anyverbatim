@@ -18,21 +18,32 @@ Requirements:
 - For YouTube: a JavaScript runtime for yt-dlp, Deno or Node 22 or newer
 - `curl_cffi` (installed with ytverbatim, MIT): yt-dlp asks for browser impersonation on caption downloads, and without it YouTube rate-limits them (HTTP 429) more often and yt-dlp warns that no impersonate target is available
 
-Two extras hold the speech engines. `run` checks for the extra it needs before it downloads anything, and the error names it.
+Install the tool with [uv](https://docs.astral.sh/uv/). This puts `ytverbatim` on your `PATH`:
 
-| You want | Install |
+```
+uv tool install "ytverbatim[whisper,asr] @ git+https://github.com/ADolkun/ytverbatim"
+uv tool upgrade ytverbatim            # to update later
+```
+
+There is no PyPI release yet, so the install comes from the repository. The part in brackets names two optional extras, which hold the speech engines. `run` checks for the extra it needs before it downloads anything, and its error names the extra that is missing.
+
+| You want | Extras |
 |---|---|
-| YouTube, with the default engine (`w-prod`, mlx-whisper large-v3) | `ytverbatim[whisper]` |
-| Recordings, which are diarized by default | `ytverbatim[whisper,asr]` |
-| The other engines, and diarizing YouTube videos | `ytverbatim[asr]` |
+| YouTube with the default engine (`w-prod`, mlx-whisper large-v3) | `whisper` |
+| Recordings: ASR plus speaker diarization, which labels who speaks when | `whisper` and `asr` |
+| The chunked Whisper engines `w-vad`, `w-vad-lid` and `w-runs-lid`, or diarizing YouTube videos with the default engine | `whisper` and `asr` |
+| The other engines (`q-base`, `q-ctx`, `f-aed`, `m-4bit`) | `asr` |
 
-Pre-alpha, so install from a checkout with [uv](https://docs.astral.sh/uv/):
+To work on ytverbatim itself, use a checkout and run it through uv:
 
 ```
 uv sync --extra whisper --extra asr
+uv run ytverbatim --help
 ```
 
 ## Quick start
+
+The commands assume `ytverbatim` is on your `PATH`; from a checkout, write `uv run ytverbatim …`.
 
 ```
 ytverbatim login                                     # once, for the default LLM
@@ -42,12 +53,14 @@ ytverbatim run memos:new                             # new iPhone Voice Memos
 ytverbatim speakers rec-0123456789abcdef S1=Alice S2=Bob
 ```
 
+No ChatGPT plan? Skip `login` and add `--llm none` to each `run`, or pick another provider (see [LLM](#llm)).
+
 | Command | What it does |
 |---|---|
 | `run TARGET...` | Transcribe YouTube URLs or ids, files, folders, or `memos:` selectors. |
 | `memos` | List the iPhone Voice Memos synced to this Mac. |
 | `speakers TARGET [ID=NAME]...` | List, name or merge a recording's speakers. |
-| `render CONTEXT.json` | Rewrite the markdown from a `context.json`. |
+| `render CONTEXT.json [--stdout]` | Rewrite the markdown from a `context.json`, or print it with `--stdout`. |
 | `fetch URL...` | Download a video's metadata, captions and audio without transcribing. |
 | `auth` | Set up your browser login for YouTube (see [docs/auth.md](docs/auth.md)). |
 | `login`, `logout` | Sign in to or out of ChatGPT, the default LLM. |
@@ -82,7 +95,9 @@ When YouTube answers with a bot check or a rate limit, the batch stops and a coo
 ytverbatim run meeting.m4a standup.mp4 ~/Recordings/2026-11/
 ```
 
-Files and folders (searched recursively) work like YouTube videos, with no download and no cooldown. YouTube-only options (`--auth`, `--source`, `--captions`, `--ignore-cooldown`) are refused for them.
+Files and folders (searched recursively) work like YouTube videos, with no download and no cooldown. YouTube-only options (`--auth`, `--source`, `--captions`, `--ignore-cooldown`) are refused for them, and `--quiet` is refused for YouTube.
+
+**Recording other people needs their consent.** See [Privacy and consent](#privacy-and-responsible-use) before you do.
 
 - **Id.** A recording's id is `rec-` plus 16 hex digits: the first 16 of the SHA-256 of the transcribed audio stream's encoded packets. Renaming the file, editing its tags or remuxing it keeps the id. The same audio twice in a run is transcribed once.
 - **Folder.** `~/.local/share/ytverbatim/recordings/rec-0123456789abcdef/` holds `context.json`, `context.md` and, once you name speakers, `speakers.json`. Your file is only read, never copied or changed.
@@ -100,13 +115,13 @@ ytverbatim run memos:new|latest|all|ID [--quiet] ...
 ```
 
 - `memos` lists your memos, newest 20 or `--all`: date, duration, title, status and a short id. Status is `transcribed`, `new`, `not downloaded` or `unsupported`.
-- `memos:new` transcribes the memos that have no document yet. `memos:latest` and `memos:all` do what they say. `memos:ID` takes the start of an id as `memos` lists it (8 characters). Every `run` option applies.
-- The memo's title and recording date from Voice Memos become the document's `title` and `recorded_at`. A memo you rename in Voice Memos is updated on the next run with no ASR or LLM call.
+- `memos:new` transcribes the memos that have no document yet, and hashes only the ones it has not seen before. `memos:latest` and `memos:all` do what they say. `memos:ID` takes the start of an id as `memos` lists it (8 characters). Every `run` option applies.
+- The memo's title and recording date from Voice Memos become the document's `title` and `recorded_at`. If you rename a memo, or first transcribed its shared file as a plain file, the next `memos:` run that selects it updates the record from the stored stages, with no ASR or LLM call.
 
 Setup:
 
 - Turn on Voice Memos in iCloud settings on the iPhone and the Mac, and open Voice Memos on the Mac once, so memos sync.
-- Give the app you run ytverbatim from Full Disk Access (System Settings → Privacy & Security → Full Disk Access), then restart it. ytverbatim reads a private copy of the Voice Memos library, so nothing is written into Apple's folder.
+- Give the app you run ytverbatim from Full Disk Access (System Settings → Privacy & Security → Full Disk Access), then restart it. ytverbatim reads a private copy of the Voice Memos database, so nothing is written into Apple's folder; the audio is read in place.
 - A memo that is not downloaded to this Mac is skipped with a notice. Open it once in Voice Memos to download it.
 
 To transcribe new memos on a schedule, see [Automation](docs/recordings.md#automation): `run memos:new --quiet`, which prints nothing when idle, skips memos another run holds, needs Full Disk Access for the program the job runs, and needs `ytverbatim login` to have run once.
@@ -136,20 +151,7 @@ memory_cap_gib = 8
 
 ## Speakers
 
-Recordings are diarized: a local model (Nemotron-3-Diarization, 8-bit, through mlx-audio; about 107 MB, downloaded once into the Hugging Face cache) finds who speaks when. Each word goes to the speaker most active over it, and very short runs between two stretches of the same speaker are smoothed into it.
-
-- Sentences and paragraphs break at every change of speaker. `context.md` labels each paragraph `**Speaker 1:**`, `**Speaker 2:**`, … in order of first appearance, with each speaker's share of the talk time in the header.
-- The model tells apart up to 8 speakers.
-- A recording with one speaker records it in `context.json` but shows no labels.
-- Speech where a second speaker talks at the same time is flagged `overlapping_speech` in `context.json` only.
-- `[diarize] mode` is `"auto"` (default: recordings only), `"on"` (every source) or `"off"` (none). `--diarize/--no-diarize` overrides it for one run. Diarization needs the `asr` extra.
-
-```toml
-[diarize]
-mode = "auto"
-```
-
-**Name the speakers** once you have listened:
+Recordings are diarized by default: a local model (Nemotron-3-Diarization, 8-bit, about 107 MB, downloaded once; needs the `asr` extra) finds who speaks when, up to 8 speakers. Paragraphs break at every change of speaker, and `context.md` labels each one `**Speaker 1:**`, `**Speaker 2:**`, … with each speaker's share of the talk time in the header. A recording with one speaker shows no labels. `[diarize] mode` is `"auto"` (recordings only, the default), `"on"` or `"off"`, and `--diarize/--no-diarize` overrides it for one run.
 
 ```
 ytverbatim speakers rec-0123456789abcdef                    # list: id, name, talk time, first line
@@ -158,24 +160,17 @@ ytverbatim speakers rec-0123456789abcdef S2=                # clear a name
 ytverbatim speakers rec-0123456789abcdef S1=Alice S3=Alice  # merge: one name, one person
 ```
 
-- Merging is for a person the model split in two: one label, summed talk time, consecutive paragraphs joined.
-- The names are saved in `speakers.json`, bound to the speaker attribution they were given for. Re-diarizing, or any change to attribution or ASR, drops them with a warning, so a speaker is never mislabelled. A rerun of the text stages keeps them.
-- Nothing is transcribed again, and names are never sent to an LLM.
-
-More in [docs/recordings.md](docs/recordings.md#speakers).
+Nothing is transcribed again and names are never sent to an LLM. Re-diarizing drops saved names with a warning. Details: [docs/recordings.md](docs/recordings.md#speakers).
 
 ## Languages
 
-- `--language CODE` forces one spoken language, for any source (`zh`, `en`, …). Force it only when the whole file is in that language.
-- `[asr] languages = ["zh", "en"]` is the set a language-detecting engine may choose from, for recordings only.
+`--language CODE` forces one spoken language for any source (`zh`, `en`, …). `[asr] languages = ["zh", "en"]` limits the languages a language-detecting engine may choose from, for recordings only.
 
-The default engine for recordings is `w-prod`: it decodes the whole file and detects one language for it. So with the defaults a recording has one language, and `[asr] languages` has no effect. Per-stretch languages appear only with a chunked engine that detects each stretch, such as `--engine w-runs-lid` (needs `ytverbatim[whisper,asr]`).
-
-For a recording with stretches in more than one language, each stretch is normalized, punctuated in its own language's style and has its Chinese numerals written as digits by its own language's rules. The correction and number-check prompts say the transcript mixes languages. `transcript.languages` lists the languages the transcript was decoded in, the document's own first and the others by speech time. See [docs/recordings.md](docs/recordings.md#languages).
+The default engine for recordings is `w-prod`: it decodes the whole file and detects one language for it, so with the defaults a recording has one language and `[asr] languages` has no effect. Per-stretch languages appear only with an engine that detects each stretch, such as `--engine w-runs-lid`. Each stretch is then normalized, punctuated and given digit numerals by its own language's rules. `--engine ID` picks the engine for every source; the ids are in [docs/recordings.md](docs/recordings.md#languages).
 
 ## Glossary
 
-To steer correction toward names and jargon it would otherwise mishear, list them as `[text] glossary = ["Acme", "Kubernetes"]` (at most 20 terms), or pass `--glossary "Acme, Kubernetes"` for one run. For a YouTube video the configured terms come first and the video's tags follow, up to 20 terms in all. The terms are sent to the LLM.
+To steer correction toward names and jargon it would otherwise mishear, set `[text] glossary = ["Acme", "Kubernetes"]` (at most 20 terms) or pass `--glossary "Acme, Kubernetes"` for one run. For a YouTube video the configured terms come first and the video's tags follow, up to 20 in all. The terms are sent to the LLM. Details: [docs/recordings.md](docs/recordings.md#glossary).
 
 ## Numerals
 
@@ -257,23 +252,14 @@ model = "claude-sonnet-5-5"
 
 **Recording other people.** Get everyone's consent before you record a conversation. In many places recording without it is illegal, and some require every participant's consent. ytverbatim does not check.
 
-What stays on your Mac, and what is sent:
-
-- **Local:** the audio, your files and your Voice Memos library, speech recognition and diarization. Your YouTube cookies never leave your machine.
-- **Sent to the LLM provider:** transcript text; for a diarized recording each piece of text carries its speaker's id (`S1`, `S2`, …) and the prompt says it is a conversation; your glossary terms; and, for a YouTube video, its tags and the uploader's pinned note when there is one.
+- **Stays on your Mac:** audio, your files, your Voice Memos library, speech recognition and diarization. Your YouTube cookies never leave your machine.
+- **Sent to the LLM provider** (ChatGPT, so OpenAI, by default): transcript text, speaker ids (`S1`, `S2`, …) and glossary terms. For a YouTube video also its tags, and the uploader's pinned note only when `[ytdlp] creator_note = true` (off by default).
 - **Never sent:** a recording's title, file name, recording date and speaker names.
-- **Where it goes:** by default ChatGPT, so to OpenAI. `claude-cli` sends it to Anthropic, and `openai-compat` to the endpoint you set.
-- **Model weights** are downloaded from Hugging Face on first use. Your audio and text are not uploaded.
+- **Opt out** with `--llm none` (or `[llm] provider = "none"`): no transcript text is sent anywhere.
 
-**To opt out,** use `--llm none` (or `[llm] provider = "none"`). No transcript text is then sent anywhere. A local `openai-compat` endpoint also keeps it on your Mac. `--no-correct` alone is not an opt-out, because punctuation still uses the LLM.
-
-With the default ChatGPT provider, check your ChatGPT plan's data controls (whether conversations may be used to improve models) before transcribing business meetings. Whether that setting applies to this sign-in path is unverified.
-
-The transcript files themselves contain the title, file name and speaker names, so check them before you share one.
+Whether your ChatGPT plan's data controls apply to this sign-in is unverified; see [docs/recordings.md](docs/recordings.md#privacy-and-consent) for that and the rest.
 
 **YouTube.** Use `ytverbatim` only on content you can already access with your own account. It does not circumvent DRM. You are responsible for complying with YouTube's Terms of Service and with copyright law.
-
-More in [docs/recordings.md](docs/recordings.md#privacy-and-consent).
 
 ## Library
 
