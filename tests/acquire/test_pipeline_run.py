@@ -530,7 +530,7 @@ def test_the_default_run_key_is_the_one_made_before_the_creator_note_existed(ses
             "captions": True,
             "engine": pipeline._engine_key(default.definition),
             "second_opinion": None,
-            "text": pipeline._plain(asdict(default.text)),
+            "text": pipeline._plain({k: v for k, v in asdict(default.text).items() if k != "glossary"}),
             "llm": None,
         },
     )
