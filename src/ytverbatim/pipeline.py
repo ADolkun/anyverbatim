@@ -21,7 +21,7 @@ import os
 import re
 import shutil
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
@@ -453,6 +453,7 @@ def process_files(
     progress: Callable[[ProgressEvent], None] | None = None,
     on_video: Callable[[VideoResult], None] | None = None,
     clock: Callable[[], datetime] = utcnow,
+    provenance: Mapping[Path, local.Provenance] | None = None,
 ) -> BatchReport:
     """Run every local audio or video file into `<out>/<rec-id>/`; write `<out>/batch_report.json` and `index.md`.
 
@@ -480,7 +481,7 @@ def process_files(
     listed = index.Index.scan(out)
     try:
         for path in files:
-            result = _run_file(path, settings, seen)
+            result = _run_file(path, settings, seen, (provenance or {}).get(path))
             outcomes.append(result.outcome)
             if result.document is not None and "context" not in result.outcome.reused:
                 listed.add(result.document)
@@ -495,11 +496,13 @@ def process_files(
     return report
 
 
-def _run_file(path: Path, settings: "_Settings", seen: dict[str, str]) -> VideoResult:
+def _run_file(
+    path: Path, settings: "_Settings", seen: dict[str, str], provenance: local.Provenance | None
+) -> VideoResult:
     """Run one file; a file whose audio already ran in this batch under another name is reported as a duplicate."""
     began = time.monotonic()
     try:
-        recording = local.open_recording(path)
+        recording = local.open_recording(path, provenance)
     except (DependencyError, EngineMemoryError):
         # A missing ffprobe or ffmpeg would fail every file the same way.
         raise

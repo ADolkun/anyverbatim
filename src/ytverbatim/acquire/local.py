@@ -66,22 +66,33 @@ class LocalRecording:
 
 
 @dataclass(frozen=True)
+class Provenance:
+    """What the caller already knows about a file; it takes precedence over the container's own tags."""
+
+    origin: Origin
+    title: str | None = None
+    recorded_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class _Probe:
     streams: list[dict[str, object]]
     format: dict[str, object]
 
 
-def open_recording(path: Path) -> LocalRecording:
+def open_recording(path: Path, provenance: Provenance | None = None) -> LocalRecording:
     """Probe `path` and hash its transcribed stream; raises `MediaValidationError` for a file it cannot use."""
+    known = provenance or Provenance("file")
     probed = _probe(path)
     stream = pick_stream(path, probed.streams)
     return LocalRecording(
         path=path,
         stream=stream,
         audio_sha256=packet_sha256(path, stream),
-        title=_title(probed, path),
-        recorded_at=_recorded_at(probed, stream),
+        title=known.title or _title(probed, path),
+        recorded_at=known.recorded_at or _recorded_at(probed, stream),
         duration_s=_duration(probed, stream, path),
+        origin=known.origin,
     )
 
 
