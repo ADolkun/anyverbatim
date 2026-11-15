@@ -18,7 +18,15 @@ if TYPE_CHECKING:
     from ytverbatim.contract import ContextDocument, load_document
     from ytverbatim.ids import RefKind, YouTubeRef, parse_youtube, video_url
     from ytverbatim.llm.protocol import LLMClient, LLMRequest, LLMResponse, Usage
-    from ytverbatim.pipeline import ProgressEvent, Result, check_dependencies, process
+    from ytverbatim.pipeline import (
+        LLM_STAGES,
+        STAGES,
+        ProgressEvent,
+        ProgressStage,
+        Result,
+        check_dependencies,
+        process,
+    )
     from ytverbatim.text.numbers import QKind, QToken, quantity_tokens
 
 __version__ = version("ytverbatim")
@@ -31,15 +39,18 @@ _LAZY = {
     "ContextDocument": "ytverbatim.contract",
     "DiarizeOptions": "ytverbatim.config",
     "LLMClient": "ytverbatim.llm.protocol",
+    "LLM_STAGES": "ytverbatim.pipeline",
     "LLMOptions": "ytverbatim.config",
     "LLMRequest": "ytverbatim.llm.protocol",
     "LLMResponse": "ytverbatim.llm.protocol",
     "Options": "ytverbatim.config",
     "ProgressEvent": "ytverbatim.pipeline",
+    "ProgressStage": "ytverbatim.pipeline",
     "QKind": "ytverbatim.text.numbers",
     "QToken": "ytverbatim.text.numbers",
     "RefKind": "ytverbatim.ids",
     "Result": "ytverbatim.pipeline",
+    "STAGES": "ytverbatim.pipeline",
     "SUPPORTED_BROWSERS": "ytverbatim.auth.chromium",
     "TextOptions": "ytverbatim.config",
     "Usage": "ytverbatim.llm.protocol",
@@ -56,6 +67,8 @@ _LAZY = {
 }
 
 __all__ = [
+    "LLM_STAGES",
+    "STAGES",
     "SUPPORTED_BROWSERS",
     "AsrOptions",
     "AuthOptions",
@@ -67,6 +80,7 @@ __all__ = [
     "LLMResponse",
     "Options",
     "ProgressEvent",
+    "ProgressStage",
     "QKind",
     "QToken",
     "RefKind",

@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, NoReturn
+from typing import Final, Literal, NoReturn, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
@@ -152,7 +152,10 @@ def stage_versions() -> dict[str, str]:
 __all__ = [
     "CONTEXT_JSON",
     "CONTEXT_MD",
+    "LLM_STAGES",
+    "STAGES",
     "ProgressEvent",
+    "ProgressStage",
     "Result",
     "StageTiming",
     "VideoResult",
@@ -177,16 +180,32 @@ _DIARIZE_FILE = "audio"
 _WHISPER_FACTORY = "ytverbatim.asr.engines.whisper_mlx."
 
 
+ProgressStage = Literal[
+    "fetch",
+    "skip",
+    "captions",
+    "asr",
+    "diarize",
+    "second_opinion",
+    "normalize",
+    "punctuate",
+    "correct",
+    "numeric",
+    "numerals",
+    "write",
+]
+# The stage names in the order a run reaches them. A source gets `captions` or `asr`, never both.
+STAGES: Final[tuple[ProgressStage, ...]] = get_args(ProgressStage)
+# The stages that may call the `LLMClient`; `numeric` only does when a number is disputed.
+LLM_STAGES: Final[frozenset[ProgressStage]] = frozenset({"punctuate", "correct", "numeric"})
+
+
 @dataclass(frozen=True)
 class ProgressEvent:
-    """One step of a source's run: `id` is the video or recording id.
-
-    `stage` is one of `fetch`, `skip`, `asr`, `diarize`, `second_opinion`, `normalize`, `punctuate`, `correct`,
-    `numeric`, `numerals` or `write`; these names are part of the public API.
-    """
+    """One step of a source's run: `id` is the video or recording id, and `stage` is one of `STAGES`."""
 
     id: str
-    stage: str
+    stage: ProgressStage
     detail: str = ""
 
 
@@ -961,7 +980,7 @@ class _Trace:
     # session names its own finer stages (`info`, `audio`, ...) on the errors it records.
     stage: str | None = None
 
-    def emit(self, stage: str, detail: str = "") -> None:
+    def emit(self, stage: ProgressStage, detail: str = "") -> None:
         if stage != "fetch":
             self.stage = stage
         self.emit_event(ProgressEvent(self.source_id, stage, detail))
@@ -1342,7 +1361,7 @@ class _Transcription:
 
     def _stage[M: BaseModel](
         self,
-        stage: str,
+        stage: ProgressStage,
         key: str,
         model: type[M],
         compute: Callable[[], M],
