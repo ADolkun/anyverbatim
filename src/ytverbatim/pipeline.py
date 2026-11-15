@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, NoReturn
 
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from ytverbatim import atomic, config, ids, index, mlx_worker, paths, speakers, stages, store
 from ytverbatim.acquire import local
@@ -95,7 +95,7 @@ from ytverbatim.stages import (
     stretch_flag,
     with_results,
 )
-from ytverbatim.store import StageStore, input_hash
+from ytverbatim.store import Record, StageStore, input_hash
 from ytverbatim.store import lock as video_lock
 from ytverbatim.targets import classify as classify_target
 from ytverbatim.text import clean, guards, numbers, numerals, numeric
@@ -591,11 +591,8 @@ class _Settings:
     def llm_id(self) -> str | None:
         return self.llm.id if self.llm is not None else None
 
-    def run_key(self, names: str | None = None) -> str:
-        """Everything a finished document depends on besides the source itself; a change means a rerun.
-
-        `names` is the digest of the source's `speakers.json` (`speakers.digest`), None without one.
-        """
+    def run_key(self) -> str:
+        """Everything a finished document depends on besides the source itself; a change means a rerun."""
         versions = stage_versions()
         inputs: dict[str, JsonValue] = {
             "versions": dict[str, JsonValue](versions),
@@ -616,8 +613,6 @@ class _Settings:
         if self.diarizer is not None:
             # The attribution rules ride along, so a rule change rebuilds a finished document from its stored stages.
             inputs["diarizer"] = stages.diarization_run(self.diarizer).model_dump(mode="json")
-        if names is not None:
-            inputs["speaker_names"] = names
         return input_hash("context", versions["context"], inputs)
 
 
@@ -632,11 +627,8 @@ def _settings(
     emit: Callable[[ProgressEvent], None],
     clock: Callable[[], datetime],
     interactive: bool = False,
-    ready: bool = True,
 ) -> _Settings:
-    """Resolve a batch's settings; `ready` checks that its engines and LLM can run, which only running needs."""
-    if ready:
-        check_dependencies(options, source=kind)
+    check_dependencies(options, source=kind)
     definition = registry.get(options.asr.engine or _DEFAULT_ENGINE[kind])
     languages = _allowed_languages(options.asr.languages, definition) if kind == "recording" else ()
     second: EngineDef | None = None
@@ -654,8 +646,7 @@ def _settings(
             )
     if llm is None and options.llm.provider != "none":
         # A missing `claude` CLI or base URL must fail now, not after an hour of ASR.
-        if ready:
-            check_ready(options.llm, interactive=interactive)
+        check_ready(options.llm, interactive=interactive)
         llm = client_from_options(options.llm, interactive=interactive)
     if options.text.correct and llm is None:
         raise ConfigError("correction needs an LLM; pass --llm PROVIDER:MODEL or set [llm], or use --no-correct")
@@ -722,6 +713,11 @@ class _ContextMark(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     sha256: str
+    # Both left out when None, so the record of a source without speakers is as it was before they existed.
+    # The `Transcribed.assignment` the document was built from: what a rename binds names to.
+    assignment: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    # `speakers.digest` when the document was written; the names file changing since then means one rebuild.
+    names: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 @dataclass
@@ -753,9 +749,8 @@ def _reusable(vdir: Path, settings: _Settings) -> ContextDocument | None:
     context = vdir / CONTEXT_JSON
     if settings.force or not context.is_file():
         return None
-    key = settings.run_key(speakers.digest(vdir))
-    mark = StageStore(vdir).load("context", stage_versions()["context"], key, _ContextMark)
-    if mark is None:
+    mark = StageStore(vdir).load("context", stage_versions()["context"], settings.run_key(), _ContextMark)
+    if mark is None or mark.names != speakers.digest(vdir):
         return None
     data = context.read_bytes()
     if hashlib.sha256(data).hexdigest() != mark.sha256:
@@ -1311,7 +1306,7 @@ class _Transcription:
             llm_usage=(*punctuated.usage, *corrected.usage, *verified.usage),
             speaker_names=names.names,
         )
-        _write_context(prepared.dir, document, settings)
+        _write_context(prepared.dir, document, stage_versions()["context"], settings.run_key(), source.assignment)
         self.trace.timings.append(StageTiming("write", time.monotonic() - began, reused=False))
         return document
 
@@ -1535,7 +1530,7 @@ class _Transcription:
         return self._stage("numerals", key, _Stretches, compute).stretches
 
 
-def _write_context(directory: Path, document: ContextDocument, settings: _Settings) -> None:
+def _write_context(directory: Path, document: ContextDocument, version: str, key: str, assignment: str | None) -> None:
     dumped = dump_document(document)
     checkpoints = StageStore(directory)
     # The record goes first and comes back last, so it never vouches for a half-written pair of files.
@@ -1543,30 +1538,49 @@ def _write_context(directory: Path, document: ContextDocument, settings: _Settin
     atomic.write_text(directory / CONTEXT_MD, render_markdown(document))
     atomic.write_text(directory / CONTEXT_JSON, dumped)
     sha = hashlib.sha256(dumped.encode("utf-8")).hexdigest()
-    key = settings.run_key(speakers.digest(directory))
-    checkpoints.save("context", stage_versions()["context"], key, _ContextMark(sha256=sha))
+    mark = _ContextMark(sha256=sha, assignment=assignment, names=speakers.digest(directory))
+    checkpoints.save("context", version, key, mark)
 
 
-def save_context(directory: Path, document: ContextDocument, options: config.Options | None = None) -> None:
-    """Replace a finished source's `context.json` and `context.md` with `document` and record it as current.
+@dataclass(frozen=True)
+class SavedContext:
+    """A finished source's document and the record that vouches for it, as `load_context` found them."""
 
-    For a change that no stage reads, such as speaker names: no worker runs, no LLM is called, and a `run` with the
-    same options skips the source afterwards. The caller holds the source's lock. The record is made for `options`
-    (the config file's by default); a `run` with other options rebuilds the document once from its stored stages.
+    document: ContextDocument
+    record: Record[_ContextMark]
+
+    @property
+    def assignment(self) -> str | None:
+        """The speaker attribution the document was built from; None when it was not diarized."""
+        return self.record.output.assignment
+
+
+def load_context(directory: Path) -> SavedContext:
+    """Return a finished source's document and its record, whatever settings made it; the caller holds its lock.
+
+    Raises `ContractError` when there is no record or it does not vouch for `context.json` as it is.
     """
-    options = options or config.load_options()
-    settings = _settings(
-        options,
-        None,
-        directory.parent,
-        kind=document.source.kind,
-        force=False,
-        captions=True,
-        emit=_no_progress,
-        clock=utcnow,
-        ready=False,
-    )
-    _write_context(directory, document, settings)
+    record = StageStore(directory).record("context", _ContextMark)
+    try:
+        data = (directory / CONTEXT_JSON).read_bytes()
+    except FileNotFoundError:
+        data = None
+    if record is None or data is None or hashlib.sha256(data).hexdigest() != record.output.sha256:
+        error = ContractError(f"{directory.name}/{CONTEXT_JSON} is not the finished document its run recorded")
+        error.fix = "an earlier run or rename was interrupted; run `ytverbatim run` on it"
+        raise error
+    return SavedContext(load_document(data.decode("utf-8")), record)
+
+
+def save_context(directory: Path, saved: SavedContext, document: ContextDocument) -> None:
+    """Replace `saved`'s document with `document`, a change no stage reads, such as speaker names.
+
+    The record keeps the settings `saved` was made with, so a `run` with those settings skips the source afterwards
+    and one with other settings rebuilds it as before; no worker runs and no LLM is called. Write `speakers.json`
+    first: the record takes its digest. The caller holds the source's lock.
+    """
+    record = saved.record
+    _write_context(directory, document, record.version, record.key, saved.assignment)
 
 
 def _adopt(out_dir: Path, decode: JsonValue) -> None:

@@ -5,7 +5,7 @@ import pytest
 from pydantic import BaseModel
 
 from ytverbatim.errors import BusyError
-from ytverbatim.store import StageStore, digest, input_hash, lock
+from ytverbatim.store import Record, StageStore, digest, input_hash, lock
 
 
 class Output(BaseModel):
@@ -35,13 +35,18 @@ def test_a_matching_hash_skips_the_stage(tmp_path: Path) -> None:
     assert record == {"stage_version": "1", "input_hash": key, "output": {"value": 1}}
 
 
-def test_stored_returns_the_output_whatever_key_made_it(tmp_path: Path) -> None:
+def test_record_returns_the_version_key_and_output_whatever_key_made_them(tmp_path: Path) -> None:
     store = StageStore(tmp_path)
-    assert store.stored("demo", Output) is None
-    store.save("demo", "1", input_hash("demo", "1", {"text": "abc"}), Output(value=4))
-    assert store.stored("demo", Output) == Output(value=4)
-    (tmp_path / ".stages" / "demo.json").write_text('{"output": {"value": "x"}}', encoding="utf-8")
-    assert store.stored("demo", Output) is None
+    assert store.record("demo", Output) is None
+    key = input_hash("demo", "1", {"text": "abc"})
+    store.save("demo", "1", key, Output(value=4))
+    assert store.record("demo", Output) == Record("1", key, Output(value=4))
+    (tmp_path / ".stages" / "demo.json").write_text(
+        json.dumps({"stage_version": "1", "input_hash": key, "output": {"value": "x"}}), encoding="utf-8"
+    )
+    assert store.record("demo", Output) is None
+    (tmp_path / ".stages" / "demo.json").write_text('{"output": {"value": 4}}', encoding="utf-8")
+    assert store.record("demo", Output) is None
 
 
 def test_another_input_or_stage_version_recomputes(tmp_path: Path) -> None:

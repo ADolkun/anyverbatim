@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import shutil
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from click.testing import CliRunner
+from pydantic import ValidationError
 
 from ytverbatim import atomic, config, pipeline, proc, speakers, store
 from ytverbatim.asr import registry
@@ -31,7 +33,7 @@ from ytverbatim.diarize import registry as diarize_registry
 from ytverbatim.diarize import runner as diarize_runner
 from ytverbatim.diarize.protocol import DiarizeRequest, FileDiarization, Turn
 from ytverbatim.diarize.runner import DiarizeResult
-from ytverbatim.errors import ConfigError, DependencyError, EngineError, MediaValidationError
+from ytverbatim.errors import ConfigError, ContractError, DependencyError, EngineError, LLMError, MediaValidationError
 from ytverbatim.index import INDEX_MD
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from ytverbatim.mlx_worker import without_wav
@@ -831,7 +833,7 @@ def test_a_rename_rewrites_json_markdown_record_and_index_and_a_rerun_skips(
     assert stored_document(session_kit) == after
 
 
-def test_clearing_every_name_removes_the_file_and_keeps_the_key_documents_without_names_have(
+def test_clearing_every_name_removes_the_file_and_restores_the_record_of_a_document_never_named(
     session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     path = diarized(session_kit, media, diarizer, tmp_path)
@@ -975,24 +977,8 @@ def test_a_recording_that_was_not_diarized_has_no_speakers_to_name(
     off = config.load_options(overrides={"diarize": {"mode": "off"}})
     run_files(session_kit, [path], off)
     result = speakers_cli(session_kit, rec_id(), "S1=Alice")
-    assert result.exit_code == 2 and "was not diarized" in result.output
-
-
-def test_the_run_key_changes_only_when_a_names_file_exists(session_kit, tmp_path: Path) -> None:
-    keyed = pipeline._settings(
-        config.load_options(),
-        None,
-        session_kit.out,
-        kind="recording",
-        force=False,
-        captions=False,
-        emit=lambda _e: None,
-        clock=lambda: NOW,
-    )
-    plain = keyed.run_key()
-    assert keyed.run_key(None) == plain
-    assert keyed.run_key(store.digest({"S1": "Alice"})) != plain
-    assert speakers.digest(tmp_path) is None
+    assert result.exit_code == 1 and "was not diarized" in result.output
+    assert speakers_cli(session_kit, rec_id()).exit_code == 1
 
 
 def test_a_garbage_names_file_fails_the_run_loudly(
@@ -1002,3 +988,153 @@ def test_a_garbage_names_file_fails_the_run_loudly(
     (session_kit.out / rec_id() / "speakers.json").write_text('{"names": 1}', encoding="utf-8")
     _, results, _ = run_files(session_kit, [path])
     assert results[0].outcome.error is not None and "speaker names file" in results[0].outcome.detail
+
+
+@dataclass
+class BrokenLLM(FakeLLM):
+    def complete(self, request: LLMRequest) -> LLMResponse:
+        raise LLMError("synthetic LLM outage")
+
+
+def untouched(rdir: Path) -> tuple[bytes, bytes, bool]:
+    return (rdir / "context.json").read_bytes(), (rdir / "context.md").read_bytes(), (rdir / "speakers.json").exists()
+
+
+def test_a_rename_keeps_the_settings_the_document_was_made_with(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    path = diarized(session_kit, media, diarizer, tmp_path, llm=FakeLLM())
+    assert speakers_cli(session_kit, rec_id(), "S1=Alice").exit_code == 0
+
+    _, results, events = run_files(session_kit, [path], llm=FakeLLM())
+    assert [e.stage for e in events] == ["skip"] and results[0].outcome.reused == ("context",)
+
+    _, results, events = run_files(session_kit, [path])
+    assert "skip" not in [e.stage for e in events], "the config file's settings are not the ones the document had"
+    doc = results[0].document
+    assert doc is not None and doc.transcript.correction_llm is None and doc.speakers[0].name == "Alice"
+    assert (len(worker.calls), len(diarizer.calls)) == (1, 1)
+
+    _, results, _ = run_files(session_kit, [path])
+    assert results[0].outcome.reused == ("context",)
+
+
+def test_a_rename_binds_to_the_attribution_of_the_document_not_of_a_newer_asr_stage(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    path = diarized(session_kit, media, diarizer, tmp_path)
+    rdir = session_kit.out / rec_id()
+    shown = json.loads((rdir / ".stages" / "context.json").read_text(encoding="utf-8"))["output"]["assignment"]
+    before = untouched(rdir)
+
+    # Another diarization redoes the asr stage, and the run then fails before it writes a document.
+    (rdir / ".stages" / "asr.json").unlink()
+    for folder in rdir.glob(".stages/**/d-*"):
+        shutil.rmtree(folder)
+    diarizer.turns = [(0, 3, 0), (4, 8, 3)]
+    _, results, _ = run_files(session_kit, [path], llm=BrokenLLM())
+    assert results[0].document is None and len(diarizer.calls) == 2
+    newer = json.loads((rdir / ".stages" / "asr.json").read_text(encoding="utf-8"))["output"]["assignment"]
+    assert newer != shown and untouched(rdir) == before
+
+    assert speakers_cli(session_kit, rec_id(), "S1=Alice").exit_code == 0
+    assert json.loads((rdir / "speakers.json").read_text(encoding="utf-8"))["assignment"] == shown
+
+    _, results, _ = run_files(session_kit, [path], llm=FakeLLM())
+    doc = results[0].document
+    assert doc is not None and [s.name for s in doc.speakers] == [None, None]
+    assert speakers.STALE_WARNING in doc.quality.warnings
+
+
+def test_a_rename_refuses_a_document_without_a_record_that_vouches_for_it(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    diarized(session_kit, media, diarizer, tmp_path)
+    rdir = session_kit.out / rec_id()
+    record = rdir / ".stages" / "context.json"
+    kept = record.read_bytes()
+
+    record.unlink()
+    before = untouched(rdir)
+    result = speakers_cli(session_kit, rec_id(), "S1=Alice")
+    assert result.exit_code == 1 and "was interrupted; run `ytverbatim run` on it" in result.output
+    assert untouched(rdir) == before and not record.exists()
+
+    record.write_bytes(kept)
+    (rdir / "context.json").write_bytes(before[0] + b"\n")
+    before = untouched(rdir)
+    result = speakers_cli(session_kit, rec_id(), "S1=Alice")
+    assert result.exit_code == 1 and "was interrupted" in result.output
+    assert untouched(rdir) == before and record.read_bytes() == kept
+
+
+def test_a_source_never_transcribed_fails_with_exit_1_and_leaves_no_folder(session_kit) -> None:
+    never = rec_id("never")
+    for args in ([never], [never, "S1=Alice"]):
+        result = speakers_cli(session_kit, *args)
+        assert result.exit_code == 1 and "does not exist" in result.output
+    assert not (session_kit.out / never).exists()
+    assert speakers_cli(session_kit, "neither-a-folder-nor-an-id").exit_code == 2
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (("S1=Alice", "S1=Bob"), "S1 is given twice"),
+        (("s1=Alice", "S1=Bob"), "S1 is given twice"),
+        (("S1=Al\nice",), "control character U+000A"),
+        (("S1=Al\x07ice",), "control character U+0007"),
+        (("S1=Al ice",), "control character U+2028"),
+        (("S1=speaker  2",), "default label of S2"),
+    ],
+)
+def test_a_repeated_id_a_control_character_or_another_ids_default_label_is_refused(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path, arguments, message: str
+) -> None:
+    diarized(session_kit, media, diarizer, tmp_path)
+    rdir = session_kit.out / rec_id()
+    before = untouched(rdir)
+    result = speakers_cli(session_kit, rec_id(), *arguments)
+    assert result.exit_code == 1 and message in result.output
+    assert untouched(rdir) == before
+
+
+def test_a_hand_edited_name_with_a_control_character_is_caught(tmp_path: Path) -> None:
+    (tmp_path / "speakers.json").write_text('{"assignment": "x", "names": {"S1": "A\\u0000B"}}', encoding="utf-8")
+    with pytest.raises(ContractError, match="control character U\\+0000"):
+        speakers.read(tmp_path)
+
+
+def test_the_contract_refuses_another_ids_default_label_in_any_case_or_spacing(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    diarized(session_kit, media, diarizer, tmp_path)
+    data = stored_document(session_kit).model_dump(mode="json")
+    data["speakers"][0]["name"] = " SPEAKER   2 "
+    with pytest.raises(ValidationError, match="the default label of S2"):
+        ContextDocument.model_validate(data)
+    data["speakers"][0]["name"] = "speaker 1"
+    ContextDocument.model_validate(data)
+
+
+def test_lowercase_ids_work_and_a_new_id_merges_onto_an_existing_name(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    diarized(session_kit, media, diarizer, tmp_path)
+    assert speakers_cli(session_kit, rec_id(), "s1=Alice").exit_code == 0
+    assert speakers_cli(session_kit, rec_id(), "S3=Alice").exit_code == 0
+    assert [s.name for s in stored_document(session_kit).speakers] == ["Alice", None, "Alice"]
+    markdown = (session_kit.out / rec_id() / "context.md").read_text(encoding="utf-8")
+    assert "Speakers: Alice (" in markdown and markdown.count("Alice (") == 1
+
+
+def test_a_rename_while_a_run_holds_the_source_fails_at_once(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    diarized(session_kit, media, diarizer, tmp_path)
+    rdir = session_kit.out / rec_id()
+    before = untouched(rdir)
+    with store.lock(rdir):
+        result = speakers_cli(session_kit, rec_id(), "S1=Alice")
+    assert result.exit_code == 1 and "another ytverbatim run is processing" in result.output
+    assert untouched(rdir) == before

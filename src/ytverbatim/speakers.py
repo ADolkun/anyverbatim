@@ -10,6 +10,7 @@ Names stay out of every LLM request: the text stages never see them, only `build
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,8 +20,6 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from ytverbatim import atomic
 from ytverbatim.contract import ContextDocument
 from ytverbatim.errors import ContractError
-from ytverbatim.stages import Transcribed
-from ytverbatim.store import StageStore
 
 SPEAKERS_JSON = "speakers.json"
 STALE_WARNING = (
@@ -30,6 +29,8 @@ STALE_WARNING = (
 
 _ID = re.compile(r"S[1-9][0-9]*")
 _FIRST_LINE_CHARS = 60
+# Control characters and line or paragraph separators would break the Markdown and the listing a name appears in.
+_FORBIDDEN_CATEGORIES = frozenset({"Cc", "Zl", "Zp"})
 
 
 class SpeakerNames(BaseModel):
@@ -46,7 +47,14 @@ class SpeakerNames(BaseModel):
                 raise ValueError(f"{speaker!r} is not a speaker id")
             if not name.strip():
                 raise ValueError(f"{speaker} has a blank name")
+            _check_characters(speaker, name)
         return names
+
+
+def _check_characters(speaker: str, name: str) -> None:
+    for char in name:
+        if unicodedata.category(char) in _FORBIDDEN_CATEGORIES:
+            raise ValueError(f"the name of {speaker} contains the control character U+{ord(char):04X}")
 
 
 @dataclass(frozen=True)
@@ -71,7 +79,11 @@ def path(directory: Path) -> Path:
 
 
 def digest(directory: Path) -> str | None:
-    """Return the digest of the names file as it is on disk, or None without one; it joins the run key."""
+    """Return the digest of the names file as it is on disk, or None without one.
+
+    The context record keeps the digest the document was written with; a run that finds another one rebuilds the
+    document from its stored stages, so a names file edited or removed by hand still takes effect.
+    """
     try:
         return hashlib.sha256(path(directory).read_bytes()).hexdigest()
     except FileNotFoundError:
@@ -85,7 +97,7 @@ def read(directory: Path) -> SpeakerNames | None:
         return None
     try:
         return SpeakerNames.model_validate(json.loads(text))
-    except (ValueError, ValidationError) as exc:
+    except ValueError as exc:
         error = ContractError(f"{directory.name}/{SPEAKERS_JSON} is not a valid speaker names file: {exc}")
         error.fix = f"fix or delete {SPEAKERS_JSON}, then set the names again with `ytverbatim speakers`"
         raise error from exc
@@ -102,24 +114,12 @@ def bound(directory: Path, assignment: str | None) -> Bound:
 
 
 def write(directory: Path, assignment: str, names: Mapping[str, str]) -> None:
-    """Store `names` for `assignment`, atomically; no names at all removes the file, so the run key is as before."""
+    """Store `names` for `assignment`, atomically; no names at all removes the file, as if none were ever given."""
     if not names:
         path(directory).unlink(missing_ok=True)
         return
     ordered = dict(sorted(names.items(), key=lambda item: int(item[0][1:])))
     atomic.write_json(path(directory), {"assignment": assignment, "names": ordered})
-
-
-def assignment_of(directory: Path) -> str:
-    """Return the digest of the attribution `directory`'s document was made from, as its stored asr stage has it."""
-    stored = StageStore(directory).stored("asr", Transcribed)
-    if stored is None:
-        error = ContractError(f"{directory.name} has no stored speaker attribution to bind names to")
-        error.fix = "run `ytverbatim run` on the recording again"
-        raise error
-    if stored.assignment is None:
-        raise ContractError(f"{directory.name} was not diarized, so it has no speakers to name")
-    return stored.assignment
 
 
 def parse(assignments: Iterable[str]) -> dict[str, str | None]:
@@ -130,6 +130,12 @@ def parse(assignments: Iterable[str]) -> dict[str, str | None]:
         speaker = speaker.strip().upper()
         if not separator or not _ID.fullmatch(speaker):
             raise ContractError(f"{item!r} is not ID=NAME; for example S1=Alice, or S1= to clear a name")
+        if speaker in changes:
+            raise ContractError(f"{speaker} is given twice; give each speaker one name")
+        try:
+            _check_characters(speaker, name)
+        except ValueError as exc:
+            raise ContractError(f"{exc}; a name is one line of plain text") from exc
         changes[speaker] = name.strip() or None
     return changes
 
@@ -146,9 +152,8 @@ def changed(document: ContextDocument, current: Mapping[str, str], changes: Mapp
             names.pop(speaker, None)
         else:
             names[speaker] = name
-    defaults = {f"Speaker {item.number}": item.id for item in document.speakers}
     for speaker, name in names.items():
-        owner = defaults.get(name)
+        owner = document.default_label_owner(name)
         if owner is not None and owner != speaker:
             raise ContractError(f"{name!r} is the default label of {owner}, so it cannot name {speaker}")
     return names

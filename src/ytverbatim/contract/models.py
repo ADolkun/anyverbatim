@@ -388,6 +388,11 @@ class ContextDocument(_Model):
         self._check_speakers()
         return self
 
+    def default_label_owner(self, name: str) -> str | None:
+        """Return the id of the speaker whose default label `name` reads as, ignoring case and spacing, else None."""
+        key = " ".join(name.split()).casefold()
+        return next((speaker.id for speaker in self.speakers if f"speaker {speaker.number}" == key), None)
+
     def _check_segments(self) -> None:
         for position, segment in enumerate(self.segments):
             if segment.id != position:
@@ -449,9 +454,8 @@ class ContextDocument(_Model):
             raise ValueError("speakers are listed but transcript.diarization is None")
         if self.segments and not listed and self.transcript.diarization is not None:
             raise ValueError("the transcript is diarized and has segments but lists no speakers")
-        defaults = {f"Speaker {speaker.number}": speaker.id for speaker in self.speakers}
         for speaker in self.speakers:
-            owner = defaults.get(speaker.name or "")
+            owner = self.default_label_owner(speaker.name or "")
             if owner is not None and owner != speaker.id:
                 raise ValueError(f"speaker {speaker.id} is named {speaker.name!r}, the default label of {owner}")
         for segment in self.segments:

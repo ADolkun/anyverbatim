@@ -7,7 +7,7 @@ import click
 from ytverbatim import ids, index, paths, pipeline, speakers, store
 from ytverbatim.cli.fetch import EXIT_FAILED
 from ytverbatim.contract import ContextDocument, RecordingSource, load_document
-from ytverbatim.errors import YtverbatimError
+from ytverbatim.errors import ContractError, YtverbatimError
 from ytverbatim.ytdlp.runner import redact
 
 _HOUR = 3600
@@ -30,16 +30,17 @@ def speakers_command(target: str, assignments: tuple[str, ...], out: Path | None
     paragraphs joined). Then context.json, context.md and the recordings index.md are rewritten; no ASR worker or
     LLM runs. The names are kept in speakers.json beside context.json and apply only to the speaker attribution they
     were given for: re-diarizing, or a change to attribution or ASR, drops them with a warning, never mislabelling a
-    speaker. Names are never sent to an LLM. A later `run` with other options than the config file's rebuilds the
-    document once from its stored stages.
+    speaker. Names are never sent to an LLM.
     """
     try:
         directory = _resolve(target, out)
         if assignments:
             document = _rename(directory, assignments)
         else:
-            document = _read(directory)
-            if speakers.bound(directory, _assignment(directory)).stale:
+            document = load_document(_context(directory))
+            if not document.speakers:
+                raise _undiarized(directory)
+            if speakers.STALE_WARNING in document.quality.warnings:
                 click.echo("note: " + speakers.STALE_WARNING, err=True)
     except YtverbatimError as exc:
         _fail(str(exc), exc.fix)
@@ -67,33 +68,33 @@ def _resolve(target: str, out: Path | None) -> Path:
     raise click.UsageError(f"{target!r} is not a folder, a context.json or a recording id")
 
 
-def _read(directory: Path) -> ContextDocument:
+def _context(directory: Path) -> Path:
     context = directory / pipeline.CONTEXT_JSON
     if not context.is_file():
-        raise click.UsageError(f"{redact(str(context))} does not exist; transcribe the recording first")
-    document = load_document(context)
-    if not document.speakers:
-        raise click.UsageError(f"{directory.name} has no speakers: it was not diarized")
-    return document
+        error = ContractError(f"{redact(str(context))} does not exist")
+        error.fix = "transcribe the recording first with `ytverbatim run`"
+        raise error
+    return context
 
 
-def _assignment(directory: Path) -> str | None:
-    try:
-        return speakers.assignment_of(directory)
-    except YtverbatimError:
-        # Listing needs no attribution; only the stale-names note does, and without stages there is nothing to compare.
-        return None
+def _undiarized(directory: Path) -> ContractError:
+    return ContractError(f"{directory.name} has no speakers: it was not diarized")
 
 
 def _rename(directory: Path, assignments: tuple[str, ...]) -> ContextDocument:
     changes = speakers.parse(assignments)
+    # Checked before the lock too, which would otherwise leave a folder behind for an id never transcribed.
+    _context(directory)
     with store.lock(directory):
-        document = _read(directory)
-        assignment = speakers.assignment_of(directory)
-        names = speakers.changed(document, speakers.bound(directory, assignment).names, changes)
-        renamed = speakers.named(document, names)
+        _context(directory)
+        saved = pipeline.load_context(directory)
+        assignment = saved.assignment
+        if assignment is None:
+            raise _undiarized(directory)
+        names = speakers.changed(saved.document, speakers.bound(directory, assignment).names, changes)
+        renamed = speakers.named(saved.document, names)
         speakers.write(directory, assignment, names)
-        pipeline.save_context(directory, renamed)
+        pipeline.save_context(directory, saved, renamed)
         if isinstance(renamed.source, RecordingSource) and ids.is_recording_id(directory.name):
             index.write_index(directory.parent)
     return renamed
