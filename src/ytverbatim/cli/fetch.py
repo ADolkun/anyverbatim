@@ -50,7 +50,7 @@ def fetch_command(
     Videos are fetched anonymously first; the configured browser login is used only when YouTube asks
     for it. Exit codes: 0 ok, 1 some videos failed, 2 auth error, 3 batch stopped (cooldown).
     """
-    bad = [url for url in urls if ids.classify(url) is None]
+    bad = [url for url in urls if ids.parse_youtube(url) is None]
     if bad:
         click.echo(f"error: not a YouTube video, playlist or channel: {', '.join(bad)}", err=True)
         raise SystemExit(EXIT_FAILED)

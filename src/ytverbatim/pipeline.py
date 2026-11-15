@@ -43,7 +43,9 @@ from ytverbatim.acquire.session import (
     VideoOutcome,
     VideoStatus,
     default_runner,
+    explain,
     fetch,
+    in_stage,
     saved_captions,
 )
 from ytverbatim.acquire.video import ready_video
@@ -145,9 +147,10 @@ __all__ = [
     "CONTEXT_JSON",
     "CONTEXT_MD",
     "ProgressEvent",
+    "Result",
     "StageTiming",
     "VideoResult",
-    "build_document",
+    "check_dependencies",
     "process",
     "process_files",
     "process_many",
@@ -164,7 +167,13 @@ _WHISPER_FACTORY = "ytverbatim.asr.engines.whisper_mlx."
 
 @dataclass(frozen=True)
 class ProgressEvent:
-    video_id: str
+    """One step of a source's run: `id` is the video or recording id.
+
+    `stage` is one of `fetch`, `skip`, `asr`, `diarize`, `second_opinion`, `normalize`, `punctuate`, `correct`,
+    `numeric`, `numerals` or `write`; these names are part of the public API.
+    """
+
+    id: str
     stage: str
     detail: str = ""
 
@@ -189,9 +198,33 @@ class VideoResult:
     timings: tuple[StageTiming, ...] = ()
     # A local recording's file name, which says more to a reader than its id; None for a video.
     name: str | None = None
+    # The exact `context.json` that `document` was read from, taken under the source's lock; None without a document.
+    json_bytes: bytes | None = None
 
 
-def process(  # noqa: PLR0913
+@dataclass(frozen=True)
+class Result:
+    """What `process` made of one video or recording.
+
+    `json_bytes` is the exact `context.json` on disk, read while the source's lock was held, so it is the file
+    `document` was loaded from even when another process rewrites it a moment later. `video_path` is the validated
+    `video.mp4`, set only when the video track was requested (`ytdlp.video`). `reused` names what an earlier run
+    already had (`context` when the whole document was current, and `info`, `captions`, `audio` or `video` for the
+    fetched parts); `notices` say which stages could not run as asked.
+    """
+
+    id: str
+    kind: SourceKind
+    document: ContextDocument
+    json_bytes: bytes
+    directory: Path
+    markdown_path: Path
+    video_path: Path | None
+    reused: tuple[str, ...]
+    notices: tuple[str, ...]
+
+
+def process(
     target: str | os.PathLike[str],
     options: config.Options | None = None,
     *,
@@ -203,17 +236,17 @@ def process(  # noqa: PLR0913
     cookies_first: bool | None = None,
     interactive: bool = False,
     progress: Callable[[ProgressEvent], None] | None = None,
-    runner_factory: Callable[[Sequence[str]], YtDlpRunner] = default_runner,
-) -> ContextDocument:
+) -> Result:
     """Produce the context document for one video or local file, reusing it when nothing it depends on has changed.
 
     `target` is a YouTube video URL or id, or a local audio or video file (a path object is always a file).
     `llm` is the client for punctuation, correction and numeric verdicts; without it the configured `[llm]`
     provider applies, and with none configured those stages degrade as `quality.warnings` records. Raises the
     source's own error (`AuthError`, `EngineError`, `LLMError`, `ContractError`, `MediaValidationError`, ...), or
-    `BatchStopError` when YouTube asked us to back off before the video was done. `interactive` lets the configured
-    chatgpt LLM open a browser to sign in again when its sign-in is missing or lapses; off by default, because a
-    library must not open a browser on its own.
+    `BatchStopError` when YouTube asked us to back off before the video was done. Every such error has its `fix` set
+    (empty when there is no specific remedy) and, for a failure inside a stage, its `stage`. `interactive` lets the
+    configured chatgpt LLM open a browser to sign in again when its sign-in is missing or lapses; off by default,
+    because a library must not open a browser on its own.
 
     YouTube only, and a `ValueError` when given for a file: `auth` is an auth spec as for `--auth`; without it the
     configured source applies. `captions` (default on) downloads the caption tracks. `cookies_first` sends the video's
@@ -234,30 +267,38 @@ def process(  # noqa: PLR0913
             f"process takes one YouTube video or local file, not {target!r}; use process_many for playlists and "
             "channels"
         )
-    results: list[VideoResult] = []
-    report = process_many(
-        [found.url],
-        options,
-        llm=llm,
-        out=out,
-        source=resolve_source(auth),
-        captions=True if captions is None else captions,
-        force=force,
-        cookies_first=bool(cookies_first),
-        interactive=interactive,
-        progress=progress,
-        on_video=results.append,
-        runner_factory=runner_factory,
-    )
-    (result,) = results
-    if result.document is not None:
+    options = options or config.load_options()
+    source: CookieSource | None = None
+    try:
+        source = resolve_source(auth)
+        results: list[VideoResult] = []
+        report = process_many(
+            [found.url],
+            options,
+            llm=llm,
+            out=out,
+            source=source,
+            captions=True if captions is None else captions,
+            force=force,
+            cookies_first=bool(cookies_first),
+            interactive=interactive,
+            progress=progress,
+            on_video=results.append,
+            # Looked up on every call, so a test can swap the yt-dlp runner without a parameter on the public API.
+            runner_factory=default_runner,
+        )
+        (result,) = results
+        if result.document is not None:
+            if report.stopped is not None:
+                # The cooldown file is already written, so later runs wait; this video itself finished.
+                log.warning("%s is done, but YouTube asked to back off: %s", found.id, report.stopped)
+            return _finished(result, "youtube", out, video=options.ytdlp.video)
         if report.stopped is not None:
-            # The cooldown file is already written, so later runs wait; this video itself finished.
-            log.warning("%s is done, but YouTube asked to back off: %s", found.id, report.stopped)
-        return result.document
-    if report.stopped is not None:
-        raise report.stopped
-    _raise(result)
+            raise report.stopped
+        _raise(result)
+    except YtverbatimError as exc:
+        explain(exc, source)
+        raise
 
 
 def _process_file(
@@ -269,7 +310,7 @@ def _process_file(
     force: bool,
     interactive: bool,
     progress: Callable[[ProgressEvent], None] | None,
-) -> ContextDocument:
+) -> Result:
     results: list[VideoResult] = []
     process_files(
         [path],
@@ -283,8 +324,50 @@ def _process_file(
     )
     (result,) = results
     if result.document is not None:
-        return result.document
+        return _finished(result, "recording", out, video=False)
     _raise(result)
+
+
+def _finished(result: VideoResult, kind: SourceKind, out: Path | None, *, video: bool) -> Result:
+    assert result.document is not None
+    assert result.json_bytes is not None
+    source_id = result.outcome.video_id
+    directory = paths.source_dir(source_id, out)
+    video_path: Path | None = None
+    if video:
+        with video_lock(directory):
+            video_path = ready_video(directory)
+        if video_path is None:
+            error = MediaValidationError(f"{source_id} finished with the video track requested but no valid video file")
+            error.stage = "video"
+            raise error
+    return Result(
+        id=source_id,
+        kind=kind,
+        document=result.document,
+        json_bytes=result.json_bytes,
+        directory=directory,
+        markdown_path=directory / CONTEXT_MD,
+        video_path=video_path,
+        reused=result.outcome.reused,
+        notices=result.notices,
+    )
+
+
+def check_dependencies(options: config.Options | None = None, *, source: SourceKind = "youtube") -> None:
+    """Raise `DependencyError` naming the extra to install when an engine this source would run is missing.
+
+    Checks the ASR engine `options` select for `source` (`w-prod` unless `[asr] engine` is set), and the numeric
+    second-opinion engine when one is on. A recording also needs the `asr` extra, for the voice-activity detection
+    and diarization it runs on, so it needs `ytverbatim[whisper,asr]`. Nothing is imported or downloaded, and an
+    unknown engine is a `ConfigError`.
+    """
+    options = options or config.load_options()
+    registry.check_dependencies(
+        registry.get(options.asr.engine or _DEFAULT_ENGINE[source]), with_vad=source == "recording"
+    )
+    if options.text.numeric_second_opinion != "off":
+        registry.check_dependencies(registry.get(options.text.numeric_second_opinion))
 
 
 def _raise(result: VideoResult) -> NoReturn:
@@ -646,6 +729,7 @@ def _run_source(
     A current document is reused, its Markdown written again when missing, and handed to `reuse`; otherwise `run`
     makes it, from a cleared stage store under `--force`. Only what ends the batch is raised.
     """
+    trace = _Trace(source_id, settings.emit)
     try:
         with video_lock(sdir):
             document = _reusable(sdir, settings)
@@ -653,13 +737,19 @@ def _run_source(
                 settings.emit(ProgressEvent(source_id, "skip", f"{CONTEXT_JSON} exists"))
                 if not (sdir / CONTEXT_MD).is_file():
                     atomic.write_text(sdir / CONTEXT_MD, render_markdown(document))
-                return reuse(document)
-            if settings.force:
-                StageStore(sdir).clear()
-            return run(_Trace(source_id, settings.emit))
+                result = reuse(document)
+            else:
+                if settings.force:
+                    StageStore(sdir).clear()
+                result = run(trace)
+            if result.document is None:
+                return result
+            return replace(result, json_bytes=(sdir / CONTEXT_JSON).read_bytes())
     except (BatchStopError, DependencyError, EngineMemoryError):
         raise
     except (YtverbatimError, ValueError, OSError) as exc:
+        if isinstance(exc, YtverbatimError) and exc.stage is None:
+            exc.stage = trace.stage
         return _failed(source_id, exc)
 
 
@@ -729,10 +819,11 @@ def _error_kind(exc: Exception) -> str:
 
 def _error_for(outcome: VideoOutcome) -> YtverbatimError:
     """Return the error of a failure the fetch session recorded as an outcome, as raised and with its fix."""
-    if outcome.cause is not None:
-        outcome.cause.fix = outcome.fix
-        return outcome.cause
-    return YtverbatimError(f"{outcome.video_id}: {outcome.error}: {outcome.detail or outcome.error or 'failed'}")
+    error = outcome.cause or YtverbatimError(
+        f"{outcome.video_id}: {outcome.error}: {outcome.detail or outcome.error or 'failed'}"
+    )
+    error.fix = outcome.fix
+    return error
 
 
 class _Stretches(BaseModel):
@@ -773,8 +864,13 @@ class _Trace:
     source_id: str
     emit_event: Callable[[ProgressEvent], None]
     timings: list[StageTiming] = field(default_factory=list[StageTiming])
+    # The text or ASR stage that last started, named on an error that escapes it. "fetch" is left out: the fetch
+    # session names its own finer stages (`info`, `audio`, ...) on the errors it records.
+    stage: str | None = None
 
     def emit(self, stage: str, detail: str = "") -> None:
+        if stage != "fetch":
+            self.stage = stage
         self.emit_event(ProgressEvent(self.source_id, stage, detail))
 
 
@@ -1020,7 +1116,8 @@ class _FileRun:
                 return
             trace.emit("fetch")
             began = time.monotonic()
-            local.to_wav(recording, wav)
+            with in_stage("audio"):
+                local.to_wav(recording, wav)
             trace.timings.append(StageTiming("fetch", time.monotonic() - began, reused=False))
 
         prepared = _Prepared(

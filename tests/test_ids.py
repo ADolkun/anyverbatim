@@ -3,10 +3,10 @@ import pytest
 from ytverbatim.ids import (
     RefKind,
     YouTubeRef,
-    classify,
     extract_video_id,
     is_recording_id,
     is_video_id,
+    parse_youtube,
     recording_id,
     video_url,
 )
@@ -39,7 +39,7 @@ VID = "abcDEF_1234"
 )
 def test_video_id_from_every_form(text: str) -> None:
     assert extract_video_id(text) == VID
-    assert classify(text) == YouTubeRef(RefKind.VIDEO, VID, video_url(VID))
+    assert parse_youtube(text) == YouTubeRef(RefKind.VIDEO, VID, video_url(VID))
 
 
 @pytest.mark.parametrize(
@@ -67,20 +67,20 @@ def test_invalid_inputs_are_rejected(text: str) -> None:
 
 
 def test_no_hash_fallback_for_non_youtube_input() -> None:
-    assert classify("https://vimeo.com/12345678") is None
+    assert parse_youtube("https://vimeo.com/12345678") is None
 
 
 def test_playlist_urls() -> None:
     expected = YouTubeRef(RefKind.PLAYLIST, "PLabc_123-x", "https://www.youtube.com/playlist?list=PLabc_123-x")
-    assert classify("https://www.youtube.com/playlist?list=PLabc_123-x") == expected
-    assert classify("https://www.youtube.com/watch?list=PLabc_123-x") == expected
-    assert classify("https://music.youtube.com/playlist?list=PLabc_123-x&si=1") == expected
+    assert parse_youtube("https://www.youtube.com/playlist?list=PLabc_123-x") == expected
+    assert parse_youtube("https://www.youtube.com/watch?list=PLabc_123-x") == expected
+    assert parse_youtube("https://music.youtube.com/playlist?list=PLabc_123-x&si=1") == expected
     assert extract_video_id("https://www.youtube.com/playlist?list=PLabc_123-x") is None
-    assert classify("https://www.youtube.com/playlist") is None
+    assert parse_youtube("https://www.youtube.com/playlist") is None
 
 
 def test_members_only_playlist_is_a_playlist() -> None:
-    ref = classify("https://www.youtube.com/playlist?list=UUMOabcdefgh")
+    ref = parse_youtube("https://www.youtube.com/playlist?list=UUMOabcdefgh")
     assert ref is not None
     assert ref.kind is RefKind.PLAYLIST
 
@@ -98,14 +98,14 @@ def test_members_only_playlist_is_a_playlist() -> None:
     ],
 )
 def test_channel_urls(text: str, key: str) -> None:
-    assert classify(text) == YouTubeRef(RefKind.CHANNEL, key, f"https://www.youtube.com/{key}")
+    assert parse_youtube(text) == YouTubeRef(RefKind.CHANNEL, key, f"https://www.youtube.com/{key}")
 
 
 @pytest.mark.parametrize(
     "text", ["https://www.youtube.com/@", "https://www.youtube.com/channel", "https://youtu.be/@x"]
 )
 def test_malformed_channel_urls(text: str) -> None:
-    assert classify(text) is None
+    assert parse_youtube(text) is None
 
 
 def test_is_video_id() -> None:

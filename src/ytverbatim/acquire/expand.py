@@ -2,7 +2,7 @@ import logging
 from collections.abc import Sequence
 from pathlib import Path
 
-from ytverbatim.ids import RefKind, classify, is_video_id
+from ytverbatim.ids import RefKind, is_video_id, parse_youtube
 from ytverbatim.ytdlp.types import YtDlpRunner
 
 log = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ def expand_target(
     timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> list[str]:
     """Video ids behind one URL or id, in order and without repeats; a single video costs no request."""
-    ref = classify(target)
+    ref = parse_youtube(target)
     if ref is None:
         raise ValueError(f"not a YouTube video, playlist or channel: {target!r}")
     if ref.kind is RefKind.VIDEO:

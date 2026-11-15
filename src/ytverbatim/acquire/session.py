@@ -9,7 +9,7 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
@@ -78,7 +78,6 @@ ESCALATE_SIGNALS = frozenset({Signal.LOGIN_REQUIRED, Signal.MEMBERS_ONLY, Signal
 ROTATION_WAIT_S = 30.0
 
 SINGLE_VIDEO_SLEEP_ARGS: tuple[str, ...] = ("--sleep-requests", "0.75", "--sleep-subtitles", "5")
-MEMBERS_PLAYLIST_PREFIX = "UUMO"
 
 ACCESS_FILE = "access.json"
 METADATA_FILE = "metadata.json"
@@ -308,7 +307,8 @@ class FetchSession:
             metadata, access = prior
             reused.append("info")
         else:
-            extracted = self._extract(video_id, vdir, snaps, cookies_first=cookies_first)
+            with in_stage("info"):
+                extracted = self._extract(video_id, vdir, snaps, cookies_first=cookies_first)
             metadata = extracted.metadata
             atomic.write_json(vdir / METADATA_FILE, metadata.to_dict())
             access = self._access(metadata, extracted, ())
@@ -319,7 +319,8 @@ class FetchSession:
         if want_captions:
             entries = _load_tracks(vdir)
             if entries is None:
-                result = self._stage(snaps, access.cookies_used, lambda c: self._captions(vdir, metadata, c))
+                with in_stage("captions"):
+                    result = self._stage(snaps, access.cookies_used, lambda c: self._captions(vdir, metadata, c))
                 warnings += result.warnings
                 entries = _track_entries(result)
                 if self._captions_completed():
@@ -331,9 +332,11 @@ class FetchSession:
 
         audio_s: float | None = None
         if want_audio:
-            audio_s = self._audio(video_id, vdir, metadata, snaps, access.cookies_used, reused)
+            with in_stage("audio"):
+                audio_s = self._audio(video_id, vdir, metadata, snaps, access.cookies_used, reused)
         if self._options.video:
-            self._video(video_id, vdir, metadata, snaps, access.cookies_used, reused, present=video_done)
+            with in_stage("video"):
+                self._video(video_id, vdir, metadata, snaps, access.cookies_used, reused, present=video_done)
 
         warnings += [w for seen in self._runner.seen for w in seen.warnings]
         access = access.model_copy(update={"warnings": _clean_warnings(warnings)})
@@ -555,6 +558,32 @@ class FetchSession:
                 return VideoOutcome(video_id, VideoStatus.ERROR, error="error", detail=redact(str(exc)))
 
 
+@contextlib.contextmanager
+def in_stage(name: str) -> Iterator[None]:
+    """Name the fetch stage on any error that leaves it, unless a nested stage already did."""
+    try:
+        yield
+    except YtverbatimError as exc:
+        if exc.stage is None:
+            exc.stage = name
+        raise
+
+
+def explain(exc: YtverbatimError, source: CookieSource | None = None) -> None:
+    """Give `exc` the remedy for its kind when it has none yet; `source` is the auth source the failing call used."""
+    if exc.fix:
+        return
+    match exc:
+        case BatchStopError():
+            exc.fix = stop_fix(exc.signal, exc.until)
+        case AuthError():
+            exc.fix = fix_for(exc.state, **preflight.fix_context(source))
+        case YtDlpError():
+            exc.fix = _ytdlp_fix(exc)
+        case _:
+            pass
+
+
 def _auth_source_kind(source: CookieSource | None) -> AuthSourceKind:
     match source:
         case None:
@@ -724,7 +753,7 @@ class _FetchOnly:
 def _channel_keys(entries: Iterable[str]) -> set[str]:
     keys: set[str] = set()
     for entry in entries:
-        ref = ids.classify(entry)
+        ref = ids.parse_youtube(entry)
         if ref is not None and ref.kind is ids.RefKind.CHANNEL:
             keys.add(ref.id.lower())
         elif entry.startswith("UC"):
@@ -735,9 +764,7 @@ def _channel_keys(entries: Iterable[str]) -> set[str]:
 
 
 def _needs_cookies(ref: ids.YouTubeRef, channel_keys: set[str]) -> bool:
-    if ref.kind is ids.RefKind.PLAYLIST and ref.id.startswith(MEMBERS_PLAYLIST_PREFIX):
-        return True
-    return ref.kind is ids.RefKind.CHANNEL and ref.id.lower() in channel_keys
+    return ref.members_only or (ref.kind is ids.RefKind.CHANNEL and ref.id.lower() in channel_keys)
 
 
 def _list_ids(
@@ -769,7 +796,7 @@ def plan_videos(
     planned: dict[str, PlannedVideo] = {}
     capped = False
     for target in targets:
-        ref = ids.classify(target)
+        ref = ids.parse_youtube(target)
         if ref is None:
             raise ValueError(f"not a YouTube video, playlist or channel: {target!r}")
         listing_cookies = _needs_cookies(ref, channel_keys) and options.policy != "never"
@@ -805,7 +832,7 @@ def expand(
     The ids carry no memory of where they came from: pass `cookies_first=True` to `process` for ids from a members
     playlist, or each one is first requested anonymously, refused, and only then retried with cookies.
     """
-    ref = ids.classify(target)
+    ref = ids.parse_youtube(target)
     if ref is None:
         raise ValueError(f"not a YouTube video, playlist or channel: {target!r}")
     if ref.kind is ids.RefKind.VIDEO:
@@ -826,14 +853,8 @@ def expand(
         if runner.stop is not None:
             raise BatchStopError(runner.stop.signal, runner.stop.until)
         return found
-    except BatchStopError as exc:
-        exc.fix = stop_fix(exc.signal, exc.until)
-        raise
-    except AuthError as exc:
-        exc.fix = fix_for(exc.state, **preflight.fix_context(source))
-        raise
-    except YtDlpError as exc:
-        exc.fix = _ytdlp_fix(exc)
+    except YtverbatimError as exc:
+        explain(exc, source)
         raise
 
 
@@ -905,7 +926,7 @@ def fetch(
 
 
 def _all_done(targets: Sequence[str], hook: VideoHook) -> bool:
-    refs = [ids.classify(target) for target in targets]
+    refs = [ids.parse_youtube(target) for target in targets]
     return all(ref is not None and ref.kind is ids.RefKind.VIDEO and hook.done(ref.id) for ref in refs)
 
 
@@ -924,7 +945,9 @@ __all__ = [
     "check_cooldown",
     "default_runner",
     "expand",
+    "explain",
     "fetch",
+    "in_stage",
     "plan_videos",
     "read_cooldown",
     "saved_captions",

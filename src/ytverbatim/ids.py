@@ -8,6 +8,7 @@ _LIST_ID = re.compile(r"[0-9A-Za-z_-]+")
 _RECORDING_ID = re.compile(r"rec-[0-9a-f]{16}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 RECORDING_PREFIX = "rec-"
+MEMBERS_PLAYLIST_PREFIX = "UUMO"
 
 _YOUTUBE_HOSTS = frozenset(
     {
@@ -42,6 +43,11 @@ class YouTubeRef:
     id: str
     url: str
 
+    @property
+    def members_only(self) -> bool:
+        """Whether this is a members-only playlist, whose videos need cookies from the first request."""
+        return self.kind is RefKind.PLAYLIST and self.id.startswith(MEMBERS_PLAYLIST_PREFIX)
+
 
 def is_video_id(text: str) -> bool:
     return _VIDEO_ID.fullmatch(text) is not None
@@ -63,11 +69,11 @@ def video_url(video_id: str) -> str:
 
 
 def extract_video_id(text: str) -> str | None:
-    ref = classify(text)
+    ref = parse_youtube(text)
     return ref.id if ref is not None and ref.kind is RefKind.VIDEO else None
 
 
-def classify(text: str) -> YouTubeRef | None:
+def parse_youtube(text: str) -> YouTubeRef | None:
     text = text.strip()
     if is_video_id(text):
         return YouTubeRef(RefKind.VIDEO, text, video_url(text))

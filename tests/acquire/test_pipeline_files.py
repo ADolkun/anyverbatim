@@ -271,9 +271,10 @@ def test_a_source_gone_before_its_audio_is_read_asks_for_the_file_again(
 
 def test_process_takes_a_file(session_kit, media: Media, worker: Worker, tmp_path: Path) -> None:
     path = media.add(tmp_path / "meeting.m4a")
-    doc = process(str(path), out=session_kit.out)
+    first = process(str(path), out=session_kit.out)
+    doc = first.document
     assert isinstance(doc.source, RecordingSource) and doc == load_document(session_kit.out / rec_id() / "context.json")
-    assert process(path, out=session_kit.out) == doc
+    assert process(path, out=session_kit.out).document == doc
 
 
 @pytest.mark.parametrize("given", [{"auth": "chrome"}, {"captions": False}, {"cookies_first": True}])
