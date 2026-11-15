@@ -3,17 +3,16 @@
 Nothing here imports MLX or numpy; the engine libraries only ever load inside the child.
 """
 
-import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import JsonValue
-
-from ytverbatim import atomic, mlx_worker, sysmem
-from ytverbatim.asr.models import FINGERPRINT_FILE, HYPOTHESES_FILE, METRICS_FILE, RunMetrics, WorkerRequest
+from ytverbatim import mlx_worker, sysmem
+from ytverbatim.asr.models import HYPOTHESES_FILE, METRICS_FILE, RunMetrics, WorkerRequest
 from ytverbatim.errors import ConfigError
 from ytverbatim.mlx_worker import CAP_SETTING, without_wav
+from ytverbatim.mlx_worker import follow_moved_audio as follow_moved_audio
+from ytverbatim.mlx_worker import stored_fingerprint as stored_fingerprint
 
 WORKER_MODULE = "ytverbatim.asr.worker"
 # With the 10% available-memory floor, a cap above 90% of RAM can never fire before the floor does, so it would be a
@@ -71,26 +70,3 @@ def finished(request: WorkerRequest) -> Path | None:
         return None
     stored = stored_fingerprint(out)
     return hypotheses if stored is not None and without_wav(stored) == without_wav(request.fingerprint()) else None
-
-
-def follow_moved_audio(request: WorkerRequest) -> None:
-    """Re-stamp `request.out_dir` when it holds this same request for a WAV path that has since changed.
-
-    The worker then resumes the folder instead of refusing it as another request's output. Only for a caller that
-    owns the folder exclusively, as the pipeline does under its per-video lock.
-    """
-    request = mlx_worker.anchored(request)
-    out = Path(request.out_dir)
-    stored = stored_fingerprint(out)
-    current = request.fingerprint()
-    if stored is not None and stored != current and without_wav(stored) == without_wav(current):
-        atomic.write_json(out / FINGERPRINT_FILE, current)
-
-
-def stored_fingerprint(out: Path) -> JsonValue | None:
-    """Return the fingerprint of the request whose output `out` holds, or None if it holds none readable."""
-    try:
-        stored: JsonValue = json.loads((out / FINGERPRINT_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return stored

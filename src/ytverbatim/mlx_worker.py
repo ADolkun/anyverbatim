@@ -76,6 +76,10 @@ class Request(Protocol):
     def model_dump_json(self, *, indent: int | None = None) -> str: ...
 
 
+class Fingerprinted(Request, Protocol):
+    def fingerprint(self) -> dict[str, JsonValue]: ...
+
+
 class WorkerError(BaseModel):
     """The structured failure the worker leaves in `error.json` for the parent to read."""
 
@@ -206,6 +210,29 @@ def memory_fix(exc: ProcMemoryExceeded, *, smaller: str = "use a smaller engine"
         f"{smaller}, or raise asr.{CAP_SETTING} in the config file only if this Mac has that much memory to spare "
         f"({resume})"
     )
+
+
+def follow_moved_audio(request: Fingerprinted) -> None:
+    """Re-stamp `request.out_dir` when it holds this same request for a WAV path that has since changed.
+
+    The worker then resumes the folder instead of refusing it as another request's output. Only for a caller that
+    owns the folder exclusively, as the pipeline does under its per-source lock.
+    """
+    request = anchored(request)
+    out = Path(request.out_dir)
+    stored = stored_fingerprint(out)
+    current = request.fingerprint()
+    if stored is not None and stored != current and without_wav(stored) == without_wav(current):
+        atomic.write_json(out / FINGERPRINT_FILE, current)
+
+
+def stored_fingerprint(out: Path) -> JsonValue | None:
+    """Return the fingerprint of the request whose output `out` holds, or None if it holds none readable."""
+    try:
+        stored: JsonValue = json.loads((out / FINGERPRINT_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return stored
 
 
 def without_wav(fingerprint: JsonValue) -> JsonValue:

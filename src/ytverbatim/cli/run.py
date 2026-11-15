@@ -50,6 +50,11 @@ from ytverbatim.ytdlp.runner import redact
     "--chapters", type=click.Choice(["auto", "none"]), help="Chapter headings: auto uses YouTube's chapters (default)."
 )
 @click.option(
+    "--diarize/--no-diarize",
+    default=None,
+    help="Label who speaks when (Speaker 1, Speaker 2, ...). Default: on for recordings, off for YouTube videos.",
+)
+@click.option(
     "--llm",
     "llm_spec",
     metavar="SPEC",
@@ -87,6 +92,7 @@ def run_command(  # noqa: PLR0913
     llm_spec: str | None,
     *,
     correct: bool | None,
+    diarize: bool | None,
     captions: bool | None,
     force: bool,
     ignore_cooldown: bool,
@@ -115,6 +121,7 @@ def run_command(  # noqa: PLR0913
     overrides: dict[str, dict[str, object]] = {
         "asr": {"engine": engine, "source": transcript_source, "language": language},
         "text": {"correct": correct, "chapters": chapters},
+        "diarize": {"mode": None if diarize is None else ("on" if diarize else "off")},
     }
     if files or selectors:
         youtube_only = {
@@ -299,6 +306,9 @@ def _print_result(result: pipeline.VideoResult, *, quiet: bool = False) -> None:
     facts = [f"{len(document.segments)} segments", f"{len(document.paragraphs)} paragraphs"]
     if not isinstance(document.source, RecordingSource):
         facts.append(f"{len(document.chapters)} chapters")
+    if document.speakers:
+        count = len(document.speakers)
+        facts.append(f"{count} speaker{'s' if count > 1 else ''}")
     facts += [f"{flags} flags", f"punctuation: {document.transcript.punctuation}"]
     if outcome.reused and "context" in outcome.reused:
         facts.append("already done")

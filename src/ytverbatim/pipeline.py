@@ -1,11 +1,12 @@
 """`ytverbatim run`: transcribe, refine the text and write `context.json` plus `context.md` per video or recording.
 
 Stages, per video under its directory lock: metadata, captions and audio (the fetch session's) → asr (the worker
-subprocess, which also plans the VAD chunks) or manual captions → normalize → punctuate → correct → numeric →
-numerals (Mandarin only) → segment, chapters and assemble (`stages.build_document`) → render. Every stage from asr to
-numerals is checkpointed in the video's `StageStore`, keyed by what it read, so a rerun with changed options
-recomputes only the stages those options reach, and an interrupted run resumes where it stopped. The 16 kHz WAV is
-deleted once the ASR output is stored; the compressed audio stays.
+subprocess, which also plans the VAD chunks, then the diarization worker when the source is diarized; the stage turns
+both into speaker-aware stretches) or manual captions → normalize → punctuate → correct → numeric → numerals
+(Mandarin only) → segment, chapters and assemble (`stages.build_document`) → render. Every stage from asr to numerals
+is checkpointed in the video's `StageStore`, keyed by what it read, so a rerun with changed options recomputes only
+the stages those options reach, and an interrupted run resumes where it stopped. The 16 kHz WAV is deleted once the
+outputs of every worker that reads it are stored; the compressed audio stays.
 
 `_YouTubeRun` is the YouTube adapter: it fetches, then hands a `_Prepared` source to `_Transcription`, which runs
 everything from asr to the written files and knows nothing of where the source came from. `_FileRun` is the adapter
@@ -29,7 +30,7 @@ from typing import Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
-from ytverbatim import atomic, config, ids, index, paths, stages, store
+from ytverbatim import atomic, config, ids, index, mlx_worker, paths, stages, store
 from ytverbatim.acquire import local
 from ytverbatim.acquire.audio import WAV_NAME
 from ytverbatim.acquire.captions import CaptionKind, CaptionTrack
@@ -64,6 +65,10 @@ from ytverbatim.contract import (
     dump_document,
     load_document,
 )
+from ytverbatim.diarize import protocol as diarize_protocol
+from ytverbatim.diarize import registry as diarize_registry
+from ytverbatim.diarize import runner as diarize_runner
+from ytverbatim.diarize.protocol import DiarizerDef, DiarizeRequest
 from ytverbatim.errors import (
     BatchStopError,
     BusyError,
@@ -165,6 +170,10 @@ DUPLICATE = "duplicate"
 BUSY = "busy"
 # The engine a source gets when `[asr] engine` is unset; recordings move to the language policy once it is chosen.
 _DEFAULT_ENGINE: dict[SourceKind, str] = {"youtube": "w-prod", "recording": "w-prod"}
+# Chosen by E1: as accurate as the bf16 weights on public meetings, at half the size.
+_DIARIZER = "d-nemotron-8bit"
+# The diarization request's file id; its folder already belongs to one source, whose id may not be a valid file id.
+_DIARIZE_FILE = "audio"
 _WHISPER_FACTORY = "ytverbatim.asr.engines.whisper_mlx."
 
 
@@ -354,7 +363,8 @@ def _finished(result: VideoResult, kind: SourceKind, out: Path | None) -> Result
 def check_dependencies(options: config.Options | None = None, *, source: SourceKind = "youtube") -> None:
     """Raise `DependencyError` naming the extra to install when an engine a run of this source needs is missing.
 
-    Checks the ASR engine `options` select for `source` (`w-prod` unless `[asr] engine` is set), and the numeric
+    Checks the ASR engine `options` select for `source` (`w-prod` unless `[asr] engine` is set), the diarizer when the
+    source is diarized (`[diarize] mode`: recordings unless it is `off`, YouTube only when it is `on`), and the numeric
     second-opinion engine when one is on; each names the extra its library comes from (`whisper` or `asr`). Nothing
     is imported or downloaded. An unknown engine is a `ConfigError`, an unknown `source` a `ValueError`. `process`
     runs the same check before any request.
@@ -363,8 +373,17 @@ def check_dependencies(options: config.Options | None = None, *, source: SourceK
         raise ValueError(f"source must be one of {', '.join(_DEFAULT_ENGINE)}, not {source!r}")
     options = options or config.load_options()
     registry.check_dependencies(registry.get(options.asr.engine or _DEFAULT_ENGINE[source]))
+    diarizer = _diarizer(options.diarize, source)
+    if diarizer is not None:
+        diarize_registry.check_dependencies(diarizer)
     if options.text.numeric_second_opinion != "off":
         registry.check_dependencies(registry.get(options.text.numeric_second_opinion))
+
+
+def _diarizer(options: config.DiarizeOptions, source: SourceKind) -> DiarizerDef | None:
+    if options.mode == "on" or (options.mode == "auto" and source == "recording"):
+        return diarize_registry.get(_DIARIZER)
+    return None
 
 
 def _raise(result: VideoResult) -> NoReturn:
@@ -565,6 +584,8 @@ class _Settings:
     language: str | None = None
     # The allowed set handed to a detecting engine; empty unless the batch's sources and engine use it.
     languages: tuple[str, ...] = ()
+    # The diarizer every ASR transcript of the batch is attributed with, else None.
+    diarizer: DiarizerDef | None = None
 
     @property
     def llm_id(self) -> str | None:
@@ -589,6 +610,8 @@ class _Settings:
             inputs["language"] = self.language
         if self.languages:
             inputs["languages"] = list(self.languages)
+        if self.diarizer is not None:
+            inputs["diarizer"] = _plain(asdict(self.diarizer))
         return input_hash("context", versions["context"], inputs)
 
 
@@ -646,6 +669,7 @@ def _settings(
         clock=clock,
         language=_forced_language(options.asr.language, definition),
         languages=languages,
+        diarizer=_diarizer(options.diarize, kind),
     )
 
 
@@ -991,23 +1015,51 @@ class _Decoding:
         )
         return self.placed("asr", request)
 
-    def asr_key(self, request: WorkerRequest) -> str:
-        # The worker's own fingerprint, minus the WAV path: the source id already names the audio.
-        return _key("asr", {"request": without_wav(request.fingerprint())})
+    def diarize_request(self) -> DiarizeRequest | None:
+        """Return the diarization request in its worker folder, keyed like a decode; None for an undiarized source."""
+        definition = self.settings.diarizer
+        if definition is None:
+            return None
+        root = self.store.work_dir("diarize")
+        request = DiarizeRequest(
+            diarizer=definition,
+            out_dir=str(root),
+            files=(diarize_protocol.FileJob(id=_DIARIZE_FILE, wav=str(self.dir / WAV_NAME)),),
+            memory_cap_bytes=self.settings.memory_cap_bytes,
+        )
+        out_dir = root / definition.spec.id / store.digest(without_wav(request.fingerprint()))[:16]
+        placed = request.model_copy(update={"out_dir": str(out_dir)})
+        mlx_worker.follow_moved_audio(placed)
+        return placed
 
-    def transcribed(self, hypotheses: Path) -> Transcribed:
+    def asr_key(self, request: WorkerRequest, diarize: DiarizeRequest | None) -> str:
+        # The worker's own fingerprint, minus the WAV path: the source id already names the audio.
+        inputs: dict[str, JsonValue] = {"request": without_wav(request.fingerprint())}
+        if diarize is not None:
+            # Added only when diarized, so an undiarized source keeps the key it always had.
+            run = stages.diarization_run(diarize.diarizer).model_dump(mode="json")
+            inputs["diarization"] = store.digest({"request": without_wav(diarize.fingerprint()), "run": run})
+        return _key("asr", inputs)
+
+    def transcribed(self, hypotheses: Path, diarize: DiarizeRequest | None) -> Transcribed:
         rows = _read_rows(hypotheses, self.source_id)
-        return stages.from_asr_rows(rows, self.settings.definition, self.language)
+        diarized = None
+        if diarize is not None:
+            definition = diarize.diarizer
+            stored = diarize_protocol.load(Path(diarize.out_dir), _DIARIZE_FILE, definition.spec.id)
+            diarized = stages.Diarized(definition, stored)
+        return stages.from_asr_rows(rows, self.settings.definition, self.language, diarized)
 
     def needs_audio(self) -> bool:
-        """Whether an ASR stage still has audio to decode; stored stages and finished worker folders need none."""
+        """Whether a worker stage still has audio to read; stored stages and finished worker folders need none."""
         request = self.asr_request()
-        source = self.store.load("asr", stage_versions()["asr"], self.asr_key(request), Transcribed)
+        diarize = self.diarize_request()
+        source = self.store.load("asr", stage_versions()["asr"], self.asr_key(request, diarize), Transcribed)
         if source is None:
             hypotheses = asr_runner.finished(request)
-            if hypotheses is None:
+            if hypotheses is None or (diarize is not None and diarize_runner.finished(diarize) is None):
                 return True
-            source = self.transcribed(hypotheses)
+            source = self.transcribed(hypotheses, diarize)
         if self.settings.second_opinion is None:
             return False
         key = _key("second_opinion", self.second_inputs(source))
@@ -1278,13 +1330,27 @@ class _Transcription:
     def _asr(self) -> Transcribed:
         decoding = self.decoding
         request = decoding.asr_request()
+        diarize = decoding.diarize_request()
 
         def compute() -> Transcribed:
             hypotheses = asr_runner.finished(request) or asr_runner.run_worker(request).hypotheses
-            return decoding.transcribed(hypotheses)
+            if diarize is not None:
+                self._diarize(diarize)
+            return decoding.transcribed(hypotheses, diarize)
 
+        key = decoding.asr_key(request, diarize)
         engine = request.engine.spec.id
-        return self._stage("asr", decoding.asr_key(request), Transcribed, compute, engine, keep=Path(request.out_dir))
+        return self._stage("asr", key, Transcribed, compute, engine, keep=Path(request.out_dir))
+
+    def _diarize(self, request: DiarizeRequest) -> None:
+        """Run the diarization worker after the decode, never beside it; a finished folder of the request is reused."""
+        began = time.monotonic()
+        self.trace.emit("diarize", request.diarizer.spec.id)
+        reused = diarize_runner.finished(request) is not None
+        if not reused:
+            diarize_runner.run_worker(request)
+        _prune(self.store.work_dir("diarize"), Path(request.out_dir))
+        self.trace.timings.append(StageTiming("diarize", time.monotonic() - began, reused))
 
     def _from_captions(self, captions: Sequence[CaptionTrack]) -> Transcribed | None:
         language = self.prepared.language

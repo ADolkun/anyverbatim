@@ -570,3 +570,36 @@ def test_word_spans_is_the_matching_aligned_tokens_times_by(text: str, parts: li
     timed = "".join(token.text for token in tokens if token.timed)
     assert all(text[a:b] in timed for a, b in spans.values())
     assert {t.start for t in tokens if t.timed} <= {words[i].start for i in spans}
+
+
+def spoken_by(pieces: Sequence[tuple[str, str | None]]) -> list[Token]:
+    return [Token(piece, i * 0.3, i * 0.3 + 0.3, speaker=speaker) for i, (piece, speaker) in enumerate(pieces)]
+
+
+def test_a_sentence_never_crosses_a_change_of_speaker() -> None:
+    tokens = spoken_by([(" so", "S1"), (" we", "S1"), (" agree", "S2"), (" then.", "S2")])
+    sentences = seg.segment_tokens(tokens, "en")
+    assert [(s.text, s.speaker) for s in sentences] == [("so we", "S1"), ("agree then.", "S2")]
+
+
+def test_bare_punctuation_belongs_to_the_speaker_before_it() -> None:
+    tokens = spoken_by([("好", "S1"), ("的", "S1"), ("。", "S2"), ("我", "S2"), ("来", "S2"), ("。", "S2")])
+    sentences = seg.segment_tokens(tokens, "zh")
+    assert [(s.text, s.speaker) for s in sentences] == [("好的。", "S1"), ("我来。", "S2")]
+    assert all(token.speaker == sentence.speaker for sentence in sentences for token in sentence.tokens)
+
+
+def test_leading_bare_punctuation_takes_the_first_speaker() -> None:
+    tokens = spoken_by([("“", None), ("好", "S2"), ("。", "S2")])
+    (sentence,) = seg.segment_tokens(tokens, "zh")
+    assert (sentence.text, sentence.speaker) == ("“好。", "S2")
+
+
+def test_paragraphs_break_where_the_speaker_changes() -> None:
+    starts, ends = spans([(0, 1), (1.1, 2), (2.1, 3), (3.1, 4)])
+    assert seg.split_paragraphs(starts, ends, [None] * 4, speakers=["S1", "S1", "S2", "S1"]) == [
+        (0, 1),
+        (2, 2),
+        (3, 3),
+    ]
+    assert seg.split_paragraphs(starts, ends, [None] * 4) == [(0, 3)]

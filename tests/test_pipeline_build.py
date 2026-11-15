@@ -1,3 +1,4 @@
+import struct
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -12,9 +13,11 @@ from ytverbatim.asr import registry
 from ytverbatim.asr.models import ChunkHypothesis
 from ytverbatim.asr.protocol import ChunkFlag
 from ytverbatim.contract import Access, ContextDocument, Word, YouTubeSource, dump_document, load_document
+from ytverbatim.diarize import registry as diarize_registry
+from ytverbatim.diarize.protocol import Diarization
 from ytverbatim.errors import ContractError
 from ytverbatim.render import render_markdown
-from ytverbatim.stages import SourceInfo, Stretch, build_document, from_asr_rows, youtube_source
+from ytverbatim.stages import Diarized, SourceInfo, Stretch, Transcribed, build_document, from_asr_rows, youtube_source
 
 ACCESS = Access(
     auth_source="none",
@@ -86,9 +89,20 @@ def build(
     engine: str = "w-prod",
     chapters: bool = True,
     meta: VideoMetadata | None = None,
+    diarized: Diarized | None = None,
 ) -> ContextDocument:
     meta = meta or metadata()
-    source = from_asr_rows(rows, registry.get(engine), meta.language)
+    return assemble(from_asr_rows(rows, registry.get(engine), meta.language, diarized), meta=meta, chapters=chapters)
+
+
+def assemble(
+    source: Transcribed,
+    stretches: Sequence[Stretch] | None = None,
+    *,
+    meta: VideoMetadata | None = None,
+    chapters: bool = True,
+) -> ContextDocument:
+    meta = meta or metadata()
 
     def describe(stretches: Sequence[Stretch]) -> YouTubeSource:
         return youtube_source(meta, ("synthetic",), ACCESS, stretches)
@@ -96,10 +110,23 @@ def build(
     return build_document(
         info=SourceInfo(meta.video_id, meta.chapters, describe),
         source=source,
-        stretches=source.stretches,
+        stretches=source.stretches if stretches is None else stretches,
         chapters=chapters,
         created_at=NOW,
     )
+
+
+def diarized(turns: Sequence[tuple[float, float, int]], *, seconds: float = 20.0, channels: int = 8) -> Diarized:
+    """A stored diarization in which each (start, end, channel) turn is active at probability 0.9."""
+    frame_s = 0.01
+    frames = round(seconds / frame_s)
+    probs = [0.0] * (frames * channels)
+    for start, end, channel in turns:
+        for frame in range(round(start / frame_s), round(end / frame_s)):
+            probs[frame * channels + channel] = 0.9
+    data = b"".join(struct.pack("<e", p) for p in probs)
+    diarization = Diarization(turns=(), threshold=0.5, frame_s=frame_s, frames=frames, channels=channels, probs=data)
+    return Diarized(diarize_registry.get("d-nemotron-8bit"), diarization)
 
 
 def test_whisper_words_give_word_level_segments_and_a_valid_document() -> None:
@@ -424,3 +451,81 @@ def test_info_tags_keeps_only_string_tags_of_a_raw_extraction() -> None:
     assert info_tags({"tags": "GAAP"}) == ()
     assert info_tags({}) == ()
     assert info_tags(["tags"]) == ()
+
+
+THREE_VOICES = (" we", " met", " today", " so", " and", " we", " left")
+
+
+def three_voices() -> tuple[list[ChunkHypothesis], Diarized]:
+    # Words 0-2 (0-1.2 s), 3 (1.2-1.6 s) and 4-6 (1.6-2.8 s) are three voices, with no pause and no punctuation.
+    spoken = words(THREE_VOICES)
+    rows = [row(0, "".join(w.text for w in spoken), 0.0, 3.0, chunk_words=spoken)]
+    return rows, diarized([(0.0, 1.2, 0), (1.2, 1.6, 5), (1.6, 2.8, 2)])
+
+
+def test_a_diarized_transcript_breaks_sentences_and_paragraphs_at_every_speaker_change() -> None:
+    rows, voices = three_voices()
+    doc = build(rows, diarized=voices)
+    assert [(s.text, s.speaker) for s in doc.segments] == [("we met today", "S1"), ("so", "S2"), ("and we left", "S3")]
+    assert [(p.first_segment, p.speaker) for p in doc.paragraphs] == [(0, "S1"), (1, "S2"), (2, "S3")]
+    assert [s.id for s in doc.speakers] == ["S1", "S2", "S3"]
+    run = doc.transcript.diarization
+    assert run is not None and run.engine == "d-nemotron-8bit" and run.params["threshold"] == 0.5
+
+
+def test_a_text_stage_emptying_a_speaker_drops_it_without_renumbering_the_others() -> None:
+    rows, voices = three_voices()
+    source = from_asr_rows(rows, registry.get("w-prod"), "en", voices)
+    emptied = [s.model_copy(update={"text": ""}) if s.speaker == "S2" else s for s in source.stretches]
+    doc = assemble(source, emptied)
+    assert [s.id for s in doc.speakers] == ["S1", "S3"]
+    assert [(s.text, s.speaker) for s in doc.segments] == [("we met today", "S1"), ("and we left", "S3")]
+    assert [p.speaker for p in doc.paragraphs] == ["S1", "S3"]
+    assert "**Speaker 3:** and we left" in render_markdown(doc)
+
+
+def test_sentences_are_re_cut_only_within_one_speakers_stretches() -> None:
+    rows, voices = three_voices()
+    source = from_asr_rows(rows, registry.get("w-prod"), "en", voices)
+    # Punctuation that would join the first two stretches into one sentence if they were one speaker's.
+    texts = {"S1": "We met today,", "S2": "so.", "S3": "And we left."}
+    stretches = [s.model_copy(update={"text": texts[s.speaker or ""]}) for s in source.stretches]
+    doc = assemble(source, stretches)
+    assert [(s.text, s.speaker) for s in doc.segments] == [
+        ("We met today,", "S1"),
+        ("so.", "S2"),
+        ("And we left.", "S3"),
+    ]
+
+
+def test_one_voice_is_one_listed_speaker_and_the_markdown_has_no_labels() -> None:
+    spoken = words(THREE_VOICES)
+    rows = [row(0, "".join(w.text for w in spoken), 0.0, 3.0, chunk_words=spoken)]
+    doc = build(rows, diarized=diarized([(0.0, 2.8, 4)]))
+    assert [s.id for s in doc.speakers] == ["S1"] and {s.speaker for s in doc.segments} == {"S1"}
+    assert "Speaker" not in render_markdown(doc)
+
+
+def test_a_diarizer_that_hears_nobody_leaves_the_transcript_unlabelled_with_a_warning() -> None:
+    spoken = words(THREE_VOICES)
+    rows = [row(0, "".join(w.text for w in spoken), 0.0, 3.0, chunk_words=spoken)]
+    source = from_asr_rows(rows, registry.get("w-prod"), "en", diarized([]))
+    assert source.diarization is None and source.assignment is None
+    doc = assemble(source)
+    assert doc.speakers == () and doc.transcript.diarization is None
+    assert any("heard no speaker" in warning for warning in doc.quality.warnings)
+
+
+def test_undiarized_stretches_and_transcripts_dump_exactly_as_before() -> None:
+    spoken = words(THREE_VOICES)
+    source = from_asr_rows(
+        [row(0, "".join(w.text for w in spoken), 0.0, 3.0, chunk_words=spoken)], registry.get("w-prod"), "en"
+    )
+    dumped = source.model_dump(mode="json")
+    assert "diarization" not in dumped and "assignment" not in dumped
+    assert all("speaker" not in s and "language" not in s for s in dumped["stretches"])
+
+    rows, voices = three_voices()
+    attributed = from_asr_rows(rows, registry.get("w-prod"), "en", voices).model_dump(mode="json")
+    assert [s["speaker"] for s in attributed["stretches"]] == ["S1", "S2", "S3"]
+    assert isinstance(attributed["assignment"], str) and attributed["diarization"]["engine"] == "d-nemotron-8bit"

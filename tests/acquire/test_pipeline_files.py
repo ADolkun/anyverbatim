@@ -1,4 +1,4 @@
-"""Local recordings through `process_files`, `process` and `run`, with fake ffprobe/ffmpeg, worker and LLM."""
+"""Local recordings through `process_files`, `process` and `run`, with fake ffprobe/ffmpeg, workers and LLM."""
 
 import hashlib
 import json
@@ -6,18 +6,33 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from ytverbatim import config, pipeline, proc
+from ytverbatim import atomic, config, pipeline, proc, store
 from ytverbatim.asr import registry
 from ytverbatim.asr import runner as asr_runner
-from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, FileJob, RunMetrics, WorkerRequest
+from ytverbatim.asr.models import (
+    FINGERPRINT_FILE,
+    HYPOTHESES_FILE,
+    METRICS_FILE,
+    ChunkHypothesis,
+    FileJob,
+    RunMetrics,
+    WorkerRequest,
+)
 from ytverbatim.asr.runner import WorkerResult
 from ytverbatim.cli import main
 from ytverbatim.contract import RecordingSource, Word, load_document
+from ytverbatim.diarize import protocol as diarize_protocol
+from ytverbatim.diarize import registry as diarize_registry
+from ytverbatim.diarize import runner as diarize_runner
+from ytverbatim.diarize.protocol import DiarizeRequest, FileDiarization, Turn
+from ytverbatim.diarize.runner import DiarizeResult
 from ytverbatim.errors import ConfigError, DependencyError, EngineError, MediaValidationError
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from ytverbatim.mlx_worker import without_wav
 from ytverbatim.pipeline import ProgressEvent, VideoResult, process, process_files
 
 NOW = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
@@ -74,6 +89,7 @@ class Media:
 class Worker:
     calls: list[WorkerRequest] = field(default_factory=list[WorkerRequest])
     error: EngineError | None = None
+    spoken: tuple[str, ...] = SPOKEN
 
     def __call__(self, request: WorkerRequest, *, python: str | None = None) -> WorkerResult:
         self.calls.append(request)
@@ -81,7 +97,9 @@ class Worker:
             raise self.error
         out = Path(request.out_dir)
         out.mkdir(parents=True, exist_ok=True)
-        words = tuple(Word(text=f" {w}", start=1.0 + i * 0.5, end=1.4 + i * 0.5) for i, w in enumerate(SPOKEN))
+        words = tuple(
+            Word(text=f" {w}", start=word_start(i), end=word_start(i) + 0.4) for i, w in enumerate(self.spoken)
+        )
         job = request.files[0]
         row = ChunkHypothesis(
             hypothesis=request.engine.spec.id,
@@ -105,7 +123,67 @@ class Worker:
             peak_memory_bytes=None,
             max_rss_bytes=0,
         )
+        atomic.write_json(out / FINGERPRINT_FILE, request.fingerprint())
+        atomic.write_json(out / METRICS_FILE, metrics.model_dump(mode="json"))
         return WorkerResult(out / HYPOTHESES_FILE, metrics, 0, 0.0)
+
+
+def word_start(index: int) -> float:
+    """Where the fake worker puts word `index`: 0.4 s words, 0.1 s apart, from 1 s on."""
+    return 1.0 + index * 0.5
+
+
+FRAME_S = 0.01
+FRAMES = 1250
+
+
+@dataclass
+class Diarizer:
+    """Stands in for the diarization worker: `turns` are (first word, last word, channel), with the channel active
+    from the first word's start to the last word's end; leaves what a finished worker leaves."""
+
+    turns: list[tuple[int, int, int]] = field(default_factory=lambda: [(0, len(SPOKEN) - 1, 0)])
+    calls: list[DiarizeRequest] = field(default_factory=list[DiarizeRequest])
+
+    def __call__(self, request: DiarizeRequest, *, python: str | None = None) -> DiarizeResult:
+        self.calls.append(request)
+        out = Path(request.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        spec = request.diarizer.spec
+        probs = np.zeros((FRAMES, spec.max_speakers), dtype=np.float32)
+        turns: list[Turn] = []
+        for first, last, channel in self.turns:
+            start, end = word_start(first), word_start(last) + 0.4
+            probs[round(start / FRAME_S) : round(end / FRAME_S), channel] = 0.9
+            turns.append(Turn(start=start, end=end, speaker=channel))
+        (job,) = request.files
+        atomic.write_bytes(diarize_protocol.probs_path(out, job.id), probs.astype("<f2").tobytes())
+        stored = FileDiarization(
+            diarizer=spec.id,
+            file=job.id,
+            duration_s=12.5,
+            threshold=request.diarizer.threshold(),
+            frame_s=FRAME_S,
+            frames=FRAMES,
+            channels=spec.max_speakers,
+            num_speakers=len({turn.speaker for turn in turns}),
+            turns=tuple(turns),
+        )
+        atomic.write_json(diarize_protocol.turns_path(out, job.id), stored.model_dump(mode="json"))
+        atomic.write_json(out / diarize_protocol.FINGERPRINT_FILE, request.fingerprint())
+        metrics = diarize_protocol.RunMetrics(
+            diarizer=spec.id,
+            files=1,
+            files_diarized=1,
+            files_skipped=0,
+            load_s=0.0,
+            diarize_s=0.0,
+            audio_s=12.5,
+            peak_memory_bytes=None,
+            max_rss_bytes=0,
+        )
+        atomic.write_json(out / diarize_protocol.METRICS_FILE, metrics.model_dump(mode="json"))
+        return DiarizeResult(out, metrics, 0, 0.0)
 
 
 @dataclass
@@ -133,6 +211,14 @@ class FakeLLM:
 @pytest.fixture(autouse=True)
 def engine_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(registry, "find_spec", lambda _name: object())
+    monkeypatch.setattr(diarize_registry, "find_spec", lambda _name: object())
+
+
+@pytest.fixture(autouse=True)
+def diarizer(monkeypatch: pytest.MonkeyPatch) -> Diarizer:
+    fake = Diarizer()
+    monkeypatch.setattr(diarize_runner, "run_worker", fake)
+    return fake
 
 
 @pytest.fixture
@@ -187,20 +273,31 @@ def test_a_recording_end_to_end_gives_a_2_0_document_markdown_and_index(
     assert source.id == rec_id() and source.audio_sha256 == hashlib.sha256(b"alpha").hexdigest()
     assert (source.title, source.file_name, source.origin) == (TITLE, "meeting.m4a", "file")
     assert source.recorded_at is None and source.duration_s == 12.5 and source.language is None
-    assert doc.chapters == () and doc.speakers == ()
+    assert doc.chapters == () and [s.id for s in doc.speakers] == ["S1"], "one voice is still a diarized speaker"
+    assert {s.speaker for s in doc.segments} == {"S1"} and doc.transcript.diarization is not None
     assert doc.segments[0].text.startswith("We met 5 people") and doc.transcript.punctuation == "llm"
     assert not any("caption track" in warning for warning in doc.quality.warnings), "recordings have no captions"
     assert any("the source has no captions" in notice for notice in results[0].notices)
 
     markdown = (rdir / "context.md").read_text(encoding="utf-8")
     assert markdown.startswith(f"# {TITLE}\n") and "meeting.m4a" in markdown and "youtu" not in markdown
+    assert "Speaker" not in markdown, "a single speaker needs no label"
     assert not (rdir / "audio.wav").exists() and media.converted == ["meeting.m4a"]
     assert path.read_text(encoding="utf-8") == "alpha\n.m4a\n", "the source file is never modified"
 
     (request,) = worker.calls
     assert request.engine.spec.id == "w-prod"
     assert request.files[0] == FileJob(id=rec_id(), wav=str(rdir / "audio.wav"), language=None)
-    assert [e.stage for e in events] == ["fetch", "asr", "normalize", "punctuate", "correct", "numeric", "write"]
+    assert [e.stage for e in events] == [
+        "fetch",
+        "asr",
+        "diarize",
+        "normalize",
+        "punctuate",
+        "correct",
+        "numeric",
+        "write",
+    ]
     assert all(TITLE not in r.user + r.system and "meeting" not in r.user + r.system for r in llm.requests)
 
     batch = json.loads((session_kit.out / "batch_report.json").read_text(encoding="utf-8"))
@@ -460,3 +557,129 @@ def test_cli_names_an_unreadable_folder_with_the_access_fix(session_kit, tmp_pat
     assert result.exit_code == 1
     assert "cannot read" in result.output and "Recordings: permission denied" in result.output
     assert "Full Disk Access" in result.output and "no audio or video files" not in result.output
+
+
+def two_voices(diarizer: Diarizer) -> None:
+    # "we met 5 people today" is one voice, "and then we left" another, with no pause between them.
+    diarizer.turns = [(0, 4, 0), (5, 8, 3)]
+
+
+def test_a_two_voice_recording_gets_speaker_paragraphs_and_reuses_both_workers(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    two_voices(diarizer)
+    path = media.add(tmp_path / "meeting.m4a")
+    _, _, events = run_files(session_kit, [path], llm=FakeLLM())
+
+    rdir = session_kit.out / rec_id()
+    doc = load_document(rdir / "context.json")
+    assert [(s.text, s.speaker) for s in doc.segments] == [
+        ("We met 5 people today.", "S1"),
+        ("And then we left.", "S2"),
+    ]
+    assert [(p.speaker, p.first_segment, p.last_segment) for p in doc.paragraphs] == [("S1", 0, 0), ("S2", 1, 1)]
+    assert [(s.id, s.name, s.speech_s) for s in doc.speakers] == [("S1", None, 2.4), ("S2", None, 1.9)]
+    assert doc.transcript.diarization is not None and doc.transcript.diarization.engine == "d-nemotron-8bit"
+    markdown = (rdir / "context.md").read_text(encoding="utf-8")
+    assert "[00:01] **Speaker 1:** We met 5 people today.\n\n[00:03] **Speaker 2:** And then we left." in markdown
+    assert "Speakers: Speaker 1 (56%) · Speaker 2 (44%)" in markdown
+
+    stages = [e.stage for e in events]
+    assert stages.index("asr") < stages.index("diarize") < stages.index("normalize")
+    (request,) = diarizer.calls
+    assert request.diarizer.spec.id == "d-nemotron-8bit" and request.files[0].wav == str(rdir / "audio.wav")
+    assert not (rdir / "audio.wav").exists(), "the WAV goes once both workers' outputs are stored"
+
+    (rdir / ".stages" / "asr.json").unlink()
+    (rdir / "context.json").unlink()
+    rerun, _, events = run_files(session_kit, [path], llm=FakeLLM())
+    assert rerun.exit_code == 0 and len(worker.calls) == 1 and len(diarizer.calls) == 1
+    assert media.converted == ["meeting.m4a"], "finished worker folders need no audio"
+    assert "diarize" in [e.stage for e in events] and load_document(rdir / "context.json").segments == doc.segments
+
+
+def test_the_asr_stage_stores_the_assignment_digest(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    two_voices(diarizer)
+    run_files(session_kit, [media.add(tmp_path / "meeting.m4a")])
+    stored = json.loads((session_kit.out / rec_id() / ".stages" / "asr.json").read_text(encoding="utf-8"))["output"]
+    stretches = [[s["start"], s["end"], s["speaker"]] for s in stored["stretches"]]
+    assert [speaker for _, _, speaker in stretches] == ["S1", "S2"]
+    assert stored["assignment"] == store.digest(stretches)
+    assert stored["diarization"]["params"]["attribution"]["smoothing"] is True
+
+
+def test_overlapping_speech_is_flagged_in_json_only(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    # A second voice talks over "5 people".
+    diarizer.turns = [(0, 8, 0), (2, 3, 1)]
+    run_files(session_kit, [media.add(tmp_path / "meeting.m4a")])
+    rdir = session_kit.out / rec_id()
+    doc = load_document(rdir / "context.json")
+    (segment,) = doc.segments
+    (flag,) = [f for f in segment.flags if f.kind == "overlapping_speech"]
+    assert segment.text[flag.char_start : flag.char_end] == "5 people"
+    assert segment.speaker == "S1" and [s.id for s in doc.speakers] == ["S1"]
+    markdown = (rdir / "context.md").read_text(encoding="utf-8")
+    assert "overlapping_speech" not in markdown and "[^" not in markdown
+
+
+def test_diarization_can_be_turned_off_for_a_recording(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    two_voices(diarizer)
+    path = media.add(tmp_path / "meeting.m4a")
+    off = config.load_options(overrides={"diarize": {"mode": "off"}})
+    _, results, events = run_files(session_kit, [path], off)
+    doc = results[0].document
+    assert doc is not None and doc.speakers == () and doc.transcript.diarization is None
+    assert diarizer.calls == [] and "diarize" not in [e.stage for e in events]
+    assert all(s.speaker is None for s in doc.segments)
+
+
+def test_cli_diarize_flags_set_the_mode(
+    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+) -> None:
+    two_voices(diarizer)
+    path = media.add(tmp_path / "meeting.m4a")
+    result = cli(session_kit, "--no-diarize", str(path))
+    assert result.exit_code == 0, result.output
+    assert diarizer.calls == [] and "speaker" not in result.output
+    result = cli(session_kit, "--diarize", str(path))
+    assert result.exit_code == 0, result.output
+    assert len(diarizer.calls) == 1 and "2 speakers" in result.output
+
+
+def test_youtube_with_auto_is_not_diarized_and_keeps_its_keys(session_kit) -> None:
+    youtube = settings(session_kit, "youtube")
+    assert youtube.diarizer is None
+    off = pipeline._settings(
+        config.load_options(overrides={"diarize": {"mode": "off"}}),
+        None,
+        session_kit.out,
+        kind="youtube",
+        force=False,
+        captions=True,
+        emit=lambda _e: None,
+        clock=lambda: NOW,
+    )
+    assert youtube.run_key() == off.run_key()
+    decoding = pipeline._Decoding(youtube, "pubVideo001", session_kit.out / "pubVideo001", "en")
+    assert decoding.diarize_request() is None
+    request = decoding.asr_request()
+    assert decoding.asr_key(request, None) == pipeline._key("asr", {"request": without_wav(request.fingerprint())})
+
+    forced = pipeline._settings(
+        config.load_options(overrides={"diarize": {"mode": "on"}}),
+        None,
+        session_kit.out,
+        kind="youtube",
+        force=False,
+        captions=True,
+        emit=lambda _e: None,
+        clock=lambda: NOW,
+    )
+    assert forced.diarizer is not None and forced.run_key() != youtube.run_key()
+    assert settings(session_kit, "recording").diarizer is not None
