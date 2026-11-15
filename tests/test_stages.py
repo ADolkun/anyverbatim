@@ -483,3 +483,60 @@ def test_a_numeric_fix_that_shortens_a_figure_shows_the_figure_it_replaced(
     )
     doc = document(source, numerals(verified, "zh"))
     assert footnote in render_markdown(doc)
+
+
+def lid_row(chunk: int, text: str, start: float, end: float, language: str) -> ChunkHypothesis:
+    return ChunkHypothesis(
+        hypothesis="w-runs-lid", file="synthRec001", chunk=chunk, start=start, end=end, text=text, language=language
+    )
+
+
+EN_DOMINANT = [
+    lid_row(0, "so we met today and talked about the budget for next year", 0.0, 6.0, "en"),
+    lid_row(1, "我們開會了 嗯 三個人都在", 6.0, 9.0, "zh"),
+    lid_row(2, "and then everyone went back to work after lunch", 9.0, 14.0, "en"),
+]
+ZH_DOMINANT = [
+    lid_row(0, "今天我们开会讨论明年的预算大家都来了", 0.0, 6.0, "zh"),
+    lid_row(1, "um I think so", 6.0, 8.0, "en"),
+]
+
+
+def lid_source(rows: list[ChunkHypothesis], *, stretch_languages: bool = True) -> Transcribed:
+    return from_asr_rows(rows, registry.get("w-runs-lid"), None, stretch_languages=stretch_languages)
+
+
+def test_a_stretch_decoded_in_another_language_carries_it_and_is_cut_at_the_change() -> None:
+    source = lid_source(EN_DOMINANT)
+    assert source.language == "en"
+    assert [(s.text, s.language) for s in source.stretches] == [
+        ("so we met today and talked about the budget for next year", None),
+        ("我們開會了 嗯 三個人都在", "zh"),
+        ("and then everyone went back to work after lunch", None),
+    ]
+    assert all(s.language is None for s in lid_source(EN_DOMINANT, stretch_languages=False).stretches)
+
+
+def test_a_mandarin_stretch_in_an_english_recording_gets_mandarin_normalize_and_numerals() -> None:
+    source = lid_source(EN_DOMINANT)
+    normalized = normalize(source.stretches, source.language, script="zh-Hans", fillers="remove")
+    assert normalized[1].text == "我们开会了 三个人都在", "Simplified, and the 嗯 at a pause goes"
+    assert numerals(normalized, source.language)[1].text == "我们开会了 3个人都在"
+    assert numerals(normalized, source.language)[0] == normalized[0]
+    doc = document(source, numerals(normalized, source.language), "en")
+    assert [s.text for s in doc.segments][1] == "我们开会了 3个人都在"
+    assert doc.transcript.script == "zh-Hans"
+
+
+def test_an_english_stretch_in_a_mandarin_recording_keeps_english_rules() -> None:
+    source = lid_source(ZH_DOMINANT)
+    assert source.language == "zh" and [s.language for s in source.stretches] == [None, "en"]
+    normalized = normalize(source.stretches, source.language, script="zh-Hans", fillers="remove")
+    assert normalized[1].text == "I think so", "an English hesitation goes by the English rule"
+    assert numerals((Stretch(text="三个 one", start=0.0, end=1.0, language="en"),), "zh")[0].text == "三个 one"
+
+
+def test_a_stretch_without_a_language_or_speaker_dumps_as_before() -> None:
+    plain = Stretch(text="x", start=0.0, end=1.0)
+    assert "language" not in plain.model_dump() and "speaker" not in plain.model_dump()
+    assert Stretch(text="x", start=0.0, end=1.0, language="zh").model_dump()["language"] == "zh"

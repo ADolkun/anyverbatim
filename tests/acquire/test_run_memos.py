@@ -22,6 +22,7 @@ from test_pipeline_files import (  # noqa: F401
 )
 from voicememos_fakes import Row, make_library
 
+from ytverbatim import pipeline
 from ytverbatim.acquire import local, voicememos
 from ytverbatim.acquire.voicememos import MemoCache, select
 from ytverbatim.cli import main
@@ -458,3 +459,36 @@ def test_a_rerun_with_new_provenance_rebuilds_only_the_context_record(
 
     _, plain, _ = run_files(session_kit, [path], llm=llm)
     assert plain[0].outcome.reused == ("context",), "a plain file never overwrites the memo's record"
+
+
+def test_no_title_file_name_memo_title_or_speaker_name_reaches_the_llm_but_the_glossary_does(
+    session_kit, media: Media, worker: Worker, diarizer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha")], media)
+    media.tags["AAAA1111.m4a"] = {"title": "Container secret title"}
+    # "we met 5 people today" is one voice, "and then we left" another.
+    diarizer.turns = [(0, 4, 0), (5, 8, 3)]
+    llm = FakeLLM()
+    monkeypatch.setattr(pipeline, "check_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(pipeline, "client_from_options", lambda *_args, **_kwargs: llm)
+
+    def run(*args: str):
+        argv = ["run", "--out", str(session_kit.out), "--llm", "claude-cli:fake-model", *args, "memos:latest"]
+        result = CliRunner().invoke(main, argv)
+        assert result.exit_code == 0, result.output
+
+    run("--glossary", "Zorblax, Quuxcorp,")
+    named = CliRunner().invoke(main, ["speakers", "--out", str(session_kit.out), rec_id(), "S1=Zelda", "S2=Quentin"])
+    assert named.exit_code == 0, named.output
+    run("--glossary", "Zorblax, Quuxcorp", "--force")
+
+    sent = [request.system + request.user for request in llm.requests]
+    assert any('"speaker": "S2"' in text for text in sent), "the text stages ran on the diarized memo twice"
+    for secret in (SECRET, "Container secret title", "AAAA1111", ".m4a", "Zelda", "Quentin"):
+        assert not any(secret in text for text in sent), secret
+    corrections = [text for text in sent if '"fixed"' in text]
+    assert corrections and all("Prefer these domain terms when relevant: Zorblax, Quuxcorp." in t for t in corrections)
+    assert [(s.id, s.name) for s in load_document(context(session_kit, "alpha")).speakers] == [
+        ("S1", "Zelda"),
+        ("S2", "Quentin"),
+    ]

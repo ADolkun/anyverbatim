@@ -4,6 +4,10 @@ Only per-sentence text changes; count and order never do. Every proposed fix pas
 `ytverbatim.text.guards` or is dropped. A reply that is not the expected JSON is retried once and then raises, so a run
 fails loudly rather than shipping an uncorrected transcript that looks corrected.
 
+In a diarized transcript each segment also carries its speaker's id ("S2", never a name), and the system prompt says
+the segments are turns of a conversation. A transcript with stretches in more than one language says so, and asks
+that every word stay in the language it was spoken.
+
 Each batch's validated LLM reply is checkpointed before the guards run, so a resume never pays twice for a finished
 batch, and a guard change re-applies to cached replies for free.
 """
@@ -24,6 +28,7 @@ from ytverbatim.llm.jsonio import complete_json
 from ytverbatim.llm.protocol import LLMClient, LLMRequest
 from ytverbatim.llm.usage import UsageMeter
 from ytverbatim.text.guards import GuardName, check_fix, symbol_changes
+from ytverbatim.text.segment import language_line
 
 _log = logging.getLogger(__name__)
 
@@ -66,6 +71,7 @@ _SECOND_PASS_SYSTEM = (
     + _SYMBOL_RULE
     + "Return ONLY the segments you actually changed."
 )
+_CONVERSATION = "The segments are turns of a conversation: each carries `speaker`, the id of the person saying it. "
 _FIRST_PASS_ASK = "Fix clear ASR mis-recognitions in these segments. "
 _SECOND_PASS_ASK = (
     "These ASR segments came from LOW-CONFIDENCE audio and are likely to "
@@ -134,21 +140,25 @@ def correct_segments(
     context: CorrectionContext,
     checkpoint_dir: Path,
     confidence: Sequence[Sequence[float] | None] | None = None,
+    languages: Sequence[str | None] = (),
+    speakers: Sequence[str | None] = (),
 ) -> CorrectionResult:
     """Correct ``segments`` (sentence texts) and return the guarded result.
 
     ``confidence`` holds per-word probabilities for each segment, as Whisper reports them. When given, segments whose
     mean is below `SECOND_PASS_MIN_CONFIDENCE` get a second pass with a prompt that asks for harder scrutiny;
-    segments without probabilities are skipped there.
+    segments without probabilities are skipped there. ``languages`` (None for ``language``) and, for a diarized
+    transcript, ``speakers`` are per segment when given.
     """
     if confidence is not None and len(confidence) != len(segments):
         raise ValueError(f"confidence covers {len(confidence)} segments, but there are {len(segments)}")
     run = _Run(
         texts=list(segments),
         client=client,
-        language=language,
         context=context,
         checkpoint_dir=checkpoint_dir,
+        language_line=language_line(language, languages),
+        speakers=tuple(speakers),
     )
     for start, end in _batch_ranges(run.texts, BATCH_CHARS):
         run.correct_batch(list(range(start, end)), "first")
@@ -181,9 +191,10 @@ class _Run:
         *,
         texts: list[str],
         client: LLMClient,
-        language: str,
         context: CorrectionContext,
         checkpoint_dir: Path,
+        language_line: str,
+        speakers: tuple[str | None, ...],
     ) -> None:
         self.texts = texts
         self._originals = tuple(texts)
@@ -192,13 +203,16 @@ class _Run:
         self.meter = UsageMeter()
         self.batches = 0
         self._client = client
-        self._language = language
+        self._language_line = language_line
+        self._speakers = speakers
         self._context = context
         self._checkpoint_dir = checkpoint_dir
 
     def correct_batch(self, indices: list[int], pass_: Pass) -> None:
         self.batches += 1
         system = _SYSTEM if pass_ == "first" else _SECOND_PASS_SYSTEM
+        if self._speakers and any(self._speakers[i] is not None for i in indices):
+            system += _CONVERSATION
         user = self._prompt(indices, pass_)
         fixes = self._fixes(system, user, pass_)
         allowed = set(indices)
@@ -223,16 +237,22 @@ class _Run:
         self.edits[index].append(Edit(stage="correction", before=current, after=proposed, llm=self._client.id))
 
     def _prompt(self, indices: list[int], pass_: Pass) -> str:
-        items = [{"i": i, "text": self.texts[i]} for i in indices]
+        items = [self._item(i) for i in indices]
         glossary = self._context.glossary
         return (
             (_FIRST_PASS_ASK if pass_ == "first" else _SECOND_PASS_ASK)
-            + f"The transcript language is {self._language}. "
+            + self._language_line
             + (f"Prefer these domain terms when relevant: {', '.join(glossary)}. " if glossary else "")
             + _creator_note_hint(self._context.creator_note)
             + 'Return JSON {"fixed": [{"i": <index>, "text": "<corrected>"}]} '
             "containing ONLY the segments you changed.\n\nSEGMENTS:\n" + json.dumps(items, ensure_ascii=False)
         )
+
+    def _item(self, index: int) -> dict[str, object]:
+        speaker = self._speakers[index] if self._speakers else None
+        if speaker is None:
+            return {"i": index, "text": self.texts[index]}
+        return {"i": index, "speaker": speaker, "text": self.texts[index]}
 
     def _fixes(self, system: str, user: str, pass_: Pass) -> _Fixes:
         key = json.dumps([PROMPT_VERSION, self._client.id, system, user], ensure_ascii=False)

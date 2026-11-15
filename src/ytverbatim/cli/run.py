@@ -55,6 +55,14 @@ from ytverbatim.ytdlp.runner import redact
     help="Label who speaks when (Speaker 1, Speaker 2, ...). Default: on for recordings, off for YouTube videos.",
 )
 @click.option(
+    "--glossary",
+    metavar="TERMS",
+    help=(
+        'Comma-separated terms for the correction pass to prefer, such as names and jargon ("Acme, Kubernetes"); '
+        "replaces [text] glossary. They are sent to the LLM."
+    ),
+)
+@click.option(
     "--llm",
     "llm_spec",
     metavar="SPEC",
@@ -89,6 +97,7 @@ def run_command(  # noqa: PLR0913
     language: str | None,
     transcript_source: str | None,
     chapters: str | None,
+    glossary: str | None,
     llm_spec: str | None,
     *,
     correct: bool | None,
@@ -120,7 +129,11 @@ def run_command(  # noqa: PLR0913
         _fail("run YouTube and local targets separately")
     overrides: dict[str, dict[str, object]] = {
         "asr": {"engine": engine, "source": transcript_source, "language": language},
-        "text": {"correct": correct, "chapters": chapters},
+        "text": {
+            "correct": correct,
+            "chapters": chapters,
+            "glossary": None if glossary is None else tuple(term.strip() for term in glossary.split(",")),
+        },
         "diarize": {"mode": None if diarize is None else ("on" if diarize else "off")},
     }
     if files or selectors:

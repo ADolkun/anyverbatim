@@ -13,6 +13,10 @@ word. Each segment therefore travels with the end of the segment before it and t
 read-only context the reply must not contain, so the model can tell a sentence that ends at the cut from one that
 goes on.
 
+In a diarized transcript each segment also carries its speaker's id ("S2", never a name), and the prompt says the
+segments are turns of a conversation. Each segment is punctuated by the rules of its own language, which in a
+recording can differ from the document's.
+
 Each batch that passes the guard is checkpointed, so a resume never pays twice for a finished batch.
 """
 
@@ -90,6 +94,10 @@ _SYSTEM = (
     "and return each one with sentence punctuation added so it reads naturally: periods or the Chinese equivalent at "
     "sentence ends, commas at clause breaks, question and exclamation marks where the speech asks for them. " + _RULES
 )
+_CONVERSATION = (
+    "The segments are turns of a conversation: each carries `speaker`, the id of the person saying it, and speech "
+    "never runs on from one speaker's segment into another speaker's. "
+)
 _SCHEMA_HINT = 'Return JSON {"items": [{"i": <index>, "text": "<punctuated text>"}]} with EVERY segment given.'
 
 
@@ -128,6 +136,7 @@ class _Piece:
     text: str
     before: str
     after: str
+    speaker: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,13 +275,22 @@ def punctuate(
     language: str,
     client: LLMClient,
     checkpoint_dir: Path,
+    languages: Sequence[str | None] = (),
+    speakers: Sequence[str | None] = (),
 ) -> PunctuationResult:
-    """Restore punctuation in the stretches of ``texts`` that lack it; the rest pass through unchanged."""
-    run = _Run(texts, language=language, client=client, checkpoint_dir=checkpoint_dir)
+    """Restore punctuation in the stretches of ``texts`` that lack it; the rest pass through unchanged.
+
+    ``languages`` and ``speakers`` are per text when given: the language a text was spoken in (None for ``language``)
+    and, for a diarized transcript, its speaker's id.
+    """
+    run = _Run(
+        texts, language=language, client=client, checkpoint_dir=checkpoint_dir, languages=languages, speakers=speakers
+    )
     pending: dict[Style, list[int]] = {"zh": [], "en": []}
     for i, text in enumerate(texts):
-        if needs_punctuation(text, language):
-            pending["zh" if uses_zh_rules(text, language) else "en"].append(i)
+        spoken = run.language_of(i)
+        if needs_punctuation(text, spoken):
+            pending["zh" if uses_zh_rules(text, spoken) else "en"].append(i)
     for style, indices in pending.items():
         for batch in _batches(texts, indices, BATCH_CHARS):
             run.punctuate_batch(style, batch)
@@ -293,10 +311,20 @@ def punctuate(
 
 
 class _Run:
-    def __init__(self, texts: Sequence[str], *, language: str, client: LLMClient, checkpoint_dir: Path) -> None:
+    def __init__(
+        self,
+        texts: Sequence[str],
+        *,
+        language: str,
+        client: LLMClient,
+        checkpoint_dir: Path,
+        languages: Sequence[str | None] = (),
+        speakers: Sequence[str | None] = (),
+    ) -> None:
         self.texts = list(texts)
         self._source = tuple(texts)
-        self._language = language
+        self._languages = tuple(code or language for code in languages) or (language,) * len(texts)
+        self._speakers = tuple(speakers)
         self.edits: list[list[Edit]] = [[] for _ in texts]
         self.failed: list[int] = []
         self.meter = UsageMeter()
@@ -326,21 +354,31 @@ class _Run:
                 self.texts[index] = output
                 self.edits[index].append(Edit(stage=STAGE, before=original, after=output, llm=self._client.id))
 
+    def language_of(self, index: int) -> str:
+        return self._languages[index]
+
     def _piece(self, index: int) -> _Piece:
         # The neighbours as transcribed, not as an earlier batch may have punctuated them, so a batch's key and request
         # do not depend on which batches ran before it. A neighbour is cut by its own script, not this segment's, and
         # a blank one (filler removal can empty a stretch) is skipped, since the run-on signal lies beyond it.
-        before = next((t for t in reversed(self._source[:index]) if t.strip()), "")
-        after = next((t for t in self._source[index + 1 :] if t.strip()), "")
-        return _Piece(self._source[index], self._tail(before), self._head(after))
+        before = next((i for i in range(index - 1, -1, -1) if self._source[i].strip()), None)
+        after = next((i for i in range(index + 1, len(self._source)) if self._source[i].strip()), None)
+        return _Piece(
+            self._source[index],
+            self._tail(before) if before is not None else "",
+            self._head(after) if after is not None else "",
+            self._speakers[index] if self._speakers else None,
+        )
 
-    def _tail(self, text: str) -> str:
-        if uses_zh_rules(text, self._language):
+    def _tail(self, index: int) -> str:
+        text = self._source[index]
+        if uses_zh_rules(text, self.language_of(index)):
             return text.strip()[-_CONTEXT_CHARS:]
         return " ".join(text.split()[-_CONTEXT_WORDS:])
 
-    def _head(self, text: str) -> str:
-        if uses_zh_rules(text, self._language):
+    def _head(self, index: int) -> str:
+        text = self._source[index]
+        if uses_zh_rules(text, self.language_of(index)):
             return text.strip()[:_CONTEXT_CHARS]
         return " ".join(text.split()[:_CONTEXT_WORDS])
 
@@ -382,8 +420,9 @@ class _Run:
         expected = sorted(asked)
         complaint = ""
         for _ in range(2):
+            conversation = _CONVERSATION if any(piece.speaker is not None for piece in pieces) else ""
             request = LLMRequest(
-                system=_SYSTEM + _STYLE_RULES[style],
+                system=_SYSTEM + _STYLE_RULES[style] + conversation,
                 user=_prompt(pieces, asked, previous) + complaint,
                 max_output_tokens=_MAX_OUTPUT_TOKENS,
                 temperature=0.0,
@@ -427,6 +466,8 @@ class _Run:
 def _item(pieces: Sequence[_Piece], i: int) -> dict[str, object]:
     piece = pieces[i]
     item: dict[str, object] = {"i": i}
+    if piece.speaker is not None:
+        item["speaker"] = piece.speaker
     if piece.before:
         item["before"] = piece.before
     item["text"] = piece.text

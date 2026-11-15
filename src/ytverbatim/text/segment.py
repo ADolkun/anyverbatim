@@ -9,7 +9,7 @@ import bisect
 import difflib
 import itertools
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -81,6 +81,9 @@ class Token:
     speaker: str | None = None
     # Whether another speaker talks over this token.
     overlapped: bool = False
+    # The language this token was decoded in where it differs from the document's, else None; a sentence never
+    # crosses a change, and each run of one language is cut by that language's rules.
+    language: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +98,10 @@ class Sentence:
     @property
     def speaker(self) -> str | None:
         return self.tokens[0].speaker
+
+    @property
+    def language(self) -> str | None:
+        return self.tokens[0].language
 
     def span_of(self, origin: int) -> tuple[int, int] | None:
         """Half-open character range of the tokens tagged `origin`, or None when it has none in this sentence."""
@@ -115,6 +122,17 @@ class Sentence:
 
 def is_zh(language: str) -> bool:
     return language.lower().startswith("zh")
+
+
+def language_line(language: str, languages: Iterable[str | None] = ()) -> str:
+    """Name the transcript's language for a prompt; `languages` are its stretches' (None stands for `language`)."""
+    others = sorted({code for code in languages if code is not None and code != language})
+    if not others:
+        return f"The transcript language is {language}. "
+    return (
+        f"The transcript is mainly {language}, with {', '.join(others)} mixed in; "
+        "keep every word in the language it was spoken. "
+    )
 
 
 def uses_zh_rules(text: str, language: str) -> bool:
@@ -373,11 +391,30 @@ def segment_tokens(tokens: Sequence[Token], language: str) -> list[Sentence]:
     Sentence-final punctuation decides first. Unpunctuated text (a whole document, or a long stretch with no marks)
     is also cut at pauses of 0.6 s and at about 40 CJK units or 20 English words. Whatever is still longer than 120
     CJK units or 60 words is split at the comma nearest its middle. A sentence never crosses a change of speaker; a
-    token with nothing to read (bare punctuation) belongs to the speaker before it.
+    token with nothing to read (bare punctuation) belongs to the speaker before it. A sentence never crosses a change
+    of token language either, and each run of one language is cut by its own rules (`language` for untagged tokens).
     """
     kept = [token for token in tokens if token.text.strip()]
     if not kept:
         return []
+    return [sentence for code, run in _language_runs(kept) for sentence in _segment_run(run, code or language)]
+
+
+def _language_runs(tokens: list[Token]) -> list[tuple[str | None, list[Token]]]:
+    """Split tokens into runs of one language; bare punctuation joins the run before it, or after it at the start."""
+    reading = [any(char.isalnum() for char in token.text) for token in tokens]
+    first = next((token.language for token, reads in zip(tokens, reading, strict=True) if reads), None)
+    runs: list[tuple[str | None, list[Token]]] = []
+    for token, reads in zip(tokens, reading, strict=True):
+        code = token.language if reads else (runs[-1][0] if runs else first)
+        if runs and runs[-1][0] == code:
+            runs[-1][1].append(token)
+        else:
+            runs.append((code, [token]))
+    return runs
+
+
+def _segment_run(kept: list[Token], language: str) -> list[Sentence]:
     text = "".join(token.text for token in kept)
     cutter = _Cutter(kept, zh=uses_zh_rules(text, language))
     kept = _reading_speakers(kept, cutter)

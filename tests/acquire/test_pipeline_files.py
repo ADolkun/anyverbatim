@@ -288,7 +288,8 @@ def test_a_recording_end_to_end_gives_a_2_0_document_markdown_and_index(
     assert {s.speaker for s in doc.segments} == {"S1"} and doc.transcript.diarization is not None
     assert doc.segments[0].text.startswith("We met 5 people") and doc.transcript.punctuation == "llm"
     assert not any("caption track" in warning for warning in doc.quality.warnings), "recordings have no captions"
-    assert any("the source has no captions" in notice for notice in results[0].notices)
+    notice = "numbers not cross-checked: recordings have no captions; 1 number(s) rest on the transcript alone"
+    assert notice in results[0].notices
 
     markdown = (rdir / "context.md").read_text(encoding="utf-8")
     assert markdown.startswith(f"# {TITLE}\n") and "meeting.m4a" in markdown and "youtu" not in markdown
@@ -1138,3 +1139,155 @@ def test_a_rename_while_a_run_holds_the_source_fails_at_once(
         result = speakers_cli(session_kit, rec_id(), "S1=Alice")
     assert result.exit_code == 1 and "another ytverbatim run is processing" in result.output
     assert untouched(rdir) == before
+
+
+@dataclass
+class LidWorker(Worker):
+    """A detecting engine's worker: one row per (text, language), one after another, without word timings."""
+
+    rows: tuple[tuple[str, str], ...] = ()
+
+    def __call__(self, request: WorkerRequest, *, python: str | None = None) -> WorkerResult:
+        result = super().__call__(request, python=python)
+        job = request.files[0]
+        lines = [
+            ChunkHypothesis(
+                hypothesis=request.engine.spec.id,
+                file=job.id,
+                chunk=index,
+                start=4.0 * index,
+                end=4.0 * index + 3.5,
+                text=text,
+                language=language,
+            ).model_dump_json()
+            for index, (text, language) in enumerate(self.rows)
+        ]
+        (Path(request.out_dir) / HYPOTHESES_FILE).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return result
+
+
+LID_OPTIONS = config.load_options(
+    overrides={"asr": {"engine": "w-runs-lid"}, "text": {"fillers": "remove"}, "diarize": {"mode": "off"}}
+)
+
+
+def lid_run(kit, media: Media, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *rows: tuple[str, str]):
+    monkeypatch.setattr(asr_runner, "run_worker", LidWorker(rows=rows))
+    llm = FakeLLM()
+    _, results, _ = run_files(kit, [media.add(tmp_path / "meeting.m4a")], LID_OPTIONS, llm=llm)
+    doc = results[0].document
+    assert doc is not None
+    return doc, llm
+
+
+def punctuation_system(llm: FakeLLM, text: str) -> str:
+    """The system prompt of the punctuation batch whose segment, not just a neighbour's edge, is `text`."""
+    for request in llm.requests:
+        if "SEGMENTS:" in request.user and '"items"' in request.user:
+            segments = json.loads(request.user.split("SEGMENTS:\n", 1)[1])
+            if any(item["text"] == text for item in segments):
+                return request.system
+    raise AssertionError(f"no punctuation batch holds {text!r}")
+
+
+def test_a_mandarin_stretch_in_an_english_recording_gets_mandarin_text_rules(
+    session_kit, media: Media, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doc, llm = lid_run(
+        session_kit,
+        media,
+        tmp_path,
+        monkeypatch,
+        ("so we met today and talked about the budget for next year", "en"),
+        ("我們開會了 嗯 三個人都在", "zh"),
+    )
+    assert doc.transcript.language == "en"
+    assert [s.text for s in doc.segments] == [
+        "So we met today and talked about the budget for next year.",
+        "我们开会了 3个人都在.",
+    ]
+    assert "full-width Chinese punctuation" in punctuation_system(llm, "我们开会了 三个人都在")
+    assert "Use ASCII punctuation" in punctuation_system(
+        llm, "so we met today and talked about the budget for next year"
+    )
+    (correction,) = [r for r in llm.requests if '"fixed"' in r.user]
+    assert "The transcript is mainly en, with zh mixed in; keep every word in the language it was spoken." in (
+        correction.user
+    )
+
+
+def test_an_english_stretch_in_a_mandarin_recording_keeps_english_text_rules(
+    session_kit, media: Media, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    doc, llm = lid_run(
+        session_kit,
+        media,
+        tmp_path,
+        monkeypatch,
+        ("今天我们开会讨论明年的预算大家都来了", "zh"),
+        ("um I think so", "en"),
+    )
+    assert doc.transcript.language == "zh"
+    assert [s.text for s in doc.segments][1] == "I think so."
+    assert "Use ASCII punctuation" in punctuation_system(llm, "I think so")
+
+
+def test_stretch_languages_change_only_the_asr_key_of_a_recording_with_a_chunked_engine(session_kit) -> None:
+    def asr_key(kind: pipeline.SourceKind, engine: str) -> tuple[str, str]:
+        decoding = pipeline._Decoding(settings(session_kit, kind, engine=engine), "src", session_kit.out / "src", None)
+        request = decoding.asr_request()
+        return decoding.asr_key(request, None), pipeline._key("asr", {"request": without_wav(request.fingerprint())})
+
+    for kind, engine in (("youtube", "w-runs-lid"), ("youtube", "w-prod"), ("recording", "w-prod")):
+        key, plain = asr_key(kind, engine)  # type: ignore[arg-type]
+        assert key == plain, (kind, engine)
+    key, plain = asr_key("recording", "w-runs-lid")
+    assert key != plain
+
+
+def test_an_empty_glossary_keeps_the_youtube_run_key_and_a_glossary_changes_it(session_kit) -> None:
+    def run_key(**text: object) -> str:
+        options = config.load_options(overrides={"text": text})
+        return pipeline._settings(
+            options,
+            None,
+            session_kit.out,
+            kind="youtube",
+            force=False,
+            captions=True,
+            emit=lambda _e: None,
+            clock=lambda: NOW,
+        ).run_key()
+
+    # Computed on main before the glossary option existed.
+    assert run_key() == "c9f9638ad6b4b5006329444a05747d4f763a2570f2bbff3c80aa148c59fa98a7"
+    assert run_key(glossary=()) == run_key(glossary=(" ", "")) == run_key()
+    assert run_key(glossary=("Acme",)) != run_key()
+
+
+def test_the_glossary_is_trimmed_deduplicated_and_capped(session_kit) -> None:
+    given = (" Acme ", "", "Acme", "Kubernetes")
+    options = config.load_options(overrides={"text": {"glossary": given}})
+    built = pipeline._settings(
+        options,
+        None,
+        session_kit.out,
+        kind="recording",
+        force=False,
+        captions=True,
+        emit=lambda _e: None,
+        clock=lambda: NOW,
+    )
+    assert built.text.glossary == ("Acme", "Kubernetes")
+    many = config.load_options(overrides={"text": {"glossary": tuple(f"term{n}" for n in range(21))}})
+    with pytest.raises(ConfigError, match="at most 20"):
+        pipeline._settings(
+            many,
+            None,
+            session_kit.out,
+            kind="youtube",
+            force=False,
+            captions=True,
+            emit=lambda _e: None,
+            clock=lambda: NOW,
+        )

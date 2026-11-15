@@ -598,7 +598,7 @@ class _Settings:
             "versions": dict[str, JsonValue](versions),
             "engine": _engine_key(self.definition),
             "second_opinion": _engine_key(self.second_opinion) if self.second_opinion else None,
-            "text": _plain(asdict(self.text)),
+            "text": _text_key_options(self.text),
             "llm": self.llm_id,
         }
         if self.kind == "youtube":
@@ -650,7 +650,11 @@ def _settings(
         llm = client_from_options(options.llm, interactive=interactive)
     if options.text.correct and llm is None:
         raise ConfigError("correction needs an LLM; pass --llm PROVIDER:MODEL or set [llm], or use --no-correct")
-    text = replace(options.text, correct=llm is not None if options.text.correct is None else options.text.correct)
+    text = replace(
+        options.text,
+        correct=llm is not None if options.text.correct is None else options.text.correct,
+        glossary=_glossary(options.text.glossary),
+    )
     memory_cap = asr_runner.memory_cap_bytes(options.asr.memory_cap_gib)
     youtube = kind == "youtube"
     return _Settings(
@@ -698,6 +702,20 @@ def _allowed_languages(languages: tuple[str, ...], definition: EngineDef) -> tup
     except ValidationError as exc:
         raise ConfigError(f"asr.languages = {list(languages)} cannot run with {definition.spec.id}:\n{exc}") from exc
     return job.languages
+
+
+def _text_key_options(text: config.TextOptions) -> JsonValue:
+    # The glossary is left out while empty, so the keys of documents made before the option existed stay valid.
+    return _plain({name: value for name, value in asdict(text).items() if name != "glossary" or text.glossary})
+
+
+def _glossary(terms: Sequence[str]) -> tuple[str, ...]:
+    glossary = tuple(dict.fromkeys(term.strip() for term in terms if term.strip()))
+    if len(glossary) > _GLOSSARY_MAX_TERMS:
+        raise ConfigError(
+            f"text.glossary has {len(glossary)} terms; the correction prompt takes at most {_GLOSSARY_MAX_TERMS}"
+        )
+    return glossary
 
 
 def _engine_key(definition: EngineDef) -> JsonValue:
@@ -1045,7 +1063,16 @@ class _Decoding:
             # Added only when diarized, so an undiarized source keeps the key it always had.
             run = stages.diarization_run(diarize.diarizer).model_dump(mode="json")
             inputs["diarization"] = store.digest({"request": without_wav(diarize.fingerprint()), "run": run})
+        if self.stretch_languages and request.engine.spec.max_chunk_s is not None:
+            # A chunked engine's rows can differ in language, which their stretches keep; a whole-file decode has one
+            # language, so it keeps the key it always had.
+            inputs["stretch_languages"] = True
         return _key("asr", inputs)
+
+    @property
+    def stretch_languages(self) -> bool:
+        """Whether stretches keep the language their row was decoded in; YouTube reads by the document's language."""
+        return self.settings.kind == "recording"
 
     def transcribed(self, hypotheses: Path, diarize: DiarizeRequest | None) -> Transcribed:
         rows = _read_rows(hypotheses, self.source_id)
@@ -1054,7 +1081,9 @@ class _Decoding:
             definition = diarize.diarizer
             stored = diarize_protocol.load(Path(diarize.out_dir), _DIARIZE_FILE, definition.spec.id)
             diarized = stages.Diarized(definition, stored)
-        return stages.from_asr_rows(rows, self.settings.definition, self.language, diarized)
+        return stages.from_asr_rows(
+            rows, self.settings.definition, self.language, diarized, stretch_languages=self.stretch_languages
+        )
 
     def needs_audio(self) -> bool:
         """Whether a worker stage still has audio to read; stored stages and finished worker folders need none."""
@@ -1144,7 +1173,7 @@ class _YouTubeRun:
             dir=self.vdir,
             language=settings.language or metadata.language,
             captions=saved_captions(self.vdir),
-            correction=lambda: correction_context(metadata, self.tags),
+            correction=lambda: correction_context(metadata, self.tags, settings.text.glossary),
             ensure_wav=self._ensure_wav,
         )
         transcription = _Transcription(prepared, settings, self.trace)
@@ -1229,7 +1258,7 @@ class _FileRun:
             dir=self.dir,
             language=language,
             captions=None,
-            correction=CorrectionContext,
+            correction=lambda: CorrectionContext(glossary=self.settings.text.glossary),
             ensure_wav=ensure_wav,
         )
         transcription = _Transcription(prepared, self.settings, trace)
@@ -1419,7 +1448,7 @@ class _Transcription:
             stretches = previous.stretches
             texts = [stretch.text for stretch in stretches]
             # Per stretch: Whisper often leaves only the opening minute unpunctuated in an otherwise punctuated video.
-            if not any(needs_punctuation(text, language) for text in texts):
+            if not any(needs_punctuation(s.text, s.language_or(language)) for s in stretches):
                 return _TextResult(stretches=stretches)
             if llm is None:
                 notice = (
@@ -1427,7 +1456,14 @@ class _Transcription:
                     "(correction is skipped without one too)"
                 )
                 return _TextResult(stretches=stretches, notices=(notice,))
-            result = punctuate(texts, language=language, client=llm, checkpoint_dir=self.store.work_dir("punctuate"))
+            result = punctuate(
+                texts,
+                language=language,
+                client=llm,
+                checkpoint_dir=self.store.work_dir("punctuate"),
+                languages=[stretch.language for stretch in stretches],
+                speakers=[stretch.speaker for stretch in stretches],
+            )
             failed = set(result.failed)
             note = "the LLM's punctuation changed the words twice, so this stretch was kept as transcribed"
             flags = [
@@ -1463,6 +1499,8 @@ class _Transcription:
                 context=context,
                 checkpoint_dir=self.store.work_dir("correct"),
                 confidence=stages.word_confidence(stretches),
+                languages=[stretch.language for stretch in stretches],
+                speakers=[stretch.speaker for stretch in stretches],
             )
             return _TextResult(
                 stretches=with_results(stretches, result.texts, result.edits, result.flags), usage=result.usage
@@ -1496,12 +1534,18 @@ class _Transcription:
                 evidence=evidence,
                 client=llm,
                 checkpoint_dir=self.store.work_dir("numeric"),
+                languages=[stretch.language for stretch in stretches],
             )
             notices: list[str] = []
             if not evidence_tracks and second is None and result.stats.single_source:
-                missing = f"no captions in {source.language}" if captions is not None else "the source has no captions"
+                # `captions` is None only for a source that never has captions: a recording.
+                missing = (
+                    f"no captions in {source.language} and no second opinion"
+                    if captions is not None
+                    else "recordings have no captions"
+                )
                 notices.append(
-                    f"numbers not cross-checked: {missing} and no second opinion; "
+                    f"numbers not cross-checked: {missing}; "
                     f"{result.stats.single_source} number(s) rest on the transcript alone"
                 )
             if llm is None and result.stats.disputed:
@@ -1520,7 +1564,7 @@ class _Transcription:
     def _numerals(self, previous: Sequence[Stretch], language: str) -> tuple[Stretch, ...]:
         # Display only: the stages before it read the text as recognized, so a rule change never repeats an LLM call.
         style = self.settings.text.numerals
-        if style == "keep" or not seg.is_zh(language):
+        if style == "keep" or not any(seg.is_zh(stretch.language_or(language)) for stretch in previous):
             return tuple(previous)
         key = _key("numerals", {"text": _text_key(previous), "numerals": style})
 
@@ -1675,9 +1719,11 @@ def _read_rows(path: Path, video_id: str) -> list[ChunkHypothesis]:
     return sorted((row for row in rows if row.file == video_id), key=lambda row: row.chunk)
 
 
-def correction_context(metadata: VideoMetadata, tags: Sequence[str]) -> CorrectionContext:
+def correction_context(metadata: VideoMetadata, tags: Sequence[str], glossary: Sequence[str] = ()) -> CorrectionContext:
+    """Steer correction by the configured glossary, then the video's tags up to the cap, and the creator note."""
     note = metadata.creator_note.text if metadata.creator_note is not None else None
-    return CorrectionContext(glossary=tuple(tags[:_GLOSSARY_MAX_TERMS]), creator_note=note)
+    terms = (*glossary, *(tag for tag in tags if tag not in glossary))
+    return CorrectionContext(glossary=terms[:_GLOSSARY_MAX_TERMS], creator_note=note)
 
 
 def info_tags(raw: object) -> tuple[str, ...]:

@@ -86,9 +86,13 @@ class Stretch(_Model):
     flags: tuple[Flag, ...] = ()
     # Whole-stretch before/after texts, in the order the stages made them.
     edits: tuple[Edit, ...] = ()
-    # Left out of every dump while None, so the stage keys of undiarized documents stay what they were.
+    # Both left out of every dump while None, so the stage keys of undiarized documents stay what they were.
     speaker: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    # The language this stretch was decoded in where it differs from the document's; None means the document's.
     language: str | None = Field(default=None, exclude_if=lambda value: value is None)
+
+    def language_or(self, document: str) -> str:
+        return self.language or document
 
 
 class Transcribed(_Model):
@@ -157,15 +161,19 @@ def from_asr_rows(
     definition: EngineDef,
     language_hint: str | None,
     diarized: Diarized | None = None,
+    *,
+    stretch_languages: bool = False,
 ) -> Transcribed:
     """Turn one engine's chunk rows (sorted by chunk) into stretches; `language_hint` is the source's declared one.
 
     With `diarized`, every token gets the speaker attribution gives it, a stretch never crosses a change of speaker,
-    and the words a second speaker talks over are flagged `overlapping_speech`.
+    and the words a second speaker talks over are flagged `overlapping_speech`. With `stretch_languages`, a row the
+    engine decoded in another language than the document's is cut and read by its own language's rules, and its
+    stretches carry that language.
     """
     spec = definition.spec
     language = _language(rows, language_hint)
-    tokens, warnings = _tokens(rows, language)
+    tokens, warnings = _tokens(rows, language, stretch_languages=stretch_languages)
     run: DiarizationRun | None = None
     if diarized is not None:
         tokens = _attributed(tokens, diarized.diarization)
@@ -190,6 +198,7 @@ def from_asr_rows(
             word_timed=any(t.origin in worded for t in sentence.tokens),
             flags=_anomaly_flags(sentence, anomalies) + overlap_flags[number],
             speaker=sentence.speaker,
+            language=sentence.language,
         )
         for number, sentence in enumerate(sentences)
     )
@@ -291,12 +300,16 @@ def from_captions(track: CaptionTrack, language_hint: str | None) -> Transcribed
 def normalize(
     stretches: Sequence[Stretch], language: str, *, script: clean.Script, fillers: clean.Fillers
 ) -> tuple[Stretch, ...]:
-    """Convert script and remove fillers; flags move with the text and no edit is recorded (nothing was misheard)."""
+    """Convert script and remove fillers by each stretch's language.
+
+    Flags move with the text and no edit is recorded (nothing was misheard).
+    """
     out: list[Stretch] = []
     for stretch in stretches:
-        result = clean.normalize(stretch.text, language, script=script, fillers=fillers)
+        spoken = stretch.language_or(language)
+        result = clean.normalize(stretch.text, spoken, script=script, fillers=fillers)
         words = stretch.words
-        if seg.is_zh(language) and script == "zh-Hans":
+        if seg.is_zh(spoken) and script == "zh-Hans":
             # The words are matched against the text by characters, so they must be in the same script.
             words = tuple(word.model_copy(update={"text": clean.to_simplified(word.text)}) for word in words)
         out.append(
@@ -316,12 +329,13 @@ def numerals(stretches: Sequence[Stretch], language: str) -> tuple[Stretch, ...]
 
     Words covering a rewritten figure become one word with the display text, so `build_document` still times the
     figure by the engine. A figure its words only partly match stays as said, so no word loses its time. Edits carry
-    the same rewrites, so they read in the form of the text they lead to.
+    the same rewrites, so they read in the form of the text they lead to. Only stretches spoken in Mandarin change.
     """
-    if not seg.is_zh(language):
-        return tuple(stretches)
     out: list[Stretch] = []
     for stretch in stretches:
+        if not seg.is_zh(stretch.language_or(language)):
+            out.append(stretch)
+            continue
         changes = _timeable_conversions(stretch)
         out.append(
             stretch.model_copy(
@@ -576,7 +590,8 @@ def _build(
     sentences = layout.sentences
     notes = [*source.warnings, *warnings]
     text = " ".join(sentence.text for sentence in sentences)
-    script = _script(language, text)
+    spoken = {sentence.language or language for sentence in sentences}
+    script = _script(next((code for code in sorted(spoken) if seg.is_zh(code)), language), text)
     if script == "zh-Hant":
         notes.append("the transcript contains Traditional Chinese characters, which are not converted")
     if not sentences:
@@ -637,7 +652,7 @@ def _build(
             languages=(language,),
             script=script,
             runs=(run,),
-            punctuation=_punctuation(text, language, run, llm_punctuated=llm_punctuated),
+            punctuation=_punctuation(sentences, language, run, llm_punctuated=llm_punctuated),
             correction_llm=correction_llm,
             diarization=source.diarization,
         ),
@@ -665,12 +680,13 @@ def _layout(stretches: Sequence[Stretch], language: str) -> _Layout:
         text = stretch.text.strip()
         if not text:
             continue
-        piece, complete = _retimed(stretch, text, index, language)
+        piece, complete = _retimed(stretch, text, index, stretch.language_or(language))
         if not complete:
             interpolated.add(index)
-        if stretch.speaker is not None:
-            piece = [replace(token, speaker=stretch.speaker) for token in piece]
-        joined = _joined(tokens, piece, zh=zh)
+        if stretch.speaker is not None or stretch.language is not None:
+            piece = [replace(token, speaker=stretch.speaker, language=stretch.language) for token in piece]
+        stretch_zh = zh if stretch.language is None else seg.uses_zh_rules(text, stretch.language)
+        joined = _joined(tokens, piece, zh=stretch_zh)
         position = len(stretch.text) - len(stretch.text.lstrip()) - (len(joined[0].text) - len(piece[0].text))
         for token in joined:
             origins.append((index, position))
@@ -729,9 +745,13 @@ def _placed_edits(layout: _Layout, stretch: int, edits: Sequence[Edit]) -> list[
 
 
 def _punctuation(
-    text: str, language: str, run: TranscriptRun, *, llm_punctuated: bool
+    sentences: Sequence[seg.Sentence], language: str, run: TranscriptRun, *, llm_punctuated: bool
 ) -> Literal["engine", "llm", "caption", "none"]:
-    if not seg.is_punctuated(text, language):
+    """How the transcript got its punctuation; "none" when the text of any one language lacks it."""
+    texts: dict[str, list[str]] = {}
+    for sentence in sentences:
+        texts.setdefault(sentence.language or language, []).append(sentence.text)
+    if not texts or not all(seg.is_punctuated(" ".join(group), code) for code, group in texts.items()):
         return "none"
     if llm_punctuated:
         return "llm"
@@ -765,11 +785,13 @@ def _language(rows: Sequence[ChunkHypothesis], declared: str | None) -> str:
     return declared or UNDETERMINED_LANGUAGE
 
 
-def _tokens(rows: Sequence[ChunkHypothesis], language: str) -> tuple[list[seg.Token], list[str]]:
+def _tokens(
+    rows: Sequence[ChunkHypothesis], language: str, *, stretch_languages: bool
+) -> tuple[list[seg.Token], list[str]]:
     """Return the tokens of every chunk, timed by its words where they line up with its text, and timing warnings.
 
     A chunk without any word timings is spread over the chunk, which the warning covers rather than a flag on every
-    segment.
+    segment. With `stretch_languages`, the tokens of a row decoded in another language than `language` carry it.
     """
     zh = seg.uses_zh_rules(" ".join(row.text for row in rows), language)
     tokens: list[seg.Token] = []
@@ -778,13 +800,17 @@ def _tokens(rows: Sequence[ChunkHypothesis], language: str) -> tuple[list[seg.To
         text = row.text.strip()
         if not text:
             continue
+        own = row.language if stretch_languages and row.language and row.language != language else None
+        spoken = own or language
         words = [word for word in row.words if word.text.strip()]
         if words:
-            piece, _ = seg.aligned_tokens(text, words, row.start, row.end, language=language, origin=row.chunk)
+            piece, _ = seg.aligned_tokens(text, words, row.start, row.end, language=spoken, origin=row.chunk)
         else:
             chunk_level += 1
-            piece = seg.pseudo_tokens(text, row.start, row.end, language=language, origin=row.chunk)
-        tokens += _joined(tokens, piece, zh=zh)
+            piece = seg.pseudo_tokens(text, row.start, row.end, language=spoken, origin=row.chunk)
+        if own is not None:
+            piece = [replace(token, language=own) for token in piece]
+        tokens += _joined(tokens, piece, zh=zh if own is None else seg.uses_zh_rules(text, own))
     warnings: list[str] = []
     if chunk_level:
         warnings.append(

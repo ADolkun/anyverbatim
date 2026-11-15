@@ -444,6 +444,15 @@ def test_correction_context_caps_the_glossary_at_twenty_terms_and_carries_the_cr
     assert (bare.glossary, bare.creator_note) == ((), None)
 
 
+def test_configured_glossary_terms_come_before_the_tags_within_the_cap() -> None:
+    from ytverbatim.pipeline import correction_context
+
+    tags = tuple(f"tag{n}" for n in range(25))
+    context = correction_context(metadata(), ("tag3", *tags), ("Acme", "tag3"))
+    assert context.glossary[:4] == ("Acme", "tag3", "tag0", "tag1") and len(context.glossary) == 20
+    assert correction_context(metadata(), tags, ()).glossary == tags[:20]
+
+
 def test_info_tags_keeps_only_string_tags_of_a_raw_extraction() -> None:
     from ytverbatim.pipeline import info_tags
 
@@ -529,3 +538,26 @@ def test_undiarized_stretches_and_transcripts_dump_exactly_as_before() -> None:
     attributed = from_asr_rows(rows, registry.get("w-prod"), "en", voices).model_dump(mode="json")
     assert [s["speaker"] for s in attributed["stretches"]] == ["S1", "S2", "S3"]
     assert isinstance(attributed["assignment"], str) and attributed["diarization"]["engine"] == "d-nemotron-8bit"
+
+
+def test_a_long_turn_repeats_its_label_on_each_paragraph_and_a_backchannel_is_its_own_line() -> None:
+    first = [f" {n}." for n in ("one", "two", "three", "four", "five", "six", "seven", "eight")]
+    pieces = [*first, " yeah", " sure.", " nine."]
+    spoken = words(pieces)
+    rows = [row(0, "".join(w.text for w in spoken), 0.0, 5.0, chunk_words=spoken)]
+    # Eight sentences of one voice, a two-word backchannel from another, then the first voice again.
+    doc = build(rows, diarized=diarized([(0.0, 3.2, 0), (3.2, 4.0, 1), (4.0, 4.4, 0)]), chapters=False)
+    assert [(p.speaker, p.first_segment, p.last_segment) for p in doc.paragraphs] == [
+        ("S1", 0, 5),
+        ("S1", 6, 7),
+        ("S2", 8, 8),
+        ("S1", 9, 9),
+    ]
+    lines = [line for line in render_markdown(doc).splitlines() if line.startswith("[")]
+    assert [line.split("** ", 1)[0].split(" ", 1)[1] + "**" for line in lines] == [
+        "**Speaker 1:**",
+        "**Speaker 1:**",
+        "**Speaker 2:**",
+        "**Speaker 1:**",
+    ]
+    assert lines[2].endswith("**Speaker 2:** yeah sure.")
