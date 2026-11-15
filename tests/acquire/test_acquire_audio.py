@@ -236,7 +236,7 @@ def test_to_wav16k_converts_to_the_asr_format_and_writes_atomically(tmp_path: Pa
 
     argv = fake_proc.calls[0]
     assert argv[0] == "ffmpeg"
-    assert arg_after(argv, "-i") == str(source)
+    assert arg_after(argv, "-i") == "./audio.webm" and fake_proc.cwds[0] == tmp_path
     assert (arg_after(argv, "-acodec"), arg_after(argv, "-ar"), arg_after(argv, "-ac")) == ("pcm_s16le", "16000", "1")
     assert argv[-1] != str(destination)
     assert destination.read_bytes() == b"RIFF"

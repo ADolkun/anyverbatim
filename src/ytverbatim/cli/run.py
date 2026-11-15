@@ -207,6 +207,9 @@ def _print_result(result: pipeline.VideoResult) -> None:
         if outcome.fix:
             click.echo(f"    Fix: {outcome.fix}")
         return
+    if pipeline.DUPLICATE in outcome.reused:
+        click.echo(f"= {name}  {outcome.detail}")
+        return
     document, markdown = result.document, result.markdown
     if document is None or markdown is None:
         return
@@ -241,10 +244,13 @@ def _timing(timing: pipeline.StageTiming) -> str:
 
 
 def _print_summary(report: BatchReport, root: Path) -> None:
-    ok = sum(v.status is VideoStatus.OK for v in report.videos)
+    duplicates = sum(pipeline.DUPLICATE in v.reused for v in report.videos)
+    ok = sum(v.status is VideoStatus.OK for v in report.videos) - duplicates
     failed = sum(v.status is VideoStatus.ERROR for v in report.videos)
     skipped = sum(v.status is VideoStatus.NOT_ATTEMPTED for v in report.videos)
     parts = [f"{ok} ok", f"{failed} failed"]
+    if duplicates:
+        parts.append(f"{duplicates} duplicate{'s' if duplicates > 1 else ''}")
     if skipped:
         parts.append(f"{skipped} not attempted")
     click.echo(f"{', '.join(parts)} · report: {redact(str(root / REPORT_FILE))}")

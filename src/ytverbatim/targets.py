@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ytverbatim import ids
+from ytverbatim.acquire.voicememos import access_fix
+from ytverbatim.errors import ConfigError
+from ytverbatim.paths import default_output_root
+from ytverbatim.ytdlp.runner import redact
 
 MEMOS_PREFIX = "memos:"
 EXTENSIONS = frozenset(
@@ -70,9 +74,12 @@ def classify(target: str | os.PathLike[str]) -> Target:
 def expand(paths: Iterable[Path], *, exclude: Path | None = None) -> list[Path]:
     """Replace each folder with the media files under it, sorted by path; files are kept as given.
 
-    Hidden files and folders are skipped, and so is `exclude` (the output root) when it lies inside a folder.
+    Hidden files and folders are skipped, and so is ytverbatim's own output: `exclude` (the output root) and the
+    default videos root wherever they lie inside a folder, and every `rec-…` folder, so a run over the folder that
+    holds the output root never picks up its own WAVs. Raises `ConfigError` for a folder it cannot read, rather than
+    report it empty.
     """
-    skipped = exclude.resolve() if exclude is not None else None
+    skipped = {root.resolve() for root in (exclude, default_output_root()) if root is not None}
     found: list[Path] = []
     for path in paths:
         if path.is_dir():
@@ -82,10 +89,24 @@ def expand(paths: Iterable[Path], *, exclude: Path | None = None) -> list[Path]:
     return found
 
 
-def _media(folder: Path, skipped: Path | None) -> Iterable[Path]:
-    for root, dirs, files in os.walk(folder):
+def _media(folder: Path, skipped: set[Path]) -> Iterable[Path]:
+    for root, dirs, files in os.walk(folder, onerror=_unreadable):
         here = Path(root)
-        dirs[:] = [name for name in dirs if not name.startswith(".") and (here / name).resolve() != skipped]
+        dirs[:] = [name for name in dirs if not _own_or_hidden(here / name, skipped)]
         for name in files:
             if not name.startswith(".") and Path(name).suffix.lower() in EXTENSIONS:
                 yield here / name
+
+
+def _own_or_hidden(folder: Path, skipped: set[Path]) -> bool:
+    name = folder.name
+    return name.startswith(".") or ids.is_recording_id(name) or folder.resolve() in skipped
+
+
+def _unreadable(error: OSError) -> None:
+    where = redact(str(Path(error.filename).absolute())) if error.filename else "a folder"
+    if isinstance(error, PermissionError):
+        raised = ConfigError(f"cannot read {where}: permission denied")
+        raised.fix = access_fix()
+        raise raised from error
+    raise ConfigError(f"cannot read {where}: {error.strerror or error}") from error

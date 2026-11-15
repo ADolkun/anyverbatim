@@ -27,13 +27,16 @@ class FakeMedia:
         self.calls: list[list[str]] = []
 
     def add(self, path: Path, packets: str, *, streams: list[dict[str, object]], tags: dict[str, str]) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f"{packets}\n{path.suffix} container\n", encoding="utf-8")
         self.probes[path.name] = {"streams": streams, "format": {"duration": "12.5", "tags": tags}}
         return path
 
-    def __call__(self, argv: list[str], *, timeout_s: float, **_: object) -> proc.ProcResult:
+    def __call__(self, argv: list[str], *, timeout_s: float, cwd: Path | None = None, **_: object) -> proc.ProcResult:
         self.calls.append(argv)
-        source = Path(argv[argv.index("-i") + 1]) if "-i" in argv else Path(argv[-1])
+        given = argv[argv.index("-i") + 1] if "-i" in argv else argv[-1]
+        assert cwd is not None and given.startswith("./") and "/" not in given[2:], "ffmpeg sees only ./<name>"
+        source = cwd / given
         if argv[0] == "ffprobe":
             return proc.ProcResult(0, json.dumps(self.probes[source.name]), "", 0.0)
         stream = int(argv[argv.index("-map") + 1].rsplit(":", 1)[1])
@@ -141,3 +144,17 @@ def test_the_memo_cache_takes_the_recording_hasher(tmp_path: Path, media: FakeMe
     expected = local.open_recording(path).id
     assert cache.resolve(memo, local.recording_id) == expected
     assert MemoCache(tmp_path / "voicememos.json").lookup(memo) == expected
+
+
+def test_a_video_longer_than_its_audio_takes_the_audio_streams_duration(tmp_path: Path, media: FakeMedia) -> None:
+    clip = media.add(tmp_path / "screen.mp4", "alpha", streams=[{**AAC, "duration": "4.6"}], tags={})
+    media.probes[clip.name]["format"] = {"duration": "20.0", "tags": {}}
+    assert local.open_recording(clip).duration_s == 4.6
+    no_stream_duration = media.add(tmp_path / "talk.mkv", "beta", streams=[{"codec_name": "aac"}], tags={})
+    assert local.open_recording(no_stream_duration).duration_s == 12.5
+
+
+def test_a_colon_in_a_name_reaches_ffmpeg_as_a_file_from_its_folder(tmp_path: Path, media: FakeMedia) -> None:
+    path = media.add(tmp_path / "Named folder" / "notes:1.m4a", "alpha", streams=[AAC], tags={})
+    assert local.open_recording(path).file_name == "notes:1.m4a"
+    assert all("./notes:1.m4a" in argv for argv in media.calls)

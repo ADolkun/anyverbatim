@@ -50,7 +50,7 @@ _TERMINALS = {
 class MemosAccessError(ConfigError):
     def __init__(self, message: str) -> None:
         super().__init__(message)
-        self.fix = _access_fix()
+        self.fix = access_fix()
 
 
 class MemosNotSyncingError(ConfigError):
@@ -62,7 +62,7 @@ class MemosNotSyncingError(ConfigError):
         )
 
 
-def _access_fix() -> str:
+def access_fix() -> str:
     app = _TERMINALS.get(os.environ.get("TERM_PROGRAM", ""))
     target = (
         f"{app} (the app running ytverbatim)"
