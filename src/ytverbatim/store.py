@@ -15,6 +15,7 @@ import logging
 import os
 import shutil
 from collections.abc import Callable, Generator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, JsonValue, ValidationError
@@ -39,6 +40,13 @@ def input_hash(stage: str, version: str, inputs: Mapping[str, JsonValue]) -> str
     return digest({"stage": stage, "version": version, "inputs": dict(inputs)})
 
 
+@dataclass(frozen=True)
+class Record[M: BaseModel]:
+    version: str
+    key: str
+    output: M
+
+
 class StageStore:
     def __init__(self, video_dir: Path) -> None:
         self.root = video_dir / STAGES_DIR
@@ -56,10 +64,16 @@ class StageStore:
             return None
         return self._output(stage, raw, model)
 
-    def stored[M: BaseModel](self, stage: str, model: type[M]) -> M | None:
-        """Return the stored output whatever it was keyed by: for a reader that follows the stage as it stands."""
+    def record[M: BaseModel](self, stage: str, model: type[M]) -> Record[M] | None:
+        """Return the stored record whatever it was keyed by: for a caller that replaces the output under its key."""
         raw = self._record(stage)
-        return None if raw is None else self._output(stage, raw, model)
+        if raw is None:
+            return None
+        version, key = raw.get("stage_version"), raw.get("input_hash")
+        if not isinstance(version, str) or not isinstance(key, str):
+            return None
+        output = self._output(stage, raw, model)
+        return None if output is None else Record(version, key, output)
 
     def _record(self, stage: str) -> dict[str, object] | None:
         path = self.path(stage)
