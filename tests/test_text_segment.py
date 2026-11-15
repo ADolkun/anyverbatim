@@ -609,3 +609,10 @@ def test_an_opening_mark_at_a_turn_start_goes_with_the_turn_it_opens() -> None:
     tokens = spoken_by([("好", "S1"), ("。", "S1"), ("“", "S1"), ("好", "S2"), ("的", "S2"), ("”", "S2")])
     sentences = seg.segment_tokens(tokens, "zh")
     assert [(s.text, s.speaker) for s in sentences] == [("好。", "S1"), ("“好的”", "S2")]
+
+
+def test_a_sentence_never_crosses_a_change_of_token_language_and_each_run_has_its_own_rules() -> None:
+    english = [Token(f" {w}", i * 0.3, i * 0.3 + 0.2) for i, w in enumerate(["we", "went", "home"])]
+    mandarin = [Token(c, 1.0 + i * 0.1, 1.05 + i * 0.1, language="zh") for i, c in enumerate("我们回家了。")]
+    sentences = seg.segment_tokens([*english, *mandarin, Token(" .", 2.0, 2.0)], "en")
+    assert [(s.text, s.language) for s in sentences] == [("we went home", None), ("我们回家了。 .", "zh")]

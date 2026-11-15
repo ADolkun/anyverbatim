@@ -43,6 +43,7 @@ from ytverbatim.llm.usage import UsageMeter
 from ytverbatim.text import offsets
 from ytverbatim.text.guards import check_numeric_fix
 from ytverbatim.text.numbers import QToken, quantity_tokens
+from ytverbatim.text.segment import language_line
 
 _log = logging.getLogger(__name__)
 
@@ -281,8 +282,12 @@ def verify_numbers(
     evidence: Evidence,
     client: LLMClient | None,
     checkpoint_dir: Path,
+    languages: Sequence[str | None] = (),
 ) -> NumericResult:
     """Verify every quantity in ``segments`` against ``evidence`` and return the flagged, possibly fixed texts.
+
+    ``languages`` are the languages the segments were spoken in, when given (None for ``language``); a transcript in
+    more than one says so in the verdict prompt.
 
     Without a ``client`` nothing is adjudicated: every disputed span keeps the transcript's reading and its flag.
 
@@ -326,7 +331,7 @@ def verify_numbers(
         decisions = _decide(
             disputed,
             segments,
-            language=language,
+            language_line=language_line(language, languages),
             client=client,
             meter=meter,
             checkpoint_dir=checkpoint_dir,
@@ -608,7 +613,7 @@ def _decide(
     disputed: list[_Span],
     segments: Sequence[TimedText],
     *,
-    language: str,
+    language_line: str,
     client: LLMClient,
     meter: UsageMeter,
     checkpoint_dir: Path,
@@ -617,7 +622,7 @@ def _decide(
     decisions: dict[int, _Decision] = {}
     for first in range(0, len(disputed), BATCH_SIZE):
         batch = disputed[first : first + BATCH_SIZE]
-        user = _prompt(batch, segments, language)
+        user = _prompt(batch, segments, language_line)
         reply = _verdicts(client, meter, user, checkpoint_dir, expected=len(batch))
         verdicts: dict[int, _Verdict] = {}
         if reply is not None:
@@ -628,7 +633,7 @@ def _decide(
     return decisions
 
 
-def _prompt(batch: list[_Span], segments: Sequence[TimedText], language: str) -> str:
+def _prompt(batch: list[_Span], segments: Sequence[TimedText], language_line: str) -> str:
     items: list[dict[str, object]] = []
     for item_id, span in enumerate(batch):
         text = segments[span.segment].text
@@ -645,7 +650,7 @@ def _prompt(batch: list[_Span], segments: Sequence[TimedText], language: str) ->
             }
         )
     return (
-        f"The transcript language is {language}. For each item, choose the reading the context supports, copied "
+        language_line + "For each item, choose the reading the context supports, copied "
         'exactly from its "readings" list, or null. Return JSON {"verdicts": [{"id": <item id>, "value": '
         '"<one listed reading>" | null, "confidence": "high" | "low", "reason": "<short>"}]} with one verdict per '
         "item.\n\nITEMS:\n" + json.dumps(items, ensure_ascii=False)

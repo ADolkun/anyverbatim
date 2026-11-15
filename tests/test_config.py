@@ -164,3 +164,11 @@ def test_numerals_default_to_digits_and_keep_parses(tmp_path: Path) -> None:
 def test_numerals_rejects_anything_but_digits_or_keep(tmp_path: Path, body: str) -> None:
     with pytest.raises(ConfigError, match=r"text\.numerals must be one of: digits, keep"):
         load_options(_write(tmp_path, f"[text]\nnumerals = {body}\n"))
+
+
+def test_the_glossary_is_a_list_of_strings_that_an_override_replaces(tmp_path: Path) -> None:
+    path = _write(tmp_path, '[text]\nglossary = ["Acme", "Kubernetes"]\n')
+    assert load_options(path).text.glossary == ("Acme", "Kubernetes")
+    assert load_options(path, {"text": {"glossary": ("Zorblax",)}}).text.glossary == ("Zorblax",)
+    with pytest.raises(ConfigError, match=r"text\.glossary must be a list of strings"):
+        load_options(_write(tmp_path, '[text]\nglossary = "Acme"\n'))

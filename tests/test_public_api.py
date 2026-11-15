@@ -153,6 +153,7 @@ DATACLASSES: dict[str, list[str]] = {
         "script: Literal['zh-Hans', 'keep'] = 'zh-Hans'",
         "fillers: Literal['keep', 'remove'] = 'keep'",
         "numerals: Literal['digits', 'keep'] = 'digits'",
+        "glossary: tuple[str, ...] = ()",
     ],
     "DiarizeOptions": ["mode: Literal['auto', 'on', 'off'] = 'auto'"],
     "LLMOptions": [

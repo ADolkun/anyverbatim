@@ -75,7 +75,9 @@ provider = "claude-cli"
 model = "claude-sonnet-5-5"
 ```
 
-The LLM stages send transcript text, plus the video's tags and the uploader's pinned note when there is one, to the provider you chose. Your cookies never leave your machine.
+To steer correction toward names and jargon it would otherwise mishear, list them as `[text] glossary = ["Acme", "Kubernetes"]` (at most 20 terms), or pass `--glossary "Acme, Kubernetes"` for one run; for a YouTube video the video's tags follow them, up to 20 terms in all.
+
+The LLM stages send transcript text, plus your glossary and, for a YouTube video, its tags and the uploader's pinned note when there is one, to the provider you chose. For a diarized recording each piece of text carries its speaker's id (`S1`, `S2`, …) and the prompt says it is a conversation; a recording's title, file name and speaker names are never sent. In a recording where the engine decoded some stretches in another language, each stretch is normalized, punctuated, and has its Chinese numerals written as digits by its own language's rules, and the prompts say the transcript mixes languages. Your cookies never leave your machine.
 
 ## Library
 
