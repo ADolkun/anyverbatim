@@ -106,7 +106,7 @@ Every error `process` and `expand` raise on purpose subclasses `YtverbatimError`
 
 ### Dependencies
 
-`check_dependencies(options, source="youtube")` checks that the ASR engine the options select for that source (`"youtube"` or `"recording"`) can be imported, plus the diarizer when that source is diarized and the numeric second-opinion engine when one is on, and names the extra that is missing: `whisper` for `w-prod`, the default, and `asr` for the other engines and the diarizer. With the default options a recording therefore needs both, `ytverbatim[whisper,asr]`. `process` runs the same check before any request. Nothing is imported or downloaded; an unknown engine is a `ConfigError`, and an unknown source a `ValueError`.
+`check_dependencies(options, source="youtube")` checks that the ASR engine the options select for that source (`"youtube"` or `"recording"`) can be imported, plus the diarizer when that source is diarized and the numeric second-opinion engine when one is on, and names the extra that is missing: `whisper` for `w-prod`, the default, and `asr` for the other engines and the diarizer. A recording with `AsrOptions.languages` set defaults to `w-runs-lid`, which needs both extras. A recording also needs both with the default engine, because of its diarizer: `ytverbatim[whisper,asr]`. `process` runs the same check before any request. Nothing is imported or downloaded; an unknown engine is a `ConfigError`, and an unknown source a `ValueError`.
 
 ### Diarization
 
@@ -127,7 +127,7 @@ Every error `process` and `expand` raise on purpose subclasses `YtverbatimError`
 2. Contract 2.0: `document.video` is `document.source` (check `source.kind == "youtube"`), and `document.access` is `document.source.access`. `load_document` still upgrades 1.0 and 1.1 documents in memory.
 3. Internal modules are no longer API. Of the modules an application may have imported, `ids`, `paths`, `pipeline`, `acquire.*`, `auth.*`, `asr.*`, `ytdlp.*` and `llm.*` are internal; the names below replace what they were used for.
 4. `BatchStopError.fix` is set by `process` as well as `expand`, and every error from either has a `stage` attribute.
-5. `AsrOptions.engine` defaults to `None`, meaning the source's default engine. That is `w-prod` for YouTube and for recordings alike.
+5. `AsrOptions.engine` defaults to `None`, meaning the source's default engine. That is `w-prod` for YouTube, and for a recording too unless `AsrOptions.languages` is non-empty, which makes it `w-runs-lid`. An engine you set wins for every source. Since `w-runs-lid` checks the languages it is given, an unknown code in `languages` is now a `ConfigError` for a recording, where `w-prod` ignored it.
 6. A new `[diarize]` section (`DiarizeOptions`, a new `Options.diarize` field); `auto` means no change for YouTube.
 7. `ProgressEvent.video_id` is now `ProgressEvent.id`, since it also names recordings.
 8. `process` no longer takes `runner_factory`.

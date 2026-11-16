@@ -171,8 +171,7 @@ SourceKind = Literal["youtube", "recording"]
 DUPLICATE = "duplicate"
 # The `reused` mark of a file whose source another run holds the lock of: it is skipped, not failed.
 BUSY = "busy"
-# The engine a source gets when `[asr] engine` is unset; recordings move to the language policy once it is chosen.
-_DEFAULT_ENGINE: dict[SourceKind, str] = {"youtube": "w-prod", "recording": "w-prod"}
+_SOURCES: tuple[str, ...] = get_args(SourceKind)
 # Chosen by E1: as accurate as the bf16 weights on public meetings, at half the size.
 _DIARIZER = "d-nemotron-8bit"
 # The diarization request's file id; its folder already belongs to one source, whose id may not be a valid file id.
@@ -379,19 +378,27 @@ def _finished(result: VideoResult, kind: SourceKind, out: Path | None) -> Result
     )
 
 
+def _engine_id(source: SourceKind, asr: config.AsrOptions) -> str:
+    if asr.engine:
+        return asr.engine
+    # E2 measured `w-runs-lid` only with detection limited to two languages; unrestricted detection labelled 12% of an
+    # English meeting Welsh, so the run policy is the default only once the user names the languages.
+    return "w-runs-lid" if source == "recording" and asr.languages else "w-prod"
+
+
 def check_dependencies(options: config.Options | None = None, *, source: SourceKind = "youtube") -> None:
     """Raise `DependencyError` naming the extra to install when an engine a run of this source needs is missing.
 
-    Checks the ASR engine `options` select for `source` (`w-prod` unless `[asr] engine` is set), the diarizer when the
-    source is diarized (`[diarize] mode`: recordings unless it is `off`, YouTube only when it is `on`), and the numeric
-    second-opinion engine when one is on; each names the extra its library comes from (`whisper` or `asr`). Nothing
-    is imported or downloaded. An unknown engine is a `ConfigError`, an unknown `source` a `ValueError`. `process`
-    runs the same check before any request.
+    Checks the ASR engine `options` select for `source` (`[asr] engine`, else `w-runs-lid` for a recording when
+    `[asr] languages` is set, else `w-prod`), the diarizer when the source is diarized (`[diarize] mode`: recordings
+    unless it is `off`, YouTube only when it is `on`), and the numeric second-opinion engine when one is on; each names
+    the extra its library comes from (`whisper` or `asr`). Nothing is imported or downloaded. An unknown engine is a
+    `ConfigError`, an unknown `source` a `ValueError`. `process` runs the same check before any request.
     """
-    if source not in _DEFAULT_ENGINE:
-        raise ValueError(f"source must be one of {', '.join(_DEFAULT_ENGINE)}, not {source!r}")
+    if source not in _SOURCES:
+        raise ValueError(f"source must be one of {', '.join(_SOURCES)}, not {source!r}")
     options = options or config.load_options()
-    registry.check_dependencies(registry.get(options.asr.engine or _DEFAULT_ENGINE[source]))
+    registry.check_dependencies(registry.get(_engine_id(source, options.asr)))
     diarizer = _diarizer(options.diarize, source)
     if diarizer is not None:
         diarize_registry.check_dependencies(diarizer)
@@ -648,7 +655,7 @@ def _settings(
     interactive: bool = False,
 ) -> _Settings:
     check_dependencies(options, source=kind)
-    definition = registry.get(options.asr.engine or _DEFAULT_ENGINE[kind])
+    definition = registry.get(_engine_id(kind, options.asr))
     languages = _allowed_languages(options.asr.languages, definition) if kind == "recording" else ()
     second: EngineDef | None = None
     if options.text.numeric_second_opinion != "off":

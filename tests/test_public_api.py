@@ -314,6 +314,19 @@ def test_a_recording_needs_the_asr_extra_for_its_diarizer_or_its_engine(librarie
         ytverbatim.check_dependencies(chosen, source="recording")
 
 
+def test_a_recording_with_languages_defaults_to_an_engine_that_needs_the_asr_extra(libraries: set[str]) -> None:
+    libraries.discard("mlx_audio")
+    named = config.load_options(overrides={"asr": {"languages": ("zh", "en")}, "diarize": {"mode": "off"}})
+    with pytest.raises(DependencyError, match=r"w-runs-lid .* install ytverbatim\[asr\]"):
+        ytverbatim.check_dependencies(named, source="recording")
+    ytverbatim.check_dependencies(named, source="youtube")
+    ytverbatim.check_dependencies(config.load_options(overrides={"diarize": {"mode": "off"}}), source="recording")
+    explicit = config.load_options(
+        overrides={"asr": {"languages": ("zh", "en"), "engine": "w-prod"}, "diarize": {"mode": "off"}}
+    )
+    ytverbatim.check_dependencies(explicit, source="recording")
+
+
 def test_youtube_needs_the_asr_extra_only_when_diarized_on_request(libraries: set[str]) -> None:
     libraries.discard("mlx_audio")
     ytverbatim.check_dependencies(source="youtube")
