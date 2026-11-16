@@ -29,7 +29,12 @@ from ytverbatim.ytdlp.runner import redact
 @click.option(
     "--auth", "auth_spec", metavar="SPEC", help="YouTube auth source for this run: BROWSER[:DIR], cookie-file:PATH."
 )
-@click.option("--engine", "engine", metavar="ID", help="ASR hypothesis to run, for every source (default w-prod).")
+@click.option(
+    "--engine",
+    "engine",
+    metavar="ID",
+    help="ASR hypothesis to run, for every source (default w-prod; w-runs-lid for recordings with [asr] languages).",
+)
 @click.option(
     "--language",
     metavar="CODE",

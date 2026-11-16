@@ -38,7 +38,7 @@ class YtdlpOptions:
 
 @dataclass(frozen=True)
 class AsrOptions:
-    # None is the source's default: w-prod for YouTube and, until the language policy lands, for recordings too.
+    # None is the source's default: w-runs-lid for a recording with `languages` set, w-prod otherwise (YouTube always).
     # Set, it wins for every source.
     engine: str | None = None
     source: Literal["asr", "captions"] = "asr"

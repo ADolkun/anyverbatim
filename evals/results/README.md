@@ -103,3 +103,15 @@ Each `loops-<date>.md` here is written by hand from the JSON that `evals.run_rec
 error counts, time spans and word counts on the public meeting corpora, never transcript or reference text. The
 recordings flagged with `decoder_anomaly` are moved out of the live layout into a dated `asr-loops-before-<date>`
 folder, decoded again with `run --recordings`, and compared with `rescore --before`; the rules are in the file.
+
+# Language-policy results
+
+Each `language-<date>.md` here is written by hand from the JSON that `evals.run_recordings_asr score` and `compare`
+print, over the public meeting and code-switching corpora. It holds error rates, paired intervals, translation-incident
+counts and per-language chunk counts, never transcript or reference text:
+
+```bash
+uv run python -m evals.run_recordings_asr run --hyp w-runs-lid          # each hypothesis, every public corpus
+uv run python -m evals.run_recordings_asr score --hyp w-runs-lid
+uv run python -m evals.run_recordings_asr compare --a w-runs-lid --b w-prod
+```

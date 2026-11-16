@@ -211,7 +211,7 @@ Recordings are diarized by default: a local model finds who speaks when. The mod
 | `"on"` | Every source transcribed with ASR, YouTube videos too. |
 | `"off"` | Nothing. |
 
-`--diarize` and `--no-diarize` set it for one run. A diarized run needs `ytverbatim[asr]`; recordings with the default engine need `ytverbatim[whisper,asr]`.
+`--diarize` and `--no-diarize` set it for one run. A diarized run needs `ytverbatim[asr]`; recordings need `ytverbatim[whisper,asr]` with either default engine.
 
 ### Naming speakers
 
@@ -241,30 +241,36 @@ Speaker names are never sent to an LLM. The text stages only see `S1`, `S2`, …
 ## Languages
 
 - **`--language CODE`** forces one spoken language for any source, a recording or a YouTube video: `zh`, `en` and the other Whisper language codes. A region suffix such as `zh-CN` is read as `zh`. An unknown code is an error. Force a language only when the whole file is in it: Whisper is known to translate speech in another language into the forced one, instead of transcribing it.
-- **`[asr] languages`** is the set of languages an engine that detects languages may choose from, for recordings only. `languages = ["zh", "en"]` limits detection to those two. The default, an empty list, allows any.
+- **`[asr] languages`** is the set of languages an engine that detects languages may choose from, for recordings only. `languages = ["zh", "en"]` limits detection to those two. Setting it also changes the default engine of recordings, as described below. The default, an empty list, allows any.
 - **`--engine ID`** (or `[asr] engine`) picks the engine for every source. The ids are listed below.
 
-The default engine for recordings is `w-prod`, the same Whisper large-v3 as for YouTube. It decodes the whole file at once and detects one language for it. So with the defaults a recording has one language, and `[asr] languages` has no effect.
+The default engine depends on the source and on `[asr] languages`:
+
+- A recording with `[asr] languages` set uses `w-runs-lid`.
+- A recording without it uses `w-prod`, the same Whisper large-v3 as for YouTube. It decodes the whole file at once and detects one language for it, from the start of the file. So a recording has one language, and a Mandarin and English conversation is transcribed as if it were all in the language of its opening.
+- YouTube always uses `w-prod`, whatever `[asr] languages` says.
+- An engine you set (`--engine`, `[asr] engine`) wins for every source.
 
 | Engine | What it is | Needs |
 |---|---|---|
-| `w-prod` | Whisper large-v3, the whole file at once. The default. | `whisper` |
+| `w-prod` | Whisper large-v3, the whole file at once. The default for YouTube, and for recordings without `[asr] languages`. | `whisper` |
 | `w-vad` | Whisper large-v3 in 30-second chunks; Whisper detects each chunk's language unless you force one. | `whisper`, `asr` |
 | `w-vad-lid` | Whisper large-v3 in chunks, each decoded with its own detected language. | `whisper`, `asr` |
-| `w-runs-lid` | Whisper large-v3, neighbouring same-language chunks decoded together. | `whisper`, `asr` |
+| `w-runs-lid` | Whisper large-v3, neighbouring same-language chunks decoded together. The default for recordings with `[asr] languages`. | `whisper`, `asr` |
 | `q-base`, `q-ctx` | Qwen3-ASR 1.7B (8-bit), without and with context. | `asr` |
 | `f-aed` | FireRedASR2 (AED). | `asr` |
 | `m-4bit` | MiMo-V2.5-ASR (4-bit). | `asr` |
 
-The [engine evaluation](../evals/results/asr-2026-11-13.md) compared `w-prod`, `w-vad`, `q-base`, `q-ctx`, `f-aed` and `m-4bit` on YouTube videos and kept `w-prod` as the default; `w-vad-lid` and `w-runs-lid` are still being evaluated on meeting and mixed-language audio. `[asr] languages` applies only to `w-vad-lid` and `w-runs-lid`. Diarizing needs `asr` as well, so a diarized recording with the default engine needs both extras.
+The [engine evaluation](../evals/results/asr-2026-11-13.md) compared `w-prod`, `w-vad`, `q-base`, `q-ctx`, `f-aed` and `m-4bit` on YouTube videos and kept `w-prod` as the default for them. The [language evaluation](../evals/results/language-2026-11-15.md) compared `w-prod`, `w-vad`, `w-vad-lid` and `w-runs-lid` on public meetings and code-switched conversations. On mixed Mandarin and English conversations `w-runs-lid` cut the mixed error rate from 43.0% to 35.2%, and it was no worse than `w-prod` on English or Mandarin meetings. Restricting detection mattered: detection among all languages labelled 12% of an English meeting corpus as Welsh and cost 10.8 points of word error rate against the same chunks restricted to two languages. That is why the run policy is the default only when you name the languages. Whisper can still translate speech it decodes under the other language, such as a short English remark inside a mostly Mandarin run: in that evaluation, 2.7% of the utterances decoded one by one came out in the wrong script, and 11% of the lines of the long conversations. A fix is planned. `[asr] languages` applies only to `w-vad-lid` and `w-runs-lid`. Diarizing needs `asr` as well, so a diarized recording needs both extras whatever the engine.
 
-Per-stretch languages need an engine that detects the language of each stretch:
+Per-stretch languages need an engine that detects the language of each stretch. For a recording in more than one language, name them; for Mandarin and English:
 
 ```toml
 [asr]
-engine = "w-runs-lid"
 languages = ["zh", "en"]
 ```
+
+That selects `w-runs-lid`. Use your own languages if they are others. Without `languages`, a recording is decoded as one language, detected from the start of the file. `engine = "w-vad-lid"` selects the chunk-by-chunk variant instead.
 
 - `w-runs-lid` detects the language of each chunk, merges neighbouring chunks of the same language into runs, and decodes each run whole with its own language.
 - `w-vad-lid` decodes each chunk with its own detected language.
@@ -396,9 +402,9 @@ Set these in `~/.config/ytverbatim/config.toml`. A command-line option wins for 
 | Key | Default | What it does |
 |---|---|---|
 | `[diarize] mode` | `"auto"` | `auto`, `on` or `off`. `--diarize/--no-diarize`. |
-| `[asr] engine` | none | The engine for every source. Without it, `w-prod`. `--engine`. |
+| `[asr] engine` | none | The engine for every source. Without it, `w-runs-lid` for a recording when `[asr] languages` is set, else `w-prod`. `--engine`. |
 | `[asr] language` | none | Force one language for every source. `--language`. |
-| `[asr] languages` | `[]` | The languages a detecting engine may choose from, for recordings. |
+| `[asr] languages` | `[]` | The languages a detecting engine may choose from, for recordings. Set, it makes `w-runs-lid` the recordings default. |
 | `[asr] memory_cap_gib` | half of physical memory | The workers are stopped above this footprint. |
 | `[text] glossary` | `[]` | Terms for correction to prefer, at most 20. `--glossary`. |
 | `[text] numeric_second_opinion` | `"off"` | An engine id whose reading of the numbers is checked against the first. It must decode chunk by chunk and re-decode single spans, such as `w-vad`; `w-prod` and `w-runs-lid` are refused. |

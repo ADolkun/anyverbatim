@@ -412,6 +412,73 @@ def test_an_explicit_engine_wins_for_every_source(session_kit, kind: pipeline.So
     assert settings(session_kit, kind, engine="w-vad").definition.spec.id == "w-vad"
 
 
+def asr_keys(kit, kind: pipeline.SourceKind, **asr: object) -> tuple[str, str]:
+    decoding = pipeline._Decoding(settings(kit, kind, **asr), "src", kit.out / "src", None)
+    request = decoding.asr_request()
+    return decoding.asr_key(request, None), pipeline._key("asr", {"request": without_wav(request.fingerprint())})
+
+
+@pytest.mark.parametrize(
+    "asr", [{}, {"language": "zh"}, {"languages": ("zh", "en")}, {"language": "en", "languages": ("zh",)}]
+)
+def test_youtube_defaults_to_w_prod_whatever_the_languages_say(session_kit, asr: dict[str, object]) -> None:
+    youtube = settings(session_kit, "youtube", **asr)
+    assert youtube.definition.spec.id == "w-prod" and youtube.languages == ()
+    key, plain = asr_keys(session_kit, "youtube", **asr)
+    assert key == plain
+    assert (
+        youtube.run_key()
+        == settings(session_kit, "youtube", **{k: v for k, v in asr.items() if k == "language"}).run_key()
+    )
+
+
+def test_a_recording_with_languages_defaults_to_w_runs_lid_and_sends_them_to_the_worker(
+    session_kit, media: Media, worker: Worker, tmp_path: Path
+) -> None:
+    chosen = settings(session_kit, "recording", languages=("zh", "en"))
+    assert chosen.definition.spec.id == "w-runs-lid" and chosen.languages == ("zh", "en")
+    key, plain = asr_keys(session_kit, "recording", languages=("zh", "en"))
+    assert key != plain, "the stretch languages are part of its key"
+
+    options = config.load_options(overrides={"asr": {"languages": ("zh", "en")}})
+    run_files(session_kit, [media.add(tmp_path / "meeting.m4a")], options)
+    (request,) = worker.calls
+    assert request.engine.spec.id == "w-runs-lid"
+    assert request.files[0].languages == ("zh", "en") and request.files[0].language is None
+
+
+def test_a_recording_without_languages_defaults_to_w_prod_with_unchanged_keys(session_kit) -> None:
+    plain = settings(session_kit, "recording")
+    assert plain.definition.spec.id == "w-prod" and plain.languages == ()
+    key, unkeyed = asr_keys(session_kit, "recording")
+    assert key == unkeyed
+
+
+@pytest.mark.parametrize(
+    ("kind", "asr", "engine", "languages"),
+    [
+        ("recording", {"engine": "w-vad-lid", "languages": ("zh", "en")}, "w-vad-lid", ("zh", "en")),
+        ("recording", {"engine": "w-prod", "languages": ("zh", "en")}, "w-prod", ()),
+        ("youtube", {"engine": "w-runs-lid", "languages": ("zh", "en")}, "w-runs-lid", ()),
+    ],
+)
+def test_an_explicit_engine_beats_the_languages_default(
+    session_kit, kind: pipeline.SourceKind, asr: dict[str, object], engine: str, languages: tuple[str, ...]
+) -> None:
+    chosen = settings(session_kit, kind, **asr)
+    assert chosen.definition.spec.id == engine and chosen.languages == languages
+
+
+def test_a_forced_language_still_reaches_the_decode_of_a_recording_with_languages(
+    session_kit, media: Media, worker: Worker, tmp_path: Path
+) -> None:
+    options = config.load_options(overrides={"asr": {"languages": ("zh", "en"), "language": "zh"}})
+    run_files(session_kit, [media.add(tmp_path / "meeting.m4a")], options)
+    (request,) = worker.calls
+    assert request.engine.spec.id == "w-runs-lid"
+    assert (request.files[0].language, request.files[0].languages) == ("zh", ("zh", "en"))
+
+
 def test_an_explicit_engine_reaches_a_recordings_worker(
     session_kit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
@@ -437,7 +504,9 @@ def test_youtube_requests_keep_their_fingerprint(session_kit) -> None:
 
     recording_settings = settings(session_kit, "recording", engine="w-runs-lid", languages=("zh-Hans", "en"))
     assert recording_settings.languages == ("zh", "en")
-    assert settings(session_kit, "recording", languages=("zh", "en")).languages == (), "w-prod detects nothing"
+    assert settings(session_kit, "recording", engine="w-prod", languages=("zh", "en")).languages == (), (
+        "w-prod detects nothing"
+    )
 
 
 def test_a_forced_language_reaches_the_request_the_document_and_the_run_key(
@@ -1233,15 +1302,10 @@ def test_an_english_stretch_in_a_mandarin_recording_keeps_english_text_rules(
 
 
 def test_stretch_languages_change_only_the_asr_key_of_a_recording_with_a_chunked_engine(session_kit) -> None:
-    def asr_key(kind: pipeline.SourceKind, engine: str) -> tuple[str, str]:
-        decoding = pipeline._Decoding(settings(session_kit, kind, engine=engine), "src", session_kit.out / "src", None)
-        request = decoding.asr_request()
-        return decoding.asr_key(request, None), pipeline._key("asr", {"request": without_wav(request.fingerprint())})
-
     for kind, engine in (("youtube", "w-runs-lid"), ("youtube", "w-prod"), ("recording", "w-prod")):
-        key, plain = asr_key(kind, engine)  # type: ignore[arg-type]
+        key, plain = asr_keys(session_kit, kind, engine=engine)  # type: ignore[arg-type]
         assert key == plain, (kind, engine)
-    key, plain = asr_key("recording", "w-runs-lid")
+    key, plain = asr_keys(session_kit, "recording", engine="w-runs-lid")
     assert key != plain
 
 

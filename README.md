@@ -31,7 +31,7 @@ There is no PyPI release yet, so the install comes from the repository. The part
 |---|---|
 | YouTube with the default engine (`w-prod`, mlx-whisper large-v3) | `whisper` |
 | Recordings: ASR plus speaker diarization, which labels who speaks when | `whisper` and `asr` |
-| The chunked Whisper engines `w-vad`, `w-vad-lid` and `w-runs-lid`, or diarizing YouTube videos with the default engine | `whisper` and `asr` |
+| The chunked Whisper engines `w-vad`, `w-vad-lid` and `w-runs-lid` (the default for recordings once `[asr] languages` is set), or diarizing YouTube videos with the default engine | `whisper` and `asr` |
 | The other engines (`q-base`, `q-ctx`, `f-aed`, `m-4bit`) | `asr` |
 
 To work on ytverbatim itself, use a checkout and run it through uv:
@@ -166,7 +166,7 @@ Nothing is transcribed again and names are never sent to an LLM. Re-diarizing dr
 
 `--language CODE` forces one spoken language for any source (`zh`, `en`, …). `[asr] languages = ["zh", "en"]` limits the languages a language-detecting engine may choose from, for recordings only.
 
-The default engine for recordings is `w-prod`: it decodes the whole file and detects one language for it, so with the defaults a recording has one language and `[asr] languages` has no effect. Per-stretch languages appear only with an engine that detects each stretch, such as `--engine w-runs-lid`. Each stretch is then normalized, punctuated and given digit numerals by its own language's rules. `--engine ID` picks the engine for every source; the ids are in [docs/recordings.md](docs/recordings.md#languages).
+A recording whose languages you name gets per-stretch languages: with `[asr] languages` set (for mixed Mandarin and English, `languages = ["zh", "en"]`), the default engine for recordings is `w-runs-lid`, which detects each stretch's language among those and decodes it with that language. Each stretch is then normalized, punctuated and given digit numerals by its own language's rules. Without `[asr] languages` the default is `w-prod`, which decodes the whole file and detects one language for it, from the start of the file. YouTube always defaults to `w-prod`. `--engine ID` picks the engine for every source; the ids and the evidence are in [docs/recordings.md](docs/recordings.md#languages).
 
 ## Glossary
 
@@ -275,7 +275,7 @@ The stable surface is every name in `ytverbatim.__all__`, plus the modules `ytve
 
 `process` takes a YouTube video or a local audio or video file and returns a `Result`: the `document`, the exact `context.json` bytes (`json_bytes`), its `directory`, the `markdown_path`, the `video_path` when the video track was requested, and what was `reused`. It takes any object that satisfies `ytverbatim.LLMClient` as `llm=`. Without one it uses the configured LLM, ChatGPT by default, and raises `ConfigError` until `ytverbatim login` has run once; `process(url, Options(llm=LLMOptions(provider="none")))` runs without an LLM. The library never opens a browser unless you pass `interactive=True`.
 
-The default engine needs `ytverbatim[whisper]`, and the other engines and the diarizer need `ytverbatim[asr]`, so recordings, which are diarized by default, need `ytverbatim[whisper,asr]`. `ytverbatim.check_dependencies(options, source="youtube")` (or `"recording"`) raises `DependencyError` naming the missing extra, and `process` runs the same check before any request.
+The default engine, `w-prod`, needs `ytverbatim[whisper]`, and the other engines and the diarizer need `ytverbatim[asr]`, so recordings, which are diarized by default, need `ytverbatim[whisper,asr]`. `ytverbatim.check_dependencies(options, source="youtube")` (or `"recording"`) raises `DependencyError` naming the missing extra, and `process` runs the same check before any request.
 
 Also in the library, all described in [docs/library.md](docs/library.md): `expand` for playlist and channel ids, the opt-in `video.mp4` track, `quantity_tokens`, and the errors, each with a `fix` and a `stage`.
 
