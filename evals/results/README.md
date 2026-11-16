@@ -96,3 +96,10 @@ and rerun `correct` from scratch.
   local winner's own punctuation is therefore not measured.
 - The intervals cover edit sampling and labelling, not variation between videos or channels; recall (errors
   correction missed) is not measured.
+
+# Loop-repair results
+
+Each `loops-<date>.md` here is written by hand from the JSON that `evals.run_recordings_asr rescore` prints. It holds
+error counts, time spans and word counts on the public meeting corpora, never transcript or reference text. The
+recordings flagged with `decoder_anomaly` are moved out of the live layout into a dated `asr-loops-before-<date>`
+folder, decoded again with `run --recordings`, and compared with `rescore --before`; the rules are in the file.
