@@ -440,6 +440,17 @@ def test_overlapping_flags_keep_text_intact_and_order_deterministically(make_doc
     ]
 
 
+def test_a_localized_decoder_anomaly_footnotes_only_the_words_inside_the_span(make_doc, seg, flag) -> None:
+    text = "Alpha beta gamma. Delta epsilon zeta."
+    note = "the decoder looped or stalled at 0:03-0:06 and it could not be repaired"
+    body = render_markdown(
+        make_doc([seg(text, 0.0, 6.0, flags=[flag("decoder_anomaly", text, "Delta epsilon zeta.", note=note)])])
+    )
+    assert "Alpha beta gamma. Delta epsilon zeta.[^1]" in body
+    assert body.count("[^") == 2
+    assert f"[^1]: 00:00 — decoder_anomaly: {note}" in body
+
+
 def test_flag_touching_the_segment_end_and_adjacent_segment(make_doc, seg, flag) -> None:
     first, second = "ends here", "starts there"
     doc = make_doc(
