@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     import numpy as np
     from numpy.typing import NDArray
 
-ChunkFlag = Literal["forced_cut", "token_cap_hit", "decoder_anomaly", "empty_output", "redecoded"]
+ChunkFlag = Literal["forced_cut", "token_cap_hit", "decoder_anomaly", "empty_output", "redecoded", "prompt_echo"]
 LanguagePolicy = Literal["auto", "pass", "detect"]
 
 
@@ -72,7 +72,11 @@ class AsrContext:
 
 @dataclass(frozen=True, slots=True)
 class RawChunk:
-    """One decode. Word times are relative to the start of the audio handed to the engine."""
+    """One decode. Word times are relative to the start of the audio handed to the engine.
+
+    `flags` are what the engine itself noticed, such as a prompt echo it decoded again; the worker adds them to the
+    row's own.
+    """
 
     text: str
     language: str | None = None
@@ -80,6 +84,7 @@ class RawChunk:
     max_tokens: int | None = None
     confidence: float | None = None
     words: tuple[Word, ...] = ()
+    flags: tuple[ChunkFlag, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

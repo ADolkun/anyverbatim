@@ -80,7 +80,7 @@ def test_the_language_id_variants_share_the_whisper_control_weights_and_differ_i
             control.spec.revision,
             control.factory,
         )
-        assert entry.variant == {"mode": mode, "language": "detect"}
+        assert entry.variant == {"mode": mode, "language": "detect", "zh_prompt": False}
     assert [registry.get(i).decodes_runs() for i in ("w-prod", "w-vad", "w-vad-lid", "w-runs-lid")] == [
         False,
         False,

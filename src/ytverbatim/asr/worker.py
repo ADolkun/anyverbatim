@@ -195,6 +195,7 @@ def _row(hypothesis: str, file: str, index: int, unit: DecodeUnit, guarded: Guar
     flags: list[ChunkFlag] = ["forced_cut"] if chunk.forced_cut else []
     if raw.generated_tokens is not None and raw.max_tokens is not None and raw.generated_tokens >= raw.max_tokens:
         flags.append("token_cap_hit")
+    flags.extend(raw.flags)
     flags.extend(guarded.flags)
     return ChunkHypothesis(
         hypothesis=hypothesis,

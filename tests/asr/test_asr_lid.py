@@ -222,12 +222,13 @@ def test_detection_needs_a_chunked_spec() -> None:
         WorkerRequest(engine=whole, out_dir="/out", files=())
 
 
-# Digests of these requests at ytverbatim a3b4b2a, before `languages` existed; a change re-decodes every video.
+# Digests of these requests at ytverbatim a3b4b2a, before `languages` existed; a change re-decodes every video. w-vad's
+# moved once, deliberately, when the chunked Whisper engines stopped sending the Mandarin prompt.
 PINNED = {
     ("w-prod", True): "1221a3727a6ecbac4f22b80d412a787aca952b696b07c90e0b4937cf970ab635",
-    ("w-vad", True): "9c303e87e28cac158d4968ca28ac2648fff050f59f454b3d45753c4a97106413",
+    ("w-vad", True): "5e2287329479abaf3fbb93b5dcbb1ded37b67ca5209516d0b8c5e115311e192d",
     ("w-prod", False): "53817feee8b08b35f5df4d522bdc4b3b1103022b20a06e238acf7f6d83cfaa99",
-    ("w-vad", False): "436552e20c793972f5814f256fff92e5b7d718905901fe0db69e0d4c292c985e",
+    ("w-vad", False): "cd784da7526bd03b403cdd54a36a28a6d97f632dfc9b9ad33981af517ff7f4b8",
 }
 
 
