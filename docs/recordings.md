@@ -273,7 +273,7 @@ Both need `ytverbatim[whisper,asr]`.
 
 When a recording has stretches in more than one language, each stretch is treated by its own language:
 
-- Simplified-Chinese conversion and Chinese fillers apply to the Chinese stretches.
+- Simplified-Chinese conversion, full-width punctuation next to Chinese characters, and Chinese fillers apply to the Chinese stretches.
 - Punctuation follows each language's own style.
 - [Chinese numerals as digits](../README.md#numerals) apply to the Chinese stretches.
 - The correction and number-check prompts say the transcript mixes languages and that every word stays in the language it was spoken in.
@@ -403,7 +403,7 @@ Set these in `~/.config/ytverbatim/config.toml`. A command-line option wins for 
 | `[text] glossary` | `[]` | Terms for correction to prefer, at most 20. `--glossary`. |
 | `[text] numeric_second_opinion` | `"off"` | An engine id whose reading of the numbers is checked against the first. It must decode chunk by chunk and re-decode single spans, such as `w-vad`; `w-prod` and `w-runs-lid` are refused. |
 | `[text] correct` | on with an LLM | `--correct/--no-correct`. |
-| `[text] script` | `"zh-Hans"` | `"keep"` leaves the script as recognised. |
+| `[text] script` | `"zh-Hans"` | `"keep"` leaves the script and punctuation as recognised. |
 | `[text] fillers` | `"keep"` | `"remove"` drops fillers. |
 | `[text] numerals` | `"digits"` | `"keep"` leaves Chinese numerals as recognised. |
 | `[llm] provider`, `model`, `effort` | `chatgpt` | `--llm PROVIDER:MODEL`, or `--llm none`. |

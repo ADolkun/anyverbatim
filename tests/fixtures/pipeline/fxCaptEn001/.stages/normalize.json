@@ -1,6 +1,6 @@
 {
-  "stage_version": "1+clean-v1+stages-v1",
-  "input_hash": "ee262a0316d54cc8ab6359ba847005b26a74243d588c1d3b24707eb1ba8a2b4f",
+  "stage_version": "1+clean-v2+stages-v1",
+  "input_hash": "62972b8de88c02b9b49a2b8724074422aca4e118782a49d1aa74108706385d98",
   "output": {
     "stretches": [
       {

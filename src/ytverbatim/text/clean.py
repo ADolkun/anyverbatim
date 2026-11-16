@@ -19,7 +19,7 @@ import opencc
 from ytverbatim.text.segment import is_zh
 
 # Part of the normalize stage key: bump it on any rule change so stored results are redone.
-VERSION = "clean-v1"
+VERSION = "clean-v2"
 
 Script = Literal["zh-Hans", "keep"]
 Fillers = Literal["keep", "remove"]
@@ -41,8 +41,45 @@ _PUNCTUATION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"。{2,}"), "。"),
     (re.compile(r"，{2,}"), "，"),
 )
+# Chinese text writes its marks full-width (GB/T 15834). A mark converts when a Chinese character is next to it, so
+# numbers (3.5, 1,000, 10:30), Latin-only stretches and URLs, which have none, stay as written. Both patterns match
+# horizontal whitespace only: a line break is never swallowed.
+_HAN = re.compile("[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_FULL_WIDTH = {",": "，", "?": "？", "!": "！", ":": "：", ";": "；", ".": "。"}
+_FULL_WIDTH_MARKS = "".join(_FULL_WIDTH.values()) + "、…"
+_MARK = re.compile(r"(?P<lead>[^\S\n]*)(?P<mark>[,?!:;.])(?P<trail>[^\S\n]*)")
+_ELLIPSIS = re.compile(r"[^\S\n]*(?:\.{3,}|。{3,})[^\S\n]*")
 _SPACES = re.compile(r"\s{2,}")
 _REPEATED_COMMA = re.compile(r"([,，])(?:\s*[,，])+")
+
+
+def _is_han(char: str) -> bool:
+    return _HAN.fullmatch(char) is not None
+
+
+def _ellipsis(match: re.Match[str]) -> str:
+    text = match.string
+    left = text[: match.start()].rstrip()[-1:]
+    right = text[match.end() :].lstrip()[:1]
+    return "……" if _is_han(left) or _is_han(right) else match[0]
+
+
+def _full_width(match: re.Match[str]) -> str:
+    text = match.string
+    before, after = text[: match.start()], text[match.end() :]
+    mark = match["mark"]
+    left = before.rstrip()[-1:]
+    # Marks that follow each other ("?!", ",,") are read through, so a run converts whole.
+    right = after.lstrip(" \t,?!:;")[:1]
+    if mark == ".":
+        # A period ends a clause only before a break; "..." and "3.5" keep theirs because no Chinese character precedes.
+        sentence_end = not after or bool(match["trail"]) or after[0] == "\n" or _is_han(after[0])
+        convert = _is_han(left) and sentence_end
+    else:
+        convert = _is_han(left) or (left != "" and left in _FULL_WIDTH_MARKS) or _is_han(right)
+    if not convert:
+        return match[0]
+    return _FULL_WIDTH[mark]
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +125,8 @@ def normalize(text: str, language: str, *, script: Script, fillers: Fillers) -> 
 
     if is_zh(language) and script == "zh-Hans":
         step(to_simplified(current))
+        apply(_ELLIPSIS, _ellipsis)
+        apply(_MARK, _full_width)
     if fillers == "remove":
         if is_zh(language):
             for pattern, replacement in _ZH_FILLER_RULES:
