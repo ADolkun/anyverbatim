@@ -23,13 +23,15 @@ RESULT: dict[str, Any] = {
     "language": "zh",
     "segments": [
         {
+            "seek": 0,
+            "text": " 示例，你好",
             "words": [
                 {"word": "示例，", "start": 0.5, "end": 1.0, "probability": 0.75},
                 {"word": "你好", "start": 1.0, "end": 1.5, "probability": 0.25},
                 {"word": "漏", "start": None, "end": None, "probability": 0.9},
-            ]
+            ],
         },
-        {"words": [{"word": "x", "start": 2.0, "end": 2.5}]},
+        {"seek": 0, "text": "x", "words": [{"word": "x", "start": 2.0, "end": 2.5}]},
     ],
 }
 
@@ -193,7 +195,13 @@ def test_every_mode_makes_the_production_call_and_only_whole_file_sends_the_zh_p
     }
 
 
-ECHO_SEGMENTS = [{"words": [{"word": "请使用简体中文并加上标点符号。", "start": 0.0, "end": 1.0, "probability": 0.9}]}]
+def windows(*texts: tuple[int, str]) -> dict[str, Any]:
+    """A transcribe() result with one segment per `(seek, text)`, as mlx-whisper reports its windows."""
+    segments = [
+        {"seek": seek, "text": text, "words": [{"word": text, "start": seek / 100, "end": seek / 100 + 1.0}]}
+        for seek, text in texts
+    ]
+    return {"text": "".join(text for _, text in texts), "language": "zh", "segments": segments}
 
 
 @pytest.mark.parametrize(
@@ -201,13 +209,15 @@ ECHO_SEGMENTS = [{"words": [{"word": "请使用简体中文并加上标点符号
     [
         "请使用简体中文并加上标点符号。",
         " 以下是普通话内容，请使用简体中文并加上标点符号。",
+        "使用简体中文并加上标点符号。我觉得这个方案可以",
+        "因此,您可以使用简体中文并加上标点符号。",
+        "请帮助翻译,并且使用简体中文并加上标点符号。",
         "请使用简体中文 并加上标点符号",
-        "请使用简体中文，并加上标点符号！今天我们聊聊利润",
-        "大家好。请使用简体中文并加上标点符号",
+        "大家好。请使用简体中文，并加上标点符号！今天我们聊聊利润",
     ],
 )
 def test_a_whole_file_decode_that_echoes_the_prompt_is_decoded_again_without_it(echo: str, fake: FakeWhisper) -> None:
-    fake.results = [{"text": echo, "language": "zh", "segments": ECHO_SEGMENTS}, RESULT]
+    fake.results = [windows((0, echo), (3000, "后面是真正的内容")), RESULT]
     raw = loaded("w-prod", fake).transcribe(AUDIO, language="zh", context=None)
     assert [kwargs["initial_prompt"] for _, kwargs in fake.calls] == [whisper_mlx.ZH_INITIAL_PROMPT, None]
     first, second = (kwargs for _, kwargs in fake.calls)
@@ -217,8 +227,22 @@ def test_a_whole_file_decode_that_echoes_the_prompt_is_decoded_again_without_it(
     assert [w.text for w in raw.words] == ["示例，", "你好", "x"]
 
 
+def test_the_sentence_said_after_the_first_window_is_not_an_echo(fake: FakeWhisper) -> None:
+    fake.result = windows((0, "大家好"), (3000, "请使用简体中文并加上标点符号。"))
+    raw = loaded("w-prod", fake).transcribe(AUDIO, language="zh", context=None)
+    assert len(fake.calls) == 1
+    assert raw.flags == ()
+
+
+def test_a_result_without_window_offsets_is_checked_whole(fake: FakeWhisper) -> None:
+    fake.results = [{"text": "大家好。使用简体中文并加上标点符号。", "language": "zh", "segments": []}, RESULT]
+    raw = loaded("w-prod", fake).transcribe(AUDIO, language="zh", context=None)
+    assert len(fake.calls) == 2
+    assert raw.flags == ("prompt_echo",)
+
+
 def test_a_decode_that_does_not_echo_the_prompt_is_kept(fake: FakeWhisper) -> None:
-    fake.result = {"text": "请使用这个方法，加上标点", "language": "zh", "segments": []}
+    fake.result = windows((0, "请使用这个方法，加上标点"))
     raw = loaded("w-prod", fake).transcribe(AUDIO, language="zh", context=None)
     assert len(fake.calls) == 1
     assert (raw.text, raw.flags) == ("请使用这个方法，加上标点", ())
@@ -226,14 +250,20 @@ def test_a_decode_that_does_not_echo_the_prompt_is_kept(fake: FakeWhisper) -> No
 
 @pytest.mark.parametrize(("hypothesis", "language"), [("w-vad", "zh"), ("w-runs-lid", "zh"), ("w-prod", "en")])
 def test_an_unprompted_decode_is_never_decoded_again(hypothesis: str, language: str, fake: FakeWhisper) -> None:
-    fake.result = {"text": whisper_mlx.ZH_INITIAL_PROMPT, "language": "zh", "segments": []}
+    fake.result = windows((0, whisper_mlx.ZH_INITIAL_PROMPT))
     raw = loaded(hypothesis, fake).transcribe(AUDIO, language=language, context=None)
     assert len(fake.calls) == 1
     assert raw.flags == ()
 
 
-def test_the_worker_records_the_prompt_echo_on_the_row(tmp_path: Path, fake: FakeWhisper) -> None:
-    fake.results = [{"text": whisper_mlx.ZH_INITIAL_PROMPT, "language": "zh", "segments": ECHO_SEGMENTS}, RESULT]
+@pytest.mark.parametrize(
+    ("again", "text", "flags"),
+    [(RESULT, "示例，你好", ("prompt_echo",)), (windows(), "", ("prompt_echo", "empty_output"))],
+)
+def test_the_worker_records_the_prompt_echo_on_the_row(
+    again: dict[str, Any], text: str, flags: tuple[str, ...], tmp_path: Path, fake: FakeWhisper
+) -> None:
+    fake.results = [windows((0, whisper_mlx.ZH_INITIAL_PROMPT)), again]
     wav = write_silence(tmp_path / "short.wav", 3.0)
     out = tmp_path / "out"
     request = WorkerRequest(
@@ -242,7 +272,7 @@ def test_the_worker_records_the_prompt_echo_on_the_row(tmp_path: Path, fake: Fak
     worker.run_request(request, guard=worker.default_guard(request))
     (line,) = (out / HYPOTHESES_FILE).read_text(encoding="utf-8").splitlines()
     row = ChunkHypothesis.model_validate_json(line)
-    assert (row.text, row.flags) == ("示例，你好", ("prompt_echo",))
+    assert (row.text, row.flags) == (text, flags)
 
 
 def test_only_the_chunked_engines_decode_keys_moved() -> None:

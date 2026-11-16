@@ -5,11 +5,13 @@ Every mode makes the same call. `whole_file` hands over the entire recording and
 mlx-whisper windows like a whole file.
 
 Only `whole_file` sends the Mandarin punctuation prompt, and only when the language is known to be Mandarin. With
-`condition_on_previous_text=False` mlx-whisper feeds the prompt to the first 30 s window of each call, and on short
-audio Whisper often transcribes the prompt's tail instead of the speech. A whole-file decode exposes one window per
-file; a decode that echoes the prompt is decoded once more without it and flagged `prompt_echo`. `chunk` and `runs`
-make a call per chunk or run, so every one would be exposed; they never send the prompt, and the `normalize` and
-`punctuate` stages already give their text Simplified characters and punctuation.
+`condition_on_previous_text=False` mlx-whisper feeds the prompt to the first 30 s window of each call only. When that
+window has little clear speech (a music intro, crosstalk, short audio), Whisper often transcribes the prompt instead,
+losing the window's speech, however long the file. A whole-file decode has one such window, so a decode whose first
+window echoes the prompt is decoded again, whole and once, without it and flagged `prompt_echo`: twice the ASR time
+for that file, traded for its accuracy. `chunk` and `runs` make a call per chunk or run, so every one would be exposed;
+they never send the prompt. Their text gets punctuation from the `punctuate` stage and, under the default
+`[text] script` of `zh-Hans`, Simplified characters from `normalize`.
 """
 
 import importlib
@@ -38,8 +40,9 @@ Mode = Literal["whole_file", "chunk", "runs"]
 # A single fixed temperature would disable Whisper's fallback re-decode and let a repetition loop run unchecked.
 TEMPERATURE_SCHEDULE = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
 ZH_INITIAL_PROMPT = "以下是普通话内容，请使用简体中文并加上标点符号。"
-# What Whisper echoes of the prompt on short audio; the whole prompt contains it, so it also catches a full echo.
-_PROMPT_ECHO = "请使用简体中文并加上标点符号"
+# The part of the prompt every echo seen in evaluation contains, including the full prompt, a dropped leading 请 and
+# paraphrases around it.
+_PROMPT_ECHO = "使用简体中文并加上标点符号"
 _WEIGHT_FILES = ("weights.safetensors", "weights.npz")
 
 
@@ -56,6 +59,8 @@ class _WhisperWord(TypedDict, total=False):
 
 
 class _WhisperSegment(TypedDict, total=False):
+    seek: int
+    text: str
     words: list[_WhisperWord]
 
 
@@ -167,7 +172,7 @@ class WhisperEngine:
         prompted = self.mode == "whole_file" and hint is not None and hint.startswith("zh")
         result = self._decode(audio, hint, ZH_INITIAL_PROMPT if prompted else None)
         flags: tuple[ChunkFlag, ...] = ()
-        if prompted and echoes_prompt(str(result.get("text", ""))):
+        if prompted and echoes_prompt(result):
             result = self._decode(audio, hint, None)
             flags = ("prompt_echo",)
         words = _words(cast(Sequence[_WhisperSegment], result.get("segments") or ()))
@@ -199,8 +204,17 @@ class WhisperEngine:
             )
 
 
-def echoes_prompt(text: str) -> bool:
-    """Whether `text` contains the prompt's tail, compared without punctuation or whitespace."""
+def echoes_prompt(result: Mapping[str, Any]) -> bool:
+    """Whether the first window of a transcribe() result echoes the prompt, ignoring punctuation and whitespace.
+
+    Only window 0 sees the prompt, so a speaker saying the sentence later is not an echo. A result whose segments
+    carry no `seek` is checked whole.
+    """
+    segments = cast(Sequence[_WhisperSegment], result.get("segments") or ())
+    if any("seek" in segment for segment in segments):
+        text = "".join(segment.get("text", "") for segment in segments if segment.get("seek") == 0)
+    else:
+        text = str(result.get("text", ""))
     return _PROMPT_ECHO in _bare(text)
 
 
