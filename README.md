@@ -133,7 +133,7 @@ The stages run in this order:
 1. Metadata, captions and audio for YouTube, or the file's audio for a recording.
 2. ASR (or, with `--source captions`, the manual caption track).
 3. For a diarized source, speaker diarization (see [Speakers](#speakers)).
-4. Normalize: Simplified Chinese by default (`[text] script = "keep"` leaves the script alone). Fillers are kept unless `[text] fillers = "remove"`.
+4. Normalize: Simplified Chinese by default, with ASCII marks next to Chinese characters written full-width (`[text] script = "keep"` leaves both alone). Fillers are kept unless `[text] fillers = "remove"`.
 5. Punctuation, only where the transcript has too few sentence marks.
 6. Correction, whenever the text stages have an LLM (`--no-correct` or `[text] correct = false` turns it off).
 7. Numeric verification against captions in the transcript's language. Without such captions or a second opinion the numbers rest on the transcript alone, and a warning says so (recordings have no captions).

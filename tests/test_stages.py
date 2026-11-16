@@ -120,6 +120,17 @@ def test_flags_stay_on_their_characters_across_normalize_and_punctuation() -> No
     assert doc.transcript.punctuation == "llm" and doc.transcript.script == "zh-Hans"
 
 
+def test_flags_stay_on_their_characters_when_marks_become_full_width() -> None:
+    source = source_of([row("OK, 这个GAAP数据很好 , 然后估值也不低.", 0.0, 8.0)])
+    (stretch,) = source.stretches
+    stretch = stretch.model_copy(
+        update={"flags": (flag_on(stretch.text, "GAAP数据"), flag_on(stretch.text, "估值", "low_confidence"))}
+    )
+    (normal,) = normalize((stretch,), "zh", script="zh-Hans", fillers="keep")
+    assert normal.text == "OK，这个GAAP数据很好，然后估值也不低。"
+    assert [normal.text[f.char_start : f.char_end] for f in normal.flags] == ["GAAP数据", "估值"]
+
+
 def test_a_corrected_word_is_interpolated_while_the_rest_keeps_engine_times() -> None:
     pieces = [" The", " GAP", " margin", " rose."]
     words = tuple(Word(text=p, start=1.0 + i, end=1.5 + i, conf=0.9) for i, p in enumerate(pieces))

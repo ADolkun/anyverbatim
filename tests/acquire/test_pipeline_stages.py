@@ -23,7 +23,7 @@ from ytverbatim.errors import ConfigError, DependencyError, EngineError, LLMUnav
 from ytverbatim.llm import claude_cli
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from ytverbatim.pipeline import ProgressEvent, VideoResult, process_many
-from ytverbatim.text import guards, numbers, numerals, numeric
+from ytverbatim.text import clean, guards, numbers, numerals, numeric
 from ytverbatim.text import punctuate as punctuate_module
 from ytverbatim.ytdlp.types import Signal
 
@@ -786,6 +786,26 @@ def test_a_module_version_bump_redoes_its_stage_and_the_document(session_kit, wo
         "numeric": True,
         "numerals": True,
     }
+
+
+def test_a_normalize_rule_bump_redoes_only_normalize_when_the_text_comes_out_the_same(
+    session_kit, worker, monkeypatch
+) -> None:
+    yt = zh_yt(session_kit)
+    llm = FakeLLM()
+    run(session_kit, yt, llm=llm)
+    asked = len(llm.requests)
+    monkeypatch.setattr(clean, "VERSION", clean.VERSION + "-bumped")
+    _, results, _ = run(session_kit, yt, llm=llm)
+    assert stored(results[0]) == {
+        "asr": True,
+        "normalize": False,
+        "punctuate": True,
+        "correct": True,
+        "numeric": True,
+        "numerals": True,
+    }, "the later stages are keyed by the normalized text, which no rule changed"
+    assert len(llm.requests) == asked
 
 
 @pytest.mark.parametrize("module", [numbers, guards])
