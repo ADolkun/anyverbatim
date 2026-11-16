@@ -20,6 +20,7 @@ from ytverbatim.asr.models import (
     ERROR_FILE,
     HYPOTHESES_FILE,
     METRICS_FILE,
+    AnomalySpan,
     ChunkHypothesis,
     FileJob,
     RunMetrics,
@@ -211,6 +212,9 @@ def _row(hypothesis: str, file: str, index: int, unit: DecodeUnit, guarded: Guar
         max_tokens=raw.max_tokens,
         confidence=raw.confidence,
         flags=tuple(dict.fromkeys(flags)),
+        anomaly_spans=tuple(
+            AnomalySpan(start=chunk.start + start, end=chunk.start + end) for start, end in guarded.anomaly_spans
+        ),
     )
 
 
@@ -285,15 +289,15 @@ def _tiles(rows: Sequence[ChunkHypothesis], chunks: Sequence[Chunk]) -> bool:
 
 
 def default_guard(request: WorkerRequest) -> Guard | None:
-    """Return the guard `main` runs: none when the request opts out, flag-only for whole-file decoding.
+    """Return the guard `main` runs: none when the request opts out, else one scoped to how the engine decodes.
 
-    A whole-file hypothesis is the production control, so re-decoding part of it would stop it being one; a runs
-    hypothesis decodes each run with those same whole-file semantics.
+    A whole-file hypothesis and a runs hypothesis each decode many of the engine's windows in one call, so the guard
+    repairs the failed window rather than the whole call; a chunked one decodes at most one window per call.
     """
     if not request.quality_guard:
         return None
     engine = request.engine
-    return QualityGuard(redecode=engine.spec.max_chunk_s is not None and not engine.decodes_runs())
+    return QualityGuard(whole_call=engine.spec.max_chunk_s is None or engine.decodes_runs())
 
 
 def _claim_output(out: Path, request: WorkerRequest) -> None:

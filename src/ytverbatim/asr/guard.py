@@ -1,17 +1,25 @@
-"""The default quality guard: spot a failed decode and decode the chunk again once, in two halves.
+"""The default quality guard: spot a failed decode and decode the failed part again once, in two halves.
 
-A chunk is one contiguous slice of audio, so the replacement is a whole chunk too: the guard never splices a
-re-decode into the original text, and there is no anchor to check. A whole-file hypothesis is only flagged: it is
-the production control, and re-decoding parts of it would make it something production never ran.
+A chunk is one contiguous slice of audio, so its replacement is a whole chunk too: the guard never splices a
+re-decode into a chunk's original text, and there is no anchor to check.
+
+A whole-call decode (a whole file, or a same-language run) is a sequence of the engine's own decode windows, and a
+decoder loop stays inside the window it started in. When the whole call fails, each window that fails on its own is
+decoded again like a chunk, without the prompt and in the call's language, and spliced back by the windows' word
+counts. A window's edges are cuts the decoder already made, so the splice adds none. A window still failing after
+that is reported as an anomaly span; a failure no single window explains flags the whole decode, as before.
 """
 
 import unicodedata
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
+from functools import reduce
+from itertools import accumulate, pairwise
 from typing import Literal
 
 from ytverbatim.asr.audio import SAMPLE_RATE
 from ytverbatim.asr.chunks import FRAME_S
-from ytverbatim.asr.protocol import ChunkFlag, ChunkInput, Engine, GuardedChunk, RawChunk
+from ytverbatim.asr.protocol import ChunkFlag, ChunkInput, Engine, GuardedChunk, RawChunk, Window, WindowDecoder
 from ytverbatim.asr.quality import (
     COMPRESSION_RATIO_THRESHOLD,
     Unit,
@@ -23,7 +31,7 @@ from ytverbatim.asr.quality import (
     nonlexical_runs,
 )
 from ytverbatim.contract.models import Word
-from ytverbatim.errors import DependencyError
+from ytverbatim.errors import DependencyError, EngineError
 
 try:
     import numpy as np
@@ -82,29 +90,31 @@ class QualityGuard:
 
     At most one re-decode happens per chunk. The halves replace the whole chunk when the result passes; when it
     still fails the better of the two attempts is kept and flagged: `empty_output` when it has no text,
-    `decoder_anomaly` for any other failure. With `redecode=False` the first decode is only flagged.
+    `decoder_anomaly` for any other failure.
+
+    With `whole_call=True` the decode is a whole file or run: the same re-decode applies to each of its windows that
+    fails on its own, and a decode without windows is only flagged.
     """
 
-    def __init__(self, *, redecode: bool = True) -> None:
-        self._redecode = redecode
+    def __init__(self, *, whole_call: bool = False) -> None:
+        self._whole_call = whole_call
 
     def __call__(self, engine: Engine, chunk: ChunkInput, raw: RawChunk) -> GuardedChunk:
         duration = len(chunk.audio) / SAMPLE_RATE
         first = _Attempt(raw, _hit_cap(raw), triggers(raw, duration=duration))
         if not first.triggers:
             return GuardedChunk(raw)
-        cut = _split_point(chunk.audio) if self._redecode else None
-        if cut is None:
-            return _verdict(first)
-        halves = (
-            engine.transcribe(chunk.audio[:cut], language=chunk.language, context=chunk.context),
-            engine.transcribe(chunk.audio[cut:], language=chunk.language, context=chunk.context),
+        if self._whole_call:
+            return _repair_windows(engine, chunk, first, duration)
+        kept = _redecode(
+            chunk.audio,
+            first,
+            lambda audio: engine.transcribe(audio, language=chunk.language, context=chunk.context),
+            _join,
         )
-        merged = _merge(*halves, offset_s=cut / SAMPLE_RATE, duration=duration, fallback_language=raw.language)
-        capped = any(_hit_cap(half) for half in halves)
-        again = _Attempt(merged, capped, triggers(merged, duration=duration, capped=capped))
-        # On a tie the re-decode wins: its damage is bounded by half a chunk.
-        verdict = _verdict(min((again, first), key=_badness))
+        if kept is None:
+            return _verdict(first)
+        verdict = _verdict(kept)
         # Marked whichever attempt is kept, so trigger rates stay measurable with the guard on.
         return GuardedChunk(verdict.raw, ("redecoded", *verdict.flags))
 
@@ -114,6 +124,124 @@ class _Attempt:
     raw: RawChunk
     capped: bool
     triggers: tuple[Trigger, ...]
+    # Index into `raw.words` where the second half starts, for an attempt merged from two halves.
+    seam: int | None = None
+
+
+def _redecode(
+    audio: "NDArray[np.float32]",
+    first: _Attempt,
+    decode: Callable[["NDArray[np.float32]"], RawChunk],
+    join: Callable[[str, str], str],
+) -> _Attempt | None:
+    """Decode `audio` again as two halves and return the better attempt; None when it is too short to split."""
+    cut = _split_point(audio)
+    if cut is None:
+        return None
+    duration = len(audio) / SAMPLE_RATE
+    halves = (decode(audio[:cut]), decode(audio[cut:]))
+    merged = _merge(
+        *halves, offset_s=cut / SAMPLE_RATE, duration=duration, fallback_language=first.raw.language, join=join
+    )
+    capped = any(_hit_cap(half) for half in halves)
+    again = _Attempt(merged, capped, triggers(merged, duration=duration, capped=capped), len(halves[0].words))
+    # On a tie the re-decode wins: its damage is bounded by half the audio.
+    return min((again, first), key=_badness)
+
+
+def _repair_windows(engine: Engine, chunk: ChunkInput, first: _Attempt, duration: float) -> GuardedChunk:
+    raw = first.raw
+    if not _fails(first) or not raw.windows:
+        return _verdict(first)
+    if not isinstance(engine, WindowDecoder):
+        raise EngineError("the engine reports decode windows but cannot decode one again (no transcribe_window)")
+    bounds = list(accumulate((window.words for window in raw.windows), initial=0))
+    if bounds[-1] != len(raw.words):
+        raise EngineError(f"the engine's decode windows hold {bounds[-1]} words, but it returned {len(raw.words)}")
+    windows = [(window, raw.words[lo:hi]) for window, (lo, hi) in zip(raw.windows, pairwise(bounds), strict=True)]
+    own = [_window_attempt(window, words, raw.language) for window, words in windows]
+    if not any(_fails(attempt) for attempt in own):
+        return _verdict(first)
+
+    def decode(audio: "NDArray[np.float32]") -> RawChunk:
+        # The call's language even when it had no hint: the call detected it once, and a window must not re-detect.
+        half = engine.transcribe_window(audio, language=raw.language)
+        # Judged on its words, as the original window is, because the words are what the splice writes.
+        return replace(half, text=_text_of(half.words))
+
+    pieces: list[list[Word]] = [[]]
+    outside: list[Word] = []
+    spans: list[tuple[float, float]] = []
+    redecoded = False
+    for (window, words), attempt in zip(windows, own, strict=True):
+        kept = attempt
+        if _fails(attempt):
+            audio = chunk.audio[round(window.start * SAMPLE_RATE) : round(window.end * SAMPLE_RATE)]
+            again = _redecode(audio, attempt, decode, lambda left, right: _seam(left, right).strip())
+            redecoded = redecoded or again is not None
+            kept = attempt if again is None else again
+        placed = words if kept.seam is None else _shifted(kept.raw.words, window.start)
+        if _fails(kept):
+            spans.append((window.start, window.end))
+        else:
+            outside.extend(placed)
+        if kept.seam is None:
+            pieces[-1].extend(placed)
+        else:
+            pieces.extend([list(placed[: kept.seam]), list(placed[kept.seam :]), []])
+    windows_fail = bool(spans)
+    rest = RawChunk(_text_of(outside).strip(), words=tuple(outside))
+    if spans and _failing(triggers(rest, duration=duration)):
+        # Something outside the failing windows trips the checks too, so they do not say where the failure lies.
+        spans = []
+    if not redecoded:
+        return GuardedChunk(raw, _verdict(first).flags, tuple(spans))
+    final = _spliced(raw, pieces) if len(pieces) > 1 else raw
+    verdict = _verdict(_Attempt(final, _hit_cap(final), triggers(final, duration=duration)))
+    anomaly: tuple[ChunkFlag, ...] = ("decoder_anomaly",) if windows_fail else ()
+    return GuardedChunk(final, tuple(dict.fromkeys(("redecoded", *anomaly, *verdict.flags))), tuple(spans))
+
+
+def _window_attempt(window: Window, words: Sequence[Word], language: str | None) -> _Attempt:
+    local = RawChunk(text=_text_of(words).strip(), language=language, words=_shifted(words, -window.start))
+    return _Attempt(local, False, triggers(local, duration=window.end - window.start))
+
+
+def _shifted(words: Sequence[Word], offset: float) -> tuple[Word, ...]:
+    # mlx-whisper may move a window's first word to start up to about 1.4 s before the window's seek (its long-word
+    # truncation in timing.py), and a time must not go negative.
+    return tuple(
+        Word(text=w.text, start=max(0.0, w.start + offset), end=max(0.0, w.end + offset), conf=w.conf) for w in words
+    )
+
+
+def _spliced(raw: RawChunk, pieces: Sequence[Sequence[Word]]) -> RawChunk:
+    """`raw` with its words replaced by `pieces` and its text rebuilt from their texts, spaced at each seam."""
+    words = tuple(word for piece in pieces for word in piece)
+    probabilities = [w.conf for w in words if w.conf is not None]
+    return replace(
+        raw,
+        text=reduce(_seam, (_text_of(piece) for piece in pieces), "").strip(),
+        confidence=sum(probabilities) / len(probabilities) if probabilities else None,
+        words=words,
+        # The counts and windows described the original decode, not the splice.
+        generated_tokens=None,
+        max_tokens=None,
+        windows=(),
+    )
+
+
+def _text_of(words: Sequence[Word]) -> str:
+    return "".join(word.text for word in words)
+
+
+def _fails(attempt: _Attempt) -> bool:
+    return _failing(attempt.triggers)
+
+
+def _failing(found: Sequence[Trigger]) -> bool:
+    # Empty output on speech may be music or noise the VAD let through, so it is counted apart from decoder failures.
+    return bool(set(found) - {"empty_output"})
 
 
 def _badness(attempt: _Attempt) -> tuple[bool, int]:
@@ -123,8 +251,7 @@ def _badness(attempt: _Attempt) -> tuple[bool, int]:
 
 def _verdict(attempt: _Attempt) -> GuardedChunk:
     flags: list[ChunkFlag] = []
-    # Empty output on speech may be music or noise the VAD let through, so it is counted apart from decoder failures.
-    if set(attempt.triggers) - {"empty_output"}:
+    if _fails(attempt):
         flags.append("decoder_anomaly")
     if attempt.capped:
         flags.append("token_cap_hit")
@@ -167,7 +294,13 @@ def _split_point(audio: "NDArray[np.float32]") -> int | None:
 
 
 def _merge(
-    first: RawChunk, second: RawChunk, *, offset_s: float, duration: float, fallback_language: str | None
+    first: RawChunk,
+    second: RawChunk,
+    *,
+    offset_s: float,
+    duration: float,
+    fallback_language: str | None,
+    join: Callable[[str, str], str],
 ) -> RawChunk:
     shifted = tuple(
         Word(text=w.text, start=w.start + offset_s, end=w.end + offset_s, conf=w.conf) for w in second.words
@@ -176,7 +309,7 @@ def _merge(
     if first.confidence is not None and second.confidence is not None:
         confidence = (first.confidence * offset_s + second.confidence * (duration - offset_s)) / duration
     return RawChunk(
-        text=_join(first.text, second.text),
+        text=join(first.text, second.text),
         language=first.language or second.language or fallback_language,
         generated_tokens=_add(first.generated_tokens, second.generated_tokens),
         # Budgets add up with the counts, so the worker's cap check on the merged row fires only when both halves hit.
@@ -194,5 +327,15 @@ def _join(left: str, right: str) -> str:
     left, right = left.strip(), right.strip()
     if not left or not right:
         return left or right
-    wide = unicodedata.east_asian_width(left[-1]) in "WF" or unicodedata.east_asian_width(right[0]) in "WF"
-    return left + right if wide else f"{left} {right}"
+    return left + right if _wide(left[-1]) or _wide(right[0]) else f"{left} {right}"
+
+
+def _seam(left: str, right: str) -> str:
+    """Join texts that keep Whisper's own spacing, adding one space only where neither side has any."""
+    if not left or not right or left[-1].isspace() or right[0].isspace() or _wide(left[-1]) or _wide(right[0]):
+        return left + right
+    return f"{left} {right}"
+
+
+def _wide(character: str) -> bool:
+    return unicodedata.east_asian_width(character) in "WF"

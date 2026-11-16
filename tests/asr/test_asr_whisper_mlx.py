@@ -15,6 +15,7 @@ from ytverbatim.asr.chunks import Chunk
 from ytverbatim.asr.engines import whisper_mlx
 from ytverbatim.asr.engines.whisper_mlx import WhisperEngine
 from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, FileJob, WorkerRequest
+from ytverbatim.asr.protocol import Window
 from ytverbatim.errors import ConfigError, DependencyError
 
 REPO_DIR = "models--mlx-community--whisper-large-v3-mlx"
@@ -133,8 +134,10 @@ def fake(monkeypatch: pytest.MonkeyPatch, mx: FakeMx, snapshot: Path) -> FakeWhi
             return whisper.model
 
     transcribe_module.ModelHolder = ModelHolder  # type: ignore[attr-defined]
+    audio.SAMPLE_RATE = 16_000  # type: ignore[attr-defined]
     audio.N_SAMPLES = 480_000  # type: ignore[attr-defined]
     audio.N_FRAMES = 3000  # type: ignore[attr-defined]
+    audio.FRAMES_PER_SECOND = 100  # type: ignore[attr-defined]
     audio.log_mel_spectrogram = lambda samples, n_mels, padding: FakeMel((samples, n_mels, padding))  # type: ignore[attr-defined]
     audio.pad_or_trim = lambda mel, length, *, axis: FakeMel((*mel.steps, ("trim", length, axis)))  # type: ignore[attr-defined]
     tokenizer.LANGUAGES = {"en": "english", "zh": "chinese", "yue": "cantonese"}  # type: ignore[attr-defined]
@@ -304,6 +307,94 @@ def test_only_the_chunked_engines_decode_keys_moved() -> None:
     for hypothesis in ("w-vad", "w-vad-lid", "w-runs-lid"):
         assert now[hypothesis][0] != before[hypothesis][0]
         assert now[hypothesis][1] != before[hypothesis][1]
+
+
+def test_the_decode_reports_its_windows_from_each_segments_seek(fake: FakeWhisper) -> None:
+    def segment(seek: int, *times: float) -> dict[str, Any]:
+        # mlx-whisper clears the text and words of an instantaneous segment but keeps its seek.
+        words = [{"word": " w", "start": t, "end": t + 0.5} for t in times]
+        return {"seek": seek, "text": " w" * len(times), "words": words}
+
+    # Window 0 has three segments, one of them cleared; the window after 59.5 s left only a cleared segment, and the
+    # one after it was judged silent and left none.
+    fake.result = {
+        "text": "",
+        "language": "en",
+        "segments": [
+            segment(0, 1.0, 2.0),
+            segment(0),
+            segment(0, 10.0, 28.0),
+            segment(2950, 30.0),
+            segment(6000),
+            segment(9000, 91.0, 95.0),
+        ],
+    }
+    raw = loaded("w-prod", fake).transcribe(np.zeros(100 * 16_000, dtype=np.float32), language="en", context=None)
+    assert raw.windows == (
+        Window(0.0, 29.5, 4),
+        Window(29.5, 59.5, 1),
+        Window(60.0, 90.0, 0),
+        Window(90.0, 100.0, 2),
+    )
+    assert sum(window.words for window in raw.windows) == len(raw.words)
+
+
+def test_a_result_without_window_offsets_reports_no_windows(fake: FakeWhisper) -> None:
+    segment = {"text": " x", "words": [{"word": " x", "start": 0.0, "end": 1.0}]}
+    fake.result = {"text": " x", "language": "en", "segments": [segment]}
+    assert loaded("w-prod", fake).transcribe(AUDIO, language="en", context=None).windows == ()
+
+
+@pytest.mark.parametrize("hypothesis", ["w-prod", "w-vad", "w-vad-lid", "w-runs-lid"])
+def test_a_single_window_is_decoded_with_the_production_call_and_never_the_prompt(
+    hypothesis: str, fake: FakeWhisper, snapshot: Path
+) -> None:
+    # Even a result that echoes the prompt is kept: none was sent.
+    fake.result = windows((0, whisper_mlx.ZH_INITIAL_PROMPT))
+    raw = loaded(hypothesis, fake).transcribe_window(AUDIO, language="zh-Hans")
+    ((audio, kwargs),) = fake.calls
+    assert audio is AUDIO
+    assert kwargs == {
+        "path_or_hf_repo": str(snapshot),
+        "word_timestamps": True,
+        "language": "zh",
+        "initial_prompt": None,
+        "condition_on_previous_text": False,
+        "temperature": whisper_mlx.TEMPERATURE_SCHEDULE,
+    }
+    assert raw.flags == ()
+    assert raw.windows == (Window(0.0, 1.0, 1),)
+
+
+def test_the_worker_repairs_a_looped_window_of_a_whole_file_decode(tmp_path: Path, fake: FakeWhisper) -> None:
+    loop = "风险限制" * 8
+    looped = [{"word": c, "start": 10.0 + i * 0.25, "end": 10.25 + i * 0.25} for i, c in enumerate(loop)]
+    fake.results = [
+        {
+            "text": f"开头的话。{loop}结尾的话。",
+            "language": "zh",
+            "segments": [
+                {"seek": 0, "text": "开头的话。", "words": [{"word": "开头的话。", "start": 1.0, "end": 3.0}]},
+                {"seek": 1000, "text": loop, "words": looped},
+                {"seek": 2000, "text": "结尾的话。", "words": [{"word": "结尾的话。", "start": 21.0, "end": 23.0}]},
+            ],
+        },
+        windows((0, "左边")),
+        windows((0, "右边")),
+    ]
+    wav = write_silence(tmp_path / "loop.wav", 30.0)
+    out = tmp_path / "out"
+    request = WorkerRequest(
+        engine=registry.get("w-prod"), out_dir=str(out), files=(FileJob(id="f1", wav=str(wav), language="zh"),)
+    )
+    worker.run_request(request, guard=worker.default_guard(request))
+    whole, left, right = fake.calls
+    assert whole[1]["initial_prompt"] == whisper_mlx.ZH_INITIAL_PROMPT
+    assert left[1] == right[1] == {**whole[1], "initial_prompt": None}
+    assert len(left[0]) + len(right[0]) == 10 * 16_000
+    (line,) = (out / HYPOTHESES_FILE).read_text(encoding="utf-8").splitlines()
+    row = ChunkHypothesis.model_validate_json(line)
+    assert (row.text, row.flags, row.anomaly_spans) == ("开头的话。左边右边结尾的话。", ("redecoded",), ())
 
 
 def test_no_language_means_no_prompt_and_auto_detection(fake: FakeWhisper) -> None:
