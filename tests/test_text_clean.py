@@ -43,7 +43,7 @@ def test_chinese_fillers_go_only_at_boundaries_and_repeats_collapse() -> None:
 
 def test_fillers_are_kept_unless_asked_and_punctuation_is_always_tidied() -> None:
     assert normalize("um, so.. we waited,, then", "en", script="zh-Hans", fillers="keep").text == (
-        "um, so. we waited, then"
+        "um, so.. we waited, then"
     )
     assert clean_zh("，，好的。。", fillers="keep") == "好的。"
 
@@ -104,6 +104,7 @@ def test_marks_next_to_chinese_are_written_full_width(before: str, after: str) -
         "你好，我是小明。",
         "你好…… 然后",
         "他说好…然后走了",
+        "5700...6000",
     ],
 )
 def test_numbers_latin_stretches_urls_and_ellipses_keep_their_marks(text: str) -> None:
@@ -176,3 +177,28 @@ def test_flag_offsets_follow_steps_that_delete_whitespace(text: str, word: str) 
     flag = Flag(kind="low_confidence", char_start=start, char_end=start + len(word), note="check")
     (moved,) = remap_flags([flag], result.steps)
     assert result.text[moved.char_start : moved.char_end] == word
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("I think... maybe", "I think... maybe"),
+        ("Wait... what?", "Wait... what?"),
+        ("Well.. ok", "Well.. ok"),
+        ("Wait.....", "Wait..."),
+    ],
+)
+def test_english_ellipses_are_kept_and_only_long_runs_shrink_to_three_dots(before: str, after: str) -> None:
+    assert clean_en(before) == after
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("他说好。。。然后", "他说好……然后"),
+        ("他说好。。然后", "他说好。然后"),
+        ("他说好...然后", "他说好...然后"),
+    ],
+)
+def test_ellipsis_runs_are_tidied_in_keep_mode_too(before: str, after: str) -> None:
+    assert clean_zh(before, fillers="keep", script="keep") == after

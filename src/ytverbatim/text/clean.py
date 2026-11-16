@@ -36,8 +36,10 @@ _ZH_FILLER_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
 _PUNCTUATION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     # A clause never opens on a comma. Trailing marks stay: Whisper ends each Mandarin clause with its boundary.
     (re.compile(r"^[，,、]+\s*"), ""),
-    (re.compile(r"\.{2,}"), "."),
+    # Two dots stay as written: "U.S.." and a trailing-off "Well.." cannot be told apart.
+    (re.compile(r"\.{4,}"), "..."),
     (re.compile(r",{2,}"), ","),
+    (re.compile(r"。{3,}"), "……"),
     (re.compile(r"。{2,}"), "。"),
     (re.compile(r"，{2,}"), "，"),
 )
