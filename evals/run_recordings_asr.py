@@ -9,6 +9,9 @@ per corpus and over the two meeting corpora; the recording-clustered ``decision`
 and ``words --hyp H`` (the ``words.json`` that ``evals.run_diarization`` scores WDER with). Everything prints
 aggregates only; the owner's disputes come from ``python -m evals.disputes``.
 
+After a decode fix, ``rescore --hyp H --corpus C --recordings ids --before DIR`` compares those recordings' rows in
+``DIR`` (worker folders copied aside, as ``DIR/<corpus>/runs/<hyp>/<item>/``) with the ones decoded again.
+
 No hypothesis gets a language hint. The two language-ID hypotheses choose within ``run_asr.ALLOWED_LANGUAGES``.
 """
 
@@ -40,6 +43,7 @@ from evals.recordings_corpus import (
     stamp_inputs,
 )
 from evals.recordings_data import OWNER
+from evals.recordings_rescore import CorpusRescore, Errors, build_rules, rescore_item, total_repair
 from evals.recordings_scoring import (
     MEETINGS,
     Scored,
@@ -105,16 +109,55 @@ def run_corpus(
     return RunSummary(len(pending), len(done), tuple(metrics))
 
 
-def scored(corpus: str, hypothesis: str, view: View, items: Sequence[Item], root: Path | None = None) -> Scored:
+def _scored(
+    layout: Layout, corpus: str, hypothesis: str, view: View, items: Sequence[Item]
+) -> tuple[dict[str, list[ChunkHypothesis]], Scored]:
     if corpus not in METRICS:
         raise ConfigError(f"{corpus} has no reference to score against; it is judged by disputes only")
-    rows = finished_rows(asr_layout(corpus, root), hypothesis, items)
+    rows = finished_rows(layout, hypothesis, items)
     missing = [i.id for i in items if i.id not in rows]
     if missing:
         raise ConfigError(
             f"{hypothesis} is not finished for {len(missing)} of {len(items)} {corpus} recordings; run it first"
         )
-    return score_items(items, rows, METRICS[corpus], view)
+    return rows, score_items(items, rows, METRICS[corpus], view)
+
+
+def scored(corpus: str, hypothesis: str, view: View, items: Sequence[Item], root: Path | None = None) -> Scored:
+    return _scored(asr_layout(corpus, root), corpus, hypothesis, view, items)[1]
+
+
+def rescored(
+    corpus: str, hypothesis: str, view: View, items: Sequence[Item], before: Path, seed: int = 0
+) -> CorpusRescore:
+    """Score ``items`` from the worker folders under ``before/<corpus>`` and from the live layout, and compare them."""
+    old_rows, old = _scored(Layout(before / corpus), corpus, hypothesis, view, items)
+    new_rows, new = _scored(asr_layout(corpus), corpus, hypothesis, view, items)
+    files = tuple(
+        rescore_item(
+            item.id,
+            old_rows[item.id],
+            new_rows[item.id],
+            [w for w in old.windows if w.item == item.id],
+            [w for w in new.windows if w.item == item.id],
+        )
+        for item in items
+    )
+    comparison = paired(new.windows, old.windows, seed)
+    repair = total_repair(files)
+    before_errors, after_errors = Errors.of(old.windows), Errors.of(new.windows)
+    return CorpusRescore(
+        hypothesis=hypothesis,
+        corpus=corpus,
+        metric=METRICS[corpus],
+        view=view,
+        before=before_errors,
+        after=after_errors,
+        paired=comparison,
+        rules=build_rules(before_errors, after_errors, comparison, repair, files),
+        repair=repair,
+        files=files,
+    )
 
 
 def _only(corpora: Sequence[str], recordings: str | None) -> list[str]:
@@ -269,6 +312,33 @@ def words(hypothesis: str, corpora: tuple[str, ...], recordings: str | None) -> 
         ready[corpus] = (items, rows)
     for corpus, (items, rows) in ready.items():
         click.echo(f"{corpus}: wrote words.json for {write_words_for(items, rows)}")
+
+
+@main.command()
+@_hyp_option
+@click.option("--corpus", type=click.Choice(SCORED_CORPORA), required=True)
+@click.option("--recordings", required=True, help="Comma-separated ids of the recordings that were decoded again.")
+@click.option(
+    "--before",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=True,
+    help="Holds <corpus>/runs/<hyp>/<item>/ worker folders from before the repair, laid out like the live ones.",
+)
+@_view_option
+@click.option("--seed", default=0, show_default=True)
+def rescore(hypothesis: str, corpus: str, recordings: str, before: Path, view: View, seed: int) -> None:
+    """Score recordings decoded again after the loop repair against their earlier rows; prints no transcript text.
+
+    Per file, before and after: error counts and rate, ``decoder_anomaly`` and ``redecoded`` rows, and each repaired
+    window with its span, loop and seam duplicate. Also the share of words outside repaired windows that the new rows
+    kept, and the window-level paired difference (after minus before) over the selected recordings. How a repaired
+    window is found from the rows is in ``evals/recordings_rescore.py``.
+    """
+    ids = _only((corpus,), recordings)
+    if not ids:
+        raise click.UsageError("--recordings needs at least one id")
+    report = rescored(corpus, hypothesis, view, load_items(corpus, ids), before, seed)
+    click.echo(report.model_dump_json(indent=2))
 
 
 def run_cli() -> None:
