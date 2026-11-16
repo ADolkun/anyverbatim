@@ -12,6 +12,7 @@ from ytverbatim.asr.quality import (
     is_nonlexical_failure,
     nonlexical_runs,
     normalize_for_repetition,
+    repetition_spans,
     word_timing_collapses,
 )
 from ytverbatim.contract.models import Word
@@ -95,6 +96,17 @@ def test_replacement_character_is_counted() -> None:
 def test_intra_segment_count_is_the_number_of_repeats() -> None:
     assert intra_segment_repetitions(" ".join(["repeat risk"] * 9)) == [9]
     assert intra_segment_repetitions("风险限制" * 12) == [12]
+
+
+def test_repetition_spans_locate_each_run_in_the_normalized_text() -> None:
+    normalized = "first words " + "repeat risk " * 9 + "then other words"
+    ((start, end, repeats),) = repetition_spans(normalized)
+    # The run may open on the separator before its first word.
+    assert (normalized[start:end].strip(), repeats) == (("repeat risk " * 9).strip(), 9)
+    assert repetition_spans("repeat risk " * 7) == []
+    assert repetition_spans("a " * 20) == []
+    cjk = "开头" + "风险限制" * 10 + "结尾"
+    assert [(cjk[s:e], n) for s, e, n in repetition_spans(cjk)] == [("风险限制" * 10, 10)]
 
 
 def test_mandarin_loops_are_found_through_inconsistent_separators() -> None:

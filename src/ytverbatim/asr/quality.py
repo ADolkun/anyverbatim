@@ -176,15 +176,22 @@ def word_timing_collapses(units: Sequence[Unit]) -> list[Anomaly]:
     return findings
 
 
-def intra_segment_repetitions(text: str) -> list[int]:
-    """Count the repeats of every phrase repeated at least eight times with at least 32 letters in the run."""
-    # The trailing space lets a final English repeat match like the others.
-    normalized = normalize_for_repetition(text) + " "
+def repetition_spans(normalized: str) -> list[tuple[int, int, int]]:
+    """Find every phrase repeated at least eight times with at least 32 letters in the run.
+
+    `normalized` is `normalize_for_repetition` output plus a trailing space, which lets a final English repeat match
+    like the others. Each result is the run's `(start, end, repeats)`, as offsets into `normalized`.
+    """
     return [
-        len(match[0]) // len(match[1])
+        (match.start(), match.end(), len(match[0]) // len(match[1]))
         for match in _DECODER_REPEAT.finditer(normalized)
         if _letters(match[0]) >= _DECODER_REPEAT_MIN_LETTERS
     ]
+
+
+def intra_segment_repetitions(text: str) -> list[int]:
+    """Count the repeats of every phrase repeated at least eight times with at least 32 letters in the run."""
+    return [repeats for _, _, repeats in repetition_spans(normalize_for_repetition(text) + " ")]
 
 
 def decoder_anomalies(units: Sequence[Unit]) -> list[Anomaly]:
