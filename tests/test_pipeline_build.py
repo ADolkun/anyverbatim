@@ -10,7 +10,7 @@ import pytest
 from ytverbatim.acquire.creator_note import CreatorNote
 from ytverbatim.acquire.metadata import Chapter, VideoMetadata
 from ytverbatim.asr import registry
-from ytverbatim.asr.models import ChunkHypothesis
+from ytverbatim.asr.models import AnomalySpan, ChunkHypothesis
 from ytverbatim.asr.protocol import ChunkFlag
 from ytverbatim.contract import Access, ContextDocument, Word, YouTubeSource, dump_document, load_document
 from ytverbatim.diarize import registry as diarize_registry
@@ -69,6 +69,7 @@ def row(
     language: str | None = "en",
     chunk_words: tuple[Word, ...] = (),
     flags: tuple[ChunkFlag, ...] = (),
+    anomaly_spans: tuple[AnomalySpan, ...] = (),
 ) -> ChunkHypothesis:
     return ChunkHypothesis(
         hypothesis=hypothesis,
@@ -80,6 +81,7 @@ def row(
         language=language,
         words=chunk_words,
         flags=flags,
+        anomaly_spans=anomaly_spans,
     )
 
 
@@ -302,6 +304,154 @@ def test_decoder_anomaly_flags_the_segments_of_that_chunk_only() -> None:
     # The document's flags by kind (two segments carry the anomaly), plus the chunk diagnostics.
     assert doc.quality.flags_by_kind == {"decoder_anomaly": 2, "forced_cut": 1, "token_cap_hit": 1}
     assert "decoder_anomaly" in render_markdown(doc)
+
+
+FOUR_SENTENCES = [
+    " Alpha",
+    " beta",
+    " gamma.",
+    " Delta",
+    " epsilon",
+    " zeta.",
+    " Eta",
+    " theta",
+    " iota.",
+    " Kappa",
+    " lambda",
+    " mu.",
+]
+
+
+def looped_row(*spans: tuple[float, float], flags: tuple[ChunkFlag, ...] = ("redecoded", "decoder_anomaly")):
+    """One whole-file row of four three-word sentences, one second a word, with the given unrepaired spans."""
+    return row(
+        0,
+        "".join(FOUR_SENTENCES),
+        0,
+        12,
+        chunk_words=words(FOUR_SENTENCES, 0.0, 1.0),
+        flags=flags,
+        anomaly_spans=tuple(AnomalySpan(start=a, end=b) for a, b in spans),
+    )
+
+
+def test_a_span_flags_only_the_sentences_it_covers() -> None:
+    doc = build([looped_row((3.0, 6.0))])
+    flagged = {s.text: [(s.text[f.char_start : f.char_end], f.note) for f in s.flags] for s in doc.segments}
+    note = "the decoder looped or stalled at 0:03-0:06 and it could not be repaired"
+    assert flagged == {
+        "Alpha beta gamma.": [],
+        "Delta epsilon zeta.": [("Delta epsilon zeta.", note)],
+        "Eta theta iota.": [],
+        "Kappa lambda mu.": [],
+    }
+
+
+def test_a_sentence_straddling_a_span_edge_is_flagged_on_its_in_span_words_only() -> None:
+    doc = build([looped_row((4.0, 7.5))])
+    flagged = {s.text: [s.text[f.char_start : f.char_end] for f in s.flags] for s in doc.segments}
+    assert flagged == {
+        "Alpha beta gamma.": [],
+        "Delta epsilon zeta.": ["epsilon zeta."],
+        "Eta theta iota.": ["Eta theta"],
+        "Kappa lambda mu.": [],
+    }
+
+
+def test_every_span_of_a_row_is_flagged_with_its_own_note() -> None:
+    doc = build([looped_row((0.0, 2.0), (9.0, 12.0))])
+    tail = " and it could not be repaired"
+    notes = [(s.text, f.note) for s in doc.segments for f in s.flags]
+    assert notes == [
+        ("Alpha beta gamma.", f"the decoder looped or stalled at 0:00-0:02{tail}"),
+        ("Kappa lambda mu.", f"the decoder looped or stalled at 0:09-0:12{tail}"),
+    ]
+
+
+def test_touching_spans_flag_a_token_across_their_boundary_once_and_name_the_union() -> None:
+    pieces = [" Alpha", " beta", " gamma.", " Delta", " epsilon", " zeta."]
+    loop = row(
+        0,
+        "".join(pieces),
+        0,
+        12,
+        chunk_words=words(pieces, 0.0, 2.0),
+        flags=("decoder_anomaly",),
+        anomaly_spans=(AnomalySpan(start=5.0, end=9.0), AnomalySpan(start=3.0, end=5.0)),
+    )
+    note = "the decoder looped or stalled at 0:03-0:09 and it could not be repaired"
+    doc = build([loop])
+    flagged = {s.text: [(s.text[f.char_start : f.char_end], f.note) for f in s.flags] for s in doc.segments}
+    assert flagged == {
+        "Alpha beta gamma.": [("beta gamma.", note)],
+        "Delta epsilon zeta.": [("Delta epsilon", note)],
+    }
+    assert loop.anomaly_spans == (AnomalySpan(start=5.0, end=9.0), AnomalySpan(start=3.0, end=5.0))
+
+
+def collapsed_row(pieces: Sequence[str], times: Sequence[tuple[float, float]], span: tuple[float, float]):
+    ws = tuple(Word(text=p, start=a, end=b) for p, (a, b) in zip(pieces, times, strict=True))
+    return row(
+        0,
+        "".join(pieces),
+        0,
+        40,
+        chunk_words=ws,
+        flags=("redecoded", "decoder_anomaly"),
+        anomaly_spans=(AnomalySpan(start=span[0], end=span[1]),),
+    )
+
+
+def test_zero_length_words_on_either_edge_of_a_span_are_flagged() -> None:
+    pieces = [" Alpha.", " again", " again", " Gamma", " delta.", " again", " again", " Epsilon."]
+    times = [(1, 2), (10, 10), (10, 10), (12, 13), (13, 14), (20, 20), (20, 20), (25, 26)]
+    doc = build([collapsed_row(pieces, times, (10.0, 20.0))])
+    flagged = {s.text: [s.text[f.char_start : f.char_end] for f in s.flags] for s in doc.segments}
+    assert flagged == {
+        "Alpha.": [],
+        "again again Gamma delta.": ["again again Gamma delta."],
+        "again again Epsilon.": ["again again"],
+    }
+
+
+def test_a_loop_collapsed_onto_the_end_of_a_window_is_flagged_even_with_no_other_word_in_it() -> None:
+    pieces = [" Alpha.", " again", " again", " again", " Epsilon."]
+    times = [(1, 2), (20, 20), (20, 20), (20, 20), (25, 26)]
+    doc = build([collapsed_row(pieces, times, (10.0, 20.0))])
+    assert [(s.text, [s.text[f.char_start : f.char_end] for f in s.flags]) for s in doc.segments] == [
+        ("Alpha.", []),
+        ("again again again Epsilon.", ["again again again"]),
+    ]
+    assert doc.quality.flags_by_kind == {"decoder_anomaly": 1, "redecoded": 1}
+
+
+def test_a_span_no_word_falls_in_flags_the_whole_row_so_the_anomaly_is_not_invisible() -> None:
+    pieces = [" Alpha.", " Beta.", " Gamma."]
+    doc = build([collapsed_row(pieces, [(1, 2), (2, 3), (25, 26)], (10.0, 20.0))])
+    assert doc.quality.decoder_anomalies == 1
+    assert [len(s.flags) for s in doc.segments] == [1, 1, 1]
+    assert doc.segments[0].flags[0].note == "the decoder looped or stalled in the chunk at 0:00-0:40"
+    assert doc.quality.flags_by_kind == {"decoder_anomaly": 3, "redecoded": 1}
+
+
+def test_the_flag_counts_are_the_localized_flags_plus_the_rows_own_redecoded() -> None:
+    doc = build([looped_row((3.0, 9.0))])
+    assert doc.quality.decoder_anomalies == 1
+    assert doc.quality.flags_by_kind == {"decoder_anomaly": 2, "redecoded": 1}
+
+
+def test_a_row_without_spans_is_flagged_whole_with_the_chunk_note() -> None:
+    doc = build([looped_row()])
+    assert [len(s.flags) for s in doc.segments] == [1, 1, 1, 1]
+    assert doc.segments[0].flags[0].note == "the decoder looped or stalled in the chunk at 0:00-0:12"
+    assert doc.quality.flags_by_kind == {"decoder_anomaly": 4, "redecoded": 1}
+
+
+def test_a_span_footnotes_only_the_words_inside_it() -> None:
+    body = render_markdown(build([looped_row((3.0, 6.0))]))
+    assert body.count("[^") == 2
+    assert "Delta epsilon zeta.[^1]" in body
+    assert "gamma.[^" not in body and "iota.[^" not in body
 
 
 def test_a_flag_covers_only_the_anomalous_chunks_part_of_a_shared_sentence() -> None:

@@ -27,7 +27,7 @@ from ytverbatim.acquire.creator_note import CreatorNote
 from ytverbatim.acquire.metadata import Chapter as SourceChapter
 from ytverbatim.acquire.metadata import VideoMetadata
 from ytverbatim.asr import chunks
-from ytverbatim.asr.models import ChunkHypothesis
+from ytverbatim.asr.models import AnomalySpan, ChunkHypothesis
 from ytverbatim.asr.protocol import EngineDef
 from ytverbatim.contract import (
     Access,
@@ -184,7 +184,7 @@ def from_asr_rows(
     sentences = seg.segment_tokens(tokens, language)
     overlap_flags = [_overlap_flags(sentence) for sentence in sentences]
     worded = {row.chunk for row in rows if any(word.text.strip() for word in row.words)}
-    anomalies = {row.chunk: row for row in rows if _ANOMALY_FLAG in row.flags}
+    anomalies = {row.chunk: _localized(row, tokens) for row in rows if _ANOMALY_FLAG in row.flags}
     stretches = tuple(
         Stretch(
             text=sentence.text,
@@ -774,6 +774,9 @@ def _punctuation(
 def _anomaly_flags(sentence: seg.Sentence, anomalies: Mapping[int, ChunkHypothesis]) -> tuple[Flag, ...]:
     flags: list[Flag] = []
     for chunk, row in anomalies.items():
+        if row.anomaly_spans:
+            flags += _span_flags(sentence, chunk, row.anomaly_spans)
+            continue
         span = sentence.span_of(chunk)
         if span is not None:
             flags.append(
@@ -785,6 +788,49 @@ def _anomaly_flags(sentence: seg.Sentence, anomalies: Mapping[int, ChunkHypothes
                 )
             )
     return tuple(flags)
+
+
+def _localized(row: ChunkHypothesis, tokens: Sequence[seg.Token]) -> ChunkHypothesis:
+    """Drop the row's spans when none of its tokens fall in them, so a counted anomaly is never invisible."""
+    if any(token.origin == row.chunk and _within(token, span) for token in tokens for span in row.anomaly_spans):
+        return row
+    return row.model_copy(update={"anomaly_spans": ()})
+
+
+def _span_flags(sentence: seg.Sentence, chunk: int, spans: Sequence[AnomalySpan]) -> list[Flag]:
+    """Flag each run of the row's tokens that overlaps a span the guard could not repair."""
+    flags: list[Flag] = []
+    for anomaly in _merged(spans):
+        hits = [i for i, token in enumerate(sentence.tokens) if token.origin == chunk and _within(token, anomaly)]
+        for _, group in itertools.groupby(enumerate(hits), key=lambda pair: pair[1] - pair[0]):
+            run = [i for _, i in group]
+            span = sentence.span(run[0], run[-1])
+            if span is not None:
+                note = (
+                    f"the decoder looped or stalled at {_clock(anomaly.start)}-{_clock(anomaly.end)} "
+                    "and it could not be repaired"
+                )
+                flags.append(Flag(kind="decoder_anomaly", char_start=span[0], char_end=span[1], note=note))
+    return flags
+
+
+def _merged(spans: Sequence[AnomalySpan]) -> list[AnomalySpan]:
+    """Sort the spans and join those that overlap or touch, so a token across two is flagged once."""
+    merged: list[AnomalySpan] = []
+    for span in sorted(spans, key=lambda s: (s.start, s.end)):
+        if merged and span.start <= merged[-1].end:
+            merged[-1] = AnomalySpan(start=merged[-1].start, end=max(merged[-1].end, span.end))
+        else:
+            merged.append(span)
+    return merged
+
+
+def _within(token: seg.Token, anomaly: AnomalySpan) -> bool:
+    if token.end > token.start:
+        return token.start < anomaly.end and token.end > anomaly.start
+    # Closed at both ends: the next window starts at its predecessor's last word end, so the words a loop collapses
+    # to zero length sit exactly on the span's end.
+    return anomaly.start <= token.start <= anomaly.end
 
 
 def _language(rows: Sequence[ChunkHypothesis], declared: str | None, *, by_speech: bool = False) -> str:
