@@ -1,6 +1,6 @@
 {
   "stage_version": "1+numeric-v5+numbers-v2",
-  "input_hash": "e33f284c64a61156eed1916bbdcb344df067687dc4faa47bfb2e331ff74c1cb7",
+  "input_hash": "04f9bddcbef3e1bfd22d6b867d23a4ef54f1bcc9b9e793e080ab8e659890b84e",
   "output": {
     "opinion": {
       "engine": "w-vad",

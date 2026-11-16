@@ -2,13 +2,20 @@
 
 Every mode makes the same call. `whole_file` hands over the entire recording and lets mlx-whisper window it;
 `chunk` hands over one planned chunk (at most 30 s); `runs` hands over one same-language run of chunks, which
-mlx-whisper windows like a whole file. Production quirks are kept on purpose, for example the Mandarin punctuation
-prompt that is only sent when a language is known; fixing them belongs to a later text unit.
+mlx-whisper windows like a whole file.
+
+Only `whole_file` sends the Mandarin punctuation prompt, and only when the language is known to be Mandarin. With
+`condition_on_previous_text=False` mlx-whisper feeds the prompt to the first 30 s window of each call, and on short
+audio Whisper often transcribes the prompt's tail instead of the speech. A whole-file decode exposes one window per
+file; a decode that echoes the prompt is decoded once more without it and flagged `prompt_echo`. `chunk` and `runs`
+make a call per chunk or run, so every one would be exposed; they never send the prompt, and the `normalize` and
+`punctuate` stages already give their text Simplified characters and punctuation.
 """
 
 import importlib
 import logging
 import re
+import unicodedata
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -16,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast
 
 from pydantic import JsonValue
 
-from ytverbatim.asr.protocol import AsrContext, EngineSpec, RawChunk
+from ytverbatim.asr.protocol import AsrContext, ChunkFlag, EngineSpec, RawChunk
 from ytverbatim.contract.models import Word
 from ytverbatim.errors import ConfigError, DependencyError
 
@@ -31,6 +38,8 @@ Mode = Literal["whole_file", "chunk", "runs"]
 # A single fixed temperature would disable Whisper's fallback re-decode and let a repetition loop run unchecked.
 TEMPERATURE_SCHEDULE = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
 ZH_INITIAL_PROMPT = "以下是普通话内容，请使用简体中文并加上标点符号。"
+# What Whisper echoes of the prompt on short audio; the whole prompt contains it, so it also catches a full echo.
+_PROMPT_ECHO = "请使用简体中文并加上标点符号"
 _WEIGHT_FILES = ("weights.safetensors", "weights.npz")
 
 
@@ -86,6 +95,12 @@ def create(spec: EngineSpec, variant: Mapping[str, JsonValue]) -> "WhisperEngine
         raise ConfigError(f"{spec.id}: Whisper mode must be 'whole_file', 'chunk' or 'runs', got {mode!r}")
     if (mode == "whole_file") != (spec.max_chunk_s is None):
         raise ConfigError(f"{spec.id}: mode {mode!r} contradicts max_chunk_s={spec.max_chunk_s}")
+    # Spelled out in the chunked variants so their decode keys differ from those made while they still sent it.
+    zh_prompt = variant.get("zh_prompt", True)
+    if zh_prompt is not (mode == "whole_file"):
+        raise ConfigError(
+            f"{spec.id}: only whole_file mode sends the Mandarin prompt; mode {mode!r} got zh_prompt={zh_prompt!r}"
+        )
     return WhisperEngine(spec, mode)
 
 
@@ -147,19 +162,14 @@ class WhisperEngine:
         return {code: float(p) for code, p in probabilities.items()}
 
     def transcribe(self, audio: "NDArray[np.float32]", *, language: str | None, context: AsrContext | None) -> RawChunk:
-        if self._whisper is None or self._mx is None or self._model_path is None:
-            raise RuntimeError("load() must be called before transcribe()")
+        self._loaded()
         hint = _normalize_language(language)
-        with _bounded_mlx_cache(self._mx):
-            result = self._whisper.transcribe(
-                audio,
-                path_or_hf_repo=self._model_path,
-                word_timestamps=True,
-                language=hint,
-                initial_prompt=ZH_INITIAL_PROMPT if hint is not None and hint.startswith("zh") else None,
-                condition_on_previous_text=False,
-                temperature=TEMPERATURE_SCHEDULE,
-            )
+        prompted = self.mode == "whole_file" and hint is not None and hint.startswith("zh")
+        result = self._decode(audio, hint, ZH_INITIAL_PROMPT if prompted else None)
+        flags: tuple[ChunkFlag, ...] = ()
+        if prompted and echoes_prompt(str(result.get("text", ""))):
+            result = self._decode(audio, hint, None)
+            flags = ("prompt_echo",)
         words = _words(cast(Sequence[_WhisperSegment], result.get("segments") or ()))
         probabilities = [w.conf for w in words if w.conf is not None]
         return RawChunk(
@@ -167,7 +177,35 @@ class WhisperEngine:
             language=cast("str | None", result.get("language")),
             confidence=sum(probabilities) / len(probabilities) if probabilities else None,
             words=words,
+            flags=flags,
         )
+
+    def _loaded(self) -> tuple[_WhisperModule, _MlxCore, str]:
+        if self._whisper is None or self._mx is None or self._model_path is None:
+            raise RuntimeError("load() must be called before transcribe()")
+        return self._whisper, self._mx, self._model_path
+
+    def _decode(self, audio: "NDArray[np.float32]", hint: str | None, prompt: str | None) -> dict[str, Any]:
+        whisper, mx, model_path = self._loaded()
+        with _bounded_mlx_cache(mx):
+            return whisper.transcribe(
+                audio,
+                path_or_hf_repo=model_path,
+                word_timestamps=True,
+                language=hint,
+                initial_prompt=prompt,
+                condition_on_previous_text=False,
+                temperature=TEMPERATURE_SCHEDULE,
+            )
+
+
+def echoes_prompt(text: str) -> bool:
+    """Whether `text` contains the prompt's tail, compared without punctuation or whitespace."""
+    return _PROMPT_ECHO in _bare(text)
+
+
+def _bare(text: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKC", text) if unicodedata.category(c)[0] not in "PZC")
 
 
 def _normalize_language(code: str | None) -> str | None:

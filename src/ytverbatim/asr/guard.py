@@ -183,6 +183,7 @@ def _merge(
         max_tokens=_add(first.max_tokens, second.max_tokens),
         confidence=confidence,
         words=(*first.words, *shifted),
+        flags=tuple(dict.fromkeys((*first.flags, *second.flags))),
     )
 
 

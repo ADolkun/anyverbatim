@@ -7,7 +7,9 @@ from typing import Any
 import numpy as np
 import pytest
 from fake_engine import write_silence
+from pydantic import JsonValue
 
+from ytverbatim import pipeline, store
 from ytverbatim.asr import registry, worker
 from ytverbatim.asr.chunks import Chunk
 from ytverbatim.asr.engines import whisper_mlx
@@ -77,6 +79,8 @@ class FakeWhisper:
         self.mx = mx
         self.calls: list[tuple[Any, dict[str, Any]]] = []
         self.result: dict[str, Any] = RESULT
+        # Returned in turn before `result`, for a test that needs successive decodes to differ.
+        self.results: list[dict[str, Any]] = []
         self.error: Exception | None = None
         self.loads: list[tuple[str, object]] = []
         self.model = FakeModel(mx)
@@ -86,7 +90,7 @@ class FakeWhisper:
         self.calls.append((audio, kwargs))
         if self.error is not None:
             raise self.error
-        return self.result
+        return self.results.pop(0) if self.results else self.result
 
 
 @pytest.fixture
@@ -162,8 +166,18 @@ def loaded(hypothesis: str, fake: FakeWhisper) -> WhisperEngine:
 AUDIO = np.zeros(16_000, dtype=np.float32)
 
 
-@pytest.mark.parametrize(("hypothesis", "mode"), [("w-prod", "whole_file"), ("w-vad", "chunk")])
-def test_both_modes_make_the_production_call(hypothesis: str, mode: str, fake: FakeWhisper, snapshot: Path) -> None:
+@pytest.mark.parametrize(
+    ("hypothesis", "mode", "prompt"),
+    [
+        ("w-prod", "whole_file", whisper_mlx.ZH_INITIAL_PROMPT),
+        ("w-vad", "chunk", None),
+        ("w-vad-lid", "chunk", None),
+        ("w-runs-lid", "runs", None),
+    ],
+)
+def test_every_mode_makes_the_production_call_and_only_whole_file_sends_the_zh_prompt(
+    hypothesis: str, mode: str, prompt: str | None, fake: FakeWhisper, snapshot: Path
+) -> None:
     engine = loaded(hypothesis, fake)
     assert engine.mode == mode
     engine.transcribe(AUDIO, language="zh", context=None)
@@ -173,10 +187,93 @@ def test_both_modes_make_the_production_call(hypothesis: str, mode: str, fake: F
         "path_or_hf_repo": str(snapshot),
         "word_timestamps": True,
         "language": "zh",
-        "initial_prompt": whisper_mlx.ZH_INITIAL_PROMPT,
+        "initial_prompt": prompt,
         "condition_on_previous_text": False,
         "temperature": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
     }
+
+
+ECHO_SEGMENTS = [{"words": [{"word": "请使用简体中文并加上标点符号。", "start": 0.0, "end": 1.0, "probability": 0.9}]}]
+
+
+@pytest.mark.parametrize(
+    "echo",
+    [
+        "请使用简体中文并加上标点符号。",
+        " 以下是普通话内容，请使用简体中文并加上标点符号。",
+        "请使用简体中文 并加上标点符号",
+        "请使用简体中文，并加上标点符号！今天我们聊聊利润",
+        "大家好。请使用简体中文并加上标点符号",
+    ],
+)
+def test_a_whole_file_decode_that_echoes_the_prompt_is_decoded_again_without_it(echo: str, fake: FakeWhisper) -> None:
+    fake.results = [{"text": echo, "language": "zh", "segments": ECHO_SEGMENTS}, RESULT]
+    raw = loaded("w-prod", fake).transcribe(AUDIO, language="zh", context=None)
+    assert [kwargs["initial_prompt"] for _, kwargs in fake.calls] == [whisper_mlx.ZH_INITIAL_PROMPT, None]
+    first, second = (kwargs for _, kwargs in fake.calls)
+    assert {**first, "initial_prompt": None} == second
+    assert all(audio is AUDIO for audio, _ in fake.calls)
+    assert (raw.text, raw.flags) == ("示例，你好", ("prompt_echo",))
+    assert [w.text for w in raw.words] == ["示例，", "你好", "x"]
+
+
+def test_a_decode_that_does_not_echo_the_prompt_is_kept(fake: FakeWhisper) -> None:
+    fake.result = {"text": "请使用这个方法，加上标点", "language": "zh", "segments": []}
+    raw = loaded("w-prod", fake).transcribe(AUDIO, language="zh", context=None)
+    assert len(fake.calls) == 1
+    assert (raw.text, raw.flags) == ("请使用这个方法，加上标点", ())
+
+
+@pytest.mark.parametrize(("hypothesis", "language"), [("w-vad", "zh"), ("w-runs-lid", "zh"), ("w-prod", "en")])
+def test_an_unprompted_decode_is_never_decoded_again(hypothesis: str, language: str, fake: FakeWhisper) -> None:
+    fake.result = {"text": whisper_mlx.ZH_INITIAL_PROMPT, "language": "zh", "segments": []}
+    raw = loaded(hypothesis, fake).transcribe(AUDIO, language=language, context=None)
+    assert len(fake.calls) == 1
+    assert raw.flags == ()
+
+
+def test_the_worker_records_the_prompt_echo_on_the_row(tmp_path: Path, fake: FakeWhisper) -> None:
+    fake.results = [{"text": whisper_mlx.ZH_INITIAL_PROMPT, "language": "zh", "segments": ECHO_SEGMENTS}, RESULT]
+    wav = write_silence(tmp_path / "short.wav", 3.0)
+    out = tmp_path / "out"
+    request = WorkerRequest(
+        engine=registry.get("w-prod"), out_dir=str(out), files=(FileJob(id="f1", wav=str(wav), language="zh"),)
+    )
+    worker.run_request(request, guard=worker.default_guard(request))
+    (line,) = (out / HYPOTHESES_FILE).read_text(encoding="utf-8").splitlines()
+    row = ChunkHypothesis.model_validate_json(line)
+    assert (row.text, row.flags) == ("示例，你好", ("prompt_echo",))
+
+
+def test_only_the_chunked_engines_decode_keys_moved() -> None:
+    """The digests before the chunked engines stopped sending the prompt: w-prod's must stay, the others must move."""
+    before = {
+        "w-prod": (
+            "3f2bcd6d9c661862434054d6307f45fa3d6b6bc78b4d9fdce1c11c211a0661be",
+            "ed67dbc2591a6fe695795fc3bd64325846344b502e23824c3639f93168e3721e",
+        ),
+        "w-vad": (
+            "2d566afc742bf9ef15567688d1b83e64b7517536c21692acf2bc9b7885a4eb67",
+            "36fc36b3e760e8724bf24d0290f73cc0954d66a0a9a76590fa78856fe21fa7e9",
+        ),
+        "w-vad-lid": (
+            "5d3dc8b46b992456e72ee80bc4559035acdcc53fd6383132a2e3ee8625490965",
+            "56c12dd6fa4241a37ac35a7748574533ad3cc78bc149ad812233fa9793e75901",
+        ),
+        "w-runs-lid": (
+            "a5fd0b576afc7212e45b42249c8a05a647da4217534f7ec539cea6f1ed1b0c3e",
+            "167af45c26a58c3c12df4428926e315fc6747ab100c259955c77bae2fbaae1c8",
+        ),
+    }
+    now = {}
+    for hypothesis in before:
+        definition = registry.get(hypothesis)
+        request = WorkerRequest(engine=definition, out_dir="/o", files=(FileJob(id="f", wav="/a.wav", language="zh"),))
+        now[hypothesis] = (store.digest(pipeline._engine_key(definition)), store.digest(request.fingerprint()))
+    assert now["w-prod"] == before["w-prod"]
+    for hypothesis in ("w-vad", "w-vad-lid", "w-runs-lid"):
+        assert now[hypothesis][0] != before[hypothesis][0]
+        assert now[hypothesis][1] != before[hypothesis][1]
 
 
 def test_no_language_means_no_prompt_and_auto_detection(fake: FakeWhisper) -> None:
@@ -310,9 +407,23 @@ def test_mode_must_be_known_and_agree_with_the_spec() -> None:
     with pytest.raises(ConfigError, match="mode"):
         whisper_mlx.create(whole.spec, {"mode": "other"})
     with pytest.raises(ConfigError, match="contradicts"):
-        whisper_mlx.create(whole.spec, {"mode": "chunk"})
+        whisper_mlx.create(whole.spec, {"mode": "chunk", "zh_prompt": False})
     with pytest.raises(ConfigError, match="contradicts"):
         whisper_mlx.create(chunked.spec, {"mode": "whole_file"})
+
+
+@pytest.mark.parametrize(
+    ("hypothesis", "variant"),
+    [
+        ("w-vad", {"mode": "chunk"}),
+        ("w-vad", {"mode": "chunk", "zh_prompt": True}),
+        ("w-runs-lid", {"mode": "runs"}),
+        ("w-prod", {"mode": "whole_file", "zh_prompt": False}),
+    ],
+)
+def test_only_whole_file_mode_may_send_the_zh_prompt(hypothesis: str, variant: dict[str, JsonValue]) -> None:
+    with pytest.raises(ConfigError, match="only whole_file mode sends the Mandarin prompt"):
+        whisper_mlx.create(registry.get(hypothesis).spec, variant)
 
 
 def test_the_registry_pins_the_default_cache_revision() -> None:
@@ -357,7 +468,7 @@ def test_detecting_before_loading_is_a_programming_error(fake: FakeWhisper) -> N
         engine.detect_language(AUDIO)
 
 
-def test_the_worker_decodes_runs_with_their_language_and_the_zh_prompt_only_on_zh(
+def test_the_worker_decodes_runs_with_their_language_and_no_zh_prompt(
     tmp_path: Path, fake: FakeWhisper, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     detections = [{"zh": 0.8, "en": 0.2}, {"zh": 0.1, "en": 0.9}, {"zh": 0.7, "en": 0.3}]
@@ -375,9 +486,9 @@ def test_the_worker_decodes_runs_with_their_language_and_the_zh_prompt_only_on_z
     )
     worker.run_request(request)
     assert [(len(audio), kwargs["language"], kwargs["initial_prompt"]) for audio, kwargs in fake.calls] == [
-        (136_000, "zh", whisper_mlx.ZH_INITIAL_PROMPT),
+        (136_000, "zh", None),
         (144_000, "en", None),
-        (144_000, "zh", whisper_mlx.ZH_INITIAL_PROMPT),
+        (144_000, "zh", None),
     ]
     rows = [
         ChunkHypothesis.model_validate_json(line)

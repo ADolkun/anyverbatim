@@ -14,7 +14,8 @@
     "factory": "ytverbatim.asr.engines.whisper_mlx.create",
     "variant": {
       "mode": "chunk",
-      "language": "pass"
+      "language": "pass",
+      "zh_prompt": false
     }
   },
   "files": [
