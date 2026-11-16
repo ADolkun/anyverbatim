@@ -21,6 +21,13 @@ class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class AnomalySpan(_Model):
+    """A stretch of a row, in absolute seconds, that the guard could not repair."""
+
+    start: Seconds
+    end: Seconds
+
+
 class ChunkHypothesis(_Model):
     """One line of `hypotheses.jsonl`; times are absolute seconds in the source file.
 
@@ -43,6 +50,10 @@ class ChunkHypothesis(_Model):
     max_tokens: int | None = None
     confidence: float | None = Field(default=None, allow_inf_nan=False)
     flags: tuple[ChunkFlag, ...] = ()
+    # Where a `decoder_anomaly` still lies after the guard's repair; empty means anywhere in the row, as for every
+    # chunk row and any decode the guard could not localize. Left out of the line while empty, so every other row
+    # serializes byte for byte as it did before the field existed.
+    anomaly_spans: tuple[AnomalySpan, ...] = Field(default=(), exclude_if=lambda v: not v)
 
     @model_validator(mode="after")
     def _ordered(self) -> Self:

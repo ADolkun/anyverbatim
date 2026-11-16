@@ -12,6 +12,11 @@ window echoes the prompt is decoded again, whole and once, without it and flagge
 for that file, traded for its accuracy. `chunk` and `runs` make a call per chunk or run, so every one would be exposed;
 they never send the prompt. Their text gets punctuation from the `punctuate` stage and, under the default
 `[text] script` of `zh-Hans`, Simplified characters from `normalize`.
+
+A whole-file or run decode is many 30 s windows, and a decoder loop stays inside one. Every decode therefore reports
+the windows mlx-whisper decoded, read from the `seek` each segment records, and `transcribe_window` decodes one
+window's audio on its own, so the quality guard can decode a looped window again instead of the whole call. It
+makes the same call as every mode, never with the prompt.
 """
 
 import importlib
@@ -25,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast
 
 from pydantic import JsonValue
 
-from ytverbatim.asr.protocol import AsrContext, ChunkFlag, EngineSpec, RawChunk
+from ytverbatim.asr.protocol import AsrContext, ChunkFlag, EngineSpec, RawChunk, Window
 from ytverbatim.contract.models import Word
 from ytverbatim.errors import ConfigError, DependencyError
 
@@ -79,8 +84,10 @@ class _MelArray(Protocol):
 
 
 class _AudioModule(Protocol):
+    SAMPLE_RATE: int
     N_SAMPLES: int
     N_FRAMES: int
+    FRAMES_PER_SECOND: int
 
     def log_mel_spectrogram(self, audio: Any, n_mels: int, padding: int) -> _MelArray: ...
     def pad_or_trim(self, array: _MelArray, length: int, *, axis: int) -> _MelArray: ...
@@ -175,7 +182,17 @@ class WhisperEngine:
         if prompted and echoes_prompt(result):
             result = self._decode(audio, hint, None)
             flags = ("prompt_echo",)
-        words = _words(cast(Sequence[_WhisperSegment], result.get("segments") or ()))
+        return self._raw(audio, result, flags)
+
+    def transcribe_window(self, audio: "NDArray[np.float32]", *, language: str | None) -> RawChunk:
+        """Decode at most one window's audio exactly as `transcribe` decodes a window, but never with the prompt."""
+        return self._raw(audio, self._decode(audio, _normalize_language(language), None), ())
+
+    def _raw(self, audio: "NDArray[np.float32]", result: Mapping[str, Any], flags: tuple[ChunkFlag, ...]) -> RawChunk:
+        if self._audio is None:
+            raise RuntimeError("load() must be called before transcribe()")
+        segments = cast(Sequence[_WhisperSegment], result.get("segments") or ())
+        words = _words(segments)
         probabilities = [w.conf for w in words if w.conf is not None]
         return RawChunk(
             text=str(result.get("text", "")).strip(),
@@ -183,6 +200,12 @@ class WhisperEngine:
             confidence=sum(probabilities) / len(probabilities) if probabilities else None,
             words=words,
             flags=flags,
+            windows=_windows(
+                segments,
+                frames_per_second=self._audio.FRAMES_PER_SECOND,
+                window_s=self._audio.N_FRAMES / self._audio.FRAMES_PER_SECOND,
+                duration=len(audio) / self._audio.SAMPLE_RATE,
+            ),
         )
 
     def _loaded(self) -> tuple[_WhisperModule, _MlxCore, str]:
@@ -248,6 +271,32 @@ def _words(segments: Sequence[_WhisperSegment]) -> tuple[Word, ...]:
         for segment in segments
         for w in segment.get("words") or ()
         if w.get("start") is not None and w.get("end") is not None
+    )
+
+
+def _windows(
+    segments: Sequence[_WhisperSegment], *, frames_per_second: int, window_s: float, duration: float
+) -> tuple[Window, ...]:
+    """Return the decode windows behind `segments`, read from the `seek` frame each segment records.
+
+    A window ends where the next one starts, but never after its 30 s or the audio: mlx-whisper leaves no segment
+    for a window it judged silent, which must not stretch the window before it.
+    """
+    if not segments or not all("seek" in segment for segment in segments):
+        return ()
+    seeks: list[int] = []
+    counts: list[int] = []
+    for segment in segments:
+        count = len(_words((segment,)))
+        if seeks and seeks[-1] == segment["seek"]:
+            counts[-1] += count
+        else:
+            seeks.append(segment["seek"])
+            counts.append(count)
+    starts = [seek / frames_per_second for seek in seeks]
+    return tuple(
+        Window(start, min(following, start + window_s, duration), count)
+        for start, following, count in zip(starts, [*starts[1:], duration], counts, strict=True)
     )
 
 

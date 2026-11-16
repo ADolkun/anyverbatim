@@ -3,12 +3,13 @@ from pathlib import Path
 import pytest
 from fake_engine import definition, write_silence
 from pydantic import ValidationError
+from scripted_engine import LOOP_TEXT, said, spaced, windowed
 
 from ytverbatim import store
 from ytverbatim.asr import registry, worker
 from ytverbatim.asr.chunks import Chunk
 from ytverbatim.asr.guard import QualityGuard
-from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, FileJob, WorkerRequest
+from ytverbatim.asr.models import HYPOTHESES_FILE, AnomalySpan, ChunkHypothesis, FileJob, WorkerRequest
 from ytverbatim.asr.protocol import AsrContext, EngineDef, RawChunk
 from ytverbatim.asr.worker import DecodeUnit, pick_language, plan_runs
 from ytverbatim.contract.models import Word
@@ -198,12 +199,30 @@ def test_a_detection_failure_names_the_file_and_span(tmp_path: Path, wav: Path) 
         worker.run_request(request, engine=DetectingEngine([]))
 
 
-def test_the_runs_guard_only_flags_like_the_whole_file_control(tmp_path: Path) -> None:
-    def guard(hypothesis: str) -> object:
+def test_the_runs_guard_repairs_windows_like_the_whole_file_control(tmp_path: Path) -> None:
+    def whole_call(hypothesis: str) -> object:
         request = WorkerRequest(engine=registry.get(hypothesis), out_dir=str(tmp_path), files=())
-        return getattr(worker.default_guard(request), "_redecode", None)
+        return getattr(worker.default_guard(request), "_whole_call", None)
 
-    assert [guard(h) for h in ("w-prod", "w-vad", "w-vad-lid", "w-runs-lid")] == [False, True, True, False]
+    assert [whole_call(h) for h in ("w-prod", "w-vad", "w-vad-lid", "w-runs-lid")] == [True, False, False, True]
+
+
+def test_a_runs_rows_anomaly_span_is_its_window_after_the_run_start(tmp_path: Path, wav: Path) -> None:
+    class LoopingRuns(DetectingEngine):
+        def transcribe(self, audio: object, *, language: str | None, context: AsrContext | None) -> RawChunk:
+            super().transcribe(audio, language=language, context=context)
+            return windowed((0.0, 2.0, spaced("alpha bravo")), (2.0, 6.0, spaced(LOOP_TEXT)), language=language)
+
+        def transcribe_window(self, audio: object, *, language: str | None) -> RawChunk:
+            return said(*spaced(LOOP_TEXT))
+
+    request = WorkerRequest(engine=lid("runs"), out_dir=str(tmp_path / "out"), files=(job(wav),))
+    worker.run_request(request, engine=LoopingRuns([ZH, ZH, EN, EN]), guard=worker.default_guard(request))
+    rows = [ChunkHypothesis.model_validate_json(line) for line in (tmp_path / "out" / HYPOTHESES_FILE).open()]
+    assert [(row.start, row.flags, row.anomaly_spans) for row in rows] == [
+        (1.0, ("redecoded", "decoder_anomaly"), (AnomalySpan(start=3.0, end=7.0),)),
+        (9.0, ("redecoded", "decoder_anomaly"), (AnomalySpan(start=11.0, end=15.0),)),
+    ]
 
 
 def test_an_allowed_set_is_refused_by_an_engine_that_does_not_detect(wav: Path) -> None:
@@ -315,6 +334,14 @@ MAIN_ROW = (
 def test_a_control_row_serializes_as_it_did_before_language_prob() -> None:
     row = ChunkHypothesis.model_validate_json(MAIN_ROW)
     assert row.language_prob is None
+    assert row.anomaly_spans == ()
     assert row.model_dump_json() == MAIN_ROW
     detected = row.model_copy(update={"language_prob": 0.5}).model_dump_json()
     assert '"language_prob":0.5' in detected
+
+
+def test_anomaly_spans_are_written_only_when_there_are_some() -> None:
+    row = ChunkHypothesis.model_validate_json(MAIN_ROW)
+    spanned = row.model_copy(update={"anomaly_spans": (AnomalySpan(start=3.5, end=7.25),)}).model_dump_json()
+    assert spanned.endswith(',"anomaly_spans":[{"start":3.5,"end":7.25}]}')
+    assert ChunkHypothesis.model_validate_json(spanned).anomaly_spans == (AnomalySpan(start=3.5, end=7.25),)

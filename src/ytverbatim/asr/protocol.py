@@ -71,11 +71,25 @@ class AsrContext:
 
 
 @dataclass(frozen=True, slots=True)
+class Window:
+    """One window an engine decoded in a single pass, such as one of Whisper's 30 s windows.
+
+    `start` and `end` are relative to the audio handed to the engine; `words` counts the window's consecutive entries
+    of `RawChunk.words`.
+    """
+
+    start: float
+    end: float
+    words: int
+
+
+@dataclass(frozen=True, slots=True)
 class RawChunk:
     """One decode. Word times are relative to the start of the audio handed to the engine.
 
     `flags` are what the engine itself noticed, such as a prompt echo it decoded again; the worker adds them to the
-    row's own.
+    row's own. `windows` are the passes a windowing engine split the audio into, in order, so a guard can find and
+    decode again the one that failed; they never reach the row.
     """
 
     text: str
@@ -85,6 +99,7 @@ class RawChunk:
     confidence: float | None = None
     words: tuple[Word, ...] = ()
     flags: tuple[ChunkFlag, ...] = ()
+    windows: tuple[Window, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,8 +115,15 @@ class ChunkInput:
 
 @dataclass(frozen=True, slots=True)
 class GuardedChunk:
+    """A decode as the guard left it.
+
+    `anomaly_spans` are the stretches, relative to the chunk, that still look failed after a repair; empty means the
+    whole chunk, whichever flags it carries.
+    """
+
     raw: RawChunk
     flags: tuple[ChunkFlag, ...] = ()
+    anomaly_spans: tuple[tuple[float, float], ...] = ()
 
 
 class Engine(Protocol):
@@ -118,6 +140,15 @@ class LanguageDetector(Protocol):
 
     def detect_language(self, audio: "NDArray[np.float32]") -> Mapping[str, float]:
         """Return the probability of every language the engine knows, keyed by its code."""
+        ...
+
+
+@runtime_checkable
+class WindowDecoder(Protocol):
+    """An engine that reports `RawChunk.windows` and can decode one of them again on its own."""
+
+    def transcribe_window(self, audio: "NDArray[np.float32]", *, language: str | None) -> RawChunk:
+        """Decode audio no longer than one window, with no prompt."""
         ...
 
 
