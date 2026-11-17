@@ -188,6 +188,10 @@ UNCHANGED = [
     "百分之三到五",
     "三万到五",
     "三、五万",
+    # A start that could take the end's magnitude or its leading place stays unscaled, so the range stays Chinese.
+    "两到三十万",
+    "两到三千五百万",
+    "两到三百五十万",
     "三到二十5",
     "５三百",
     "５三个",
@@ -243,6 +247,12 @@ def test_conversions_are_sorted_spans_of_the_input() -> None:
         ("五到两百万", "5到200万"),
         ("三点五到四万", "3.5到4万"),
         ("三到五到七万", "3到5到7万"),
+        ("3到五到七万", "3到5到7万"),
+        ("五到十二万", "5到12万"),
+        ("两到十五万", "2到15万"),
+        ("两到十万", "2到10万"),
+        ("两到3.5亿", "2到3.5亿"),
+        ("两到三亿美元", "2到3亿美元"),
     ],
 )
 def test_a_range_start_is_written_in_its_ends_magnitude_and_reads_back_the_same(text: str, expected: str) -> None:
