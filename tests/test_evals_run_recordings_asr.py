@@ -181,6 +181,7 @@ def test_score_counts_rows_holding_a_special_token(root: Path):
     )
     report = invoke("score", "--hyp", "w-runs-lid", "--corpus", "ami")["corpora"]
     assert report["ami"]["special_token_rows"] == 1  # type: ignore[index]
+    assert report["ami"]["multi_language_recordings"] == 0  # type: ignore[index]
     assert report["ami"]["chunk_incidents"]["clean_in_mixed_recordings"] == 0  # type: ignore[index]
 
 
@@ -669,3 +670,18 @@ def test_a_loop_the_new_words_keep_is_not_a_repair_even_when_one_word_of_it_chan
     file = rescore_item("m2", [before], [after], [], [])
     assert [(w.span.start, w.span.end) for w in file.repaired_windows] == [(12.0, pytest.approx(20.0))]
     assert len(file.other_differences) == 1
+
+
+def test_score_counts_recordings_whose_rows_hold_more_than_one_language(root: Path):
+    def rows_for(request: WorkerRequest) -> list[ChunkHypothesis]:
+        (job,) = request.files
+        second = "en" if job.id == "m1" else "zh"
+        return [
+            spoken("w-runs-cs", job.id, pieces("hello there", 0.2), language="zh"),
+            spoken("w-runs-cs", job.id, pieces("now we begin", 70.2), chunk=1, language=second),
+        ]
+
+    items = load_items("ami", root=root)
+    run_corpus(asr_layout("ami", root), "w-runs-cs", items, worker=FakeWorker(rows_for))
+    report = invoke("score", "--hyp", "w-runs-cs", "--corpus", "ami")["corpora"]
+    assert report["ami"]["multi_language_recordings"] == 1  # type: ignore[index]
