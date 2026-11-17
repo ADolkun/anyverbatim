@@ -1323,8 +1323,8 @@ def test_an_empty_glossary_keeps_the_youtube_run_key_and_a_glossary_changes_it(s
             clock=lambda: NOW,
         ).run_key()
 
-    # An empty glossary adds nothing to the key; the pin moves with each stage version bump (clean-v3 last).
-    assert run_key() == "e98c53cf83f31c70f8fd095c00819cce074ae00caa2174e70011a46d422ac416"
+    # An empty glossary adds nothing to the key; the pin moves with each stage version bump (guards-v2 last).
+    assert run_key() == "c4d68430f484fe322cb0c911aa2855515e4b912cab292131fe42bf584db2123d"
     assert run_key(glossary=()) == run_key(glossary=(" ", "")) == run_key()
     assert run_key(glossary=("Acme",)) != run_key()
 

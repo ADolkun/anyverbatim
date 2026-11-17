@@ -103,7 +103,7 @@ Transcript: w-runs-lid · languages: zh, en · punctuation: llm · corrected by:
 - Timestamps are plain `[mm:ss]`, or `[h:mm:ss]` once the recording passes an hour. There are no links, since there is no video to link to.
 - Every paragraph starts with its time and, when several people talk, its speaker, so any paragraph still makes sense when you cut the file into pieces for an LLM. A long turn repeats the label.
 - A new paragraph starts at every change of speaker.
-- Footnotes mark doubts, and the changes that correction and number checks made, with the text as it was ("was X"). Overlapping speech is recorded in `context.json` only.
+- Footnotes mark doubts, and the changes that correction and number checks made, with the text as it was ("was X"). Correction's footnotes include every Latin-script name it changed. Overlapping speech is recorded in `context.json` only.
 - The `Recorded` part is left out when the date is unknown. The origin is `Voice Memos`, or else the file name.
 - There are no chapters for recordings.
 

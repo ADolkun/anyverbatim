@@ -1,6 +1,6 @@
 import pytest
 
-from ytverbatim.text.guards import EntityChange, check_fix, check_numeric_fix, symbol_changes
+from ytverbatim.text.guards import EntityChange, check_fix, check_numeric_fix, name_changes, symbol_changes
 
 
 def rejected_by(original: str, fixed: str) -> str | None:
@@ -331,3 +331,148 @@ def test_numeric_fix_that_reaches_beyond_the_flagged_tokens_is_rejected(
     original: str, fixed: str, suspects: list[str]
 ) -> None:
     assert not check_numeric_fix(original, fixed, suspects)
+
+
+class TestNameChanges:
+    @staticmethod
+    def pairs(changes: tuple[EntityChange, ...]) -> list[tuple[str, str]]:
+        return [(c.before, c.after) for c in changes]
+
+    def test_a_latin_word_in_a_chinese_segment_is_flagged_at_the_final_offsets(self) -> None:
+        original, final = "大家可以在 Zorbyx 上支持我们", "大家可以在 Zorbix 上支持我们"
+        (change,) = name_changes(original, final, zh=True)
+        assert change == EntityChange("Zorbyx", "Zorbix", 6, 12)
+        assert final[change.char_start : change.char_end] == "Zorbix"
+
+    def test_any_latin_word_counts_in_a_chinese_segment(self) -> None:
+        assert self.pairs(name_changes("我们用 the 吧", "我们用 zorbix 吧", zh=True)) == [("the", "zorbix")]
+
+    @pytest.mark.parametrize(
+        ("original", "final"),
+        [
+            ("we went too the park", "we went to the park"),
+            ("the zorbix tool", "the xorbyte tool"),
+        ],
+    )
+    def test_ordinary_lowercase_english_words_are_not_names(self, original: str, final: str) -> None:
+        assert name_changes(original, final, zh=False) == ()
+
+    @pytest.mark.parametrize(
+        ("original", "final"),
+        [
+            ("zorbix is here", "Zorbix is here"),
+            ("one thing. ok let us go", "one thing. Okay let us go"),
+            ('he left. "ok then"', 'he left. "Okay then"'),
+            ("i'd go there", "I'd go there"),
+            ("so i think so", "so I think so"),
+            ("so i'm sure", "so I'm sure"),
+        ],
+    )
+    def test_a_sentence_initial_capital_or_the_pronoun_i_is_not_a_name(self, original: str, final: str) -> None:
+        assert name_changes(original, final, zh=False) == ()
+
+    def test_a_mid_sentence_capitalized_name_is_flagged(self) -> None:
+        final = "we talked with Zorbix yesterday"
+        (change,) = name_changes("we talked with zorbyx yesterday", final, zh=False)
+        assert change == EntityChange("zorbyx", "Zorbix", 15, 21)
+        assert final[change.char_start : change.char_end] == "Zorbix"
+
+    @pytest.mark.parametrize("final", ["we use ZorBix daily", "we use iZorbix daily"])
+    def test_an_uppercase_letter_after_the_first_makes_a_name(self, final: str) -> None:
+        assert len(name_changes("we use zorbyx daily", final, zh=False)) == 1
+
+    def test_a_word_inserted_is_a_change_from_nothing(self) -> None:
+        assert self.pairs(name_changes("we met them", "we met them, Zorbix", zh=False)) == [("", "Zorbix")]
+
+    def test_a_name_that_replaced_chinese_characters_names_them(self) -> None:
+        assert self.pairs(name_changes("我们用了佐比的工具", "我们用了Zorbix的工具", zh=True)) == [("佐比", "Zorbix")]
+
+    def test_a_name_that_lost_its_last_letter_names_the_whole_original_word(self) -> None:
+        assert self.pairs(name_changes("we met Zorbyxe today", "we met Zorbix today", zh=False)) == [
+            ("Zorbyxe", "Zorbix")
+        ]
+
+    def test_each_name_in_a_split_stretch_names_its_own_original(self) -> None:
+        original, final = (
+            "我们先试了zorb，后来换成佐比，最后选了xorb",
+            "我们先试了zorb，后来换成Zorbix，最后选了Xorbyte",
+        )
+        assert self.pairs(name_changes(original, final, zh=True)) == [("佐比", "Zorbix"), ("xorb", "Xorbyte")]
+
+    @pytest.mark.parametrize(
+        ("original", "final"),
+        [
+            ("we use um Zorbyx", "we use Zorbix"),
+            ("the the Zorbyx", "the Zorbix"),
+            ("we met Zorbyx and um left", "we met Zorbix left"),
+        ],
+    )
+    def test_a_dropped_word_beside_a_name_stays_out_of_its_original(self, original: str, final: str) -> None:
+        assert self.pairs(name_changes(original, final, zh=False)) == [("Zorbyx", "Zorbix")]
+
+    @pytest.mark.parametrize(
+        ("original", "final", "zh"),
+        [
+            ("我们用 Zorbyx 吧", "我们用 Zörbix 吧", True),
+            ("we met zorbyx today", "we met Zörbix today", False),
+        ],
+    )
+    def test_accented_letters_belong_to_the_word(self, original: str, final: str, zh: bool) -> None:
+        (change,) = name_changes(original, final, zh=zh)
+        assert change.after == "Zörbix"
+        assert change.before.casefold() == "zorbyx"
+
+    @pytest.mark.parametrize(
+        ("original", "final"),
+        [("we met Mr. zorbyx", "we met Mr. Zorbix"), ("so Dr. xorbite agreed", "so Dr. Xorbyte agreed")],
+    )
+    def test_a_capitalized_word_after_a_title_is_a_name(self, original: str, final: str) -> None:
+        assert len(name_changes(original, final, zh=False)) == 1
+
+    def test_a_name_beside_a_ticker_change_keeps_its_own_flag(self) -> None:
+        original, final = "per zorbyx GAP rules", "per Zorbix GAAP rules"
+        tickers = symbol_changes(original, final)
+        assert self.pairs(name_changes(original, final, zh=False, symbols=tickers)) == [("zorbyx", "Zorbix")]
+
+    def test_a_stretch_of_changed_words_is_one_change(self) -> None:
+        assert self.pairs(name_changes("with Xor byte again", "with Zorbix again", zh=False)) == [
+            ("Xor byte", "Zorbix")
+        ]
+
+    @pytest.mark.parametrize(
+        ("original", "final"),
+        [
+            ("with zorbix again", "with Zorbix again"),
+            ("with Zor bix again", "with Zorbix again"),
+            ("with Zorbix again", "with Zor bix again"),
+            ("with Zorbix again", "with Zorbix, again"),
+            ("涨了2.5Zorbix也涨了", "涨了2.5，Zorbix也涨了"),
+            ("with Zorb-ix again", "with Zorbix again"),
+            ("with Zorbix's team", "with Zorbixs team"),
+        ],
+    )
+    def test_format_only_changes_are_not_flagged(self, original: str, final: str) -> None:
+        assert name_changes(original, final, zh=True) == ()
+
+    def test_a_deletion_leaves_nothing_to_flag(self) -> None:
+        assert name_changes("with Zorbix and Xorbyte", "with Zorbix", zh=False) == ()
+
+    def test_cjk_words_are_never_flagged(self) -> None:
+        assert name_changes("大家可以在这里支持我们的频到", "大家可以在这里支持我们的频道", zh=True) == ()
+
+    def test_bare_numbers_are_not_words(self) -> None:
+        assert name_changes("买了 100 股", "买了 200 股", zh=True) == ()
+
+    def test_a_ticker_change_is_left_to_the_symbol_flag(self) -> None:
+        original, final = "according to GAP rules", "according to GAAP rules"
+        tickers = symbol_changes(original, final)
+        assert name_changes(original, final, zh=False, symbols=tickers) == ()
+        assert self.pairs(name_changes(original, final, zh=False)) == [("GAP", "GAAP")]
+
+    def test_a_ticker_merged_into_a_name_is_left_to_the_symbol_flag(self) -> None:
+        original, final = "the open AI deal", "the OpenAI deal"
+        assert name_changes(original, final, zh=False, symbols=symbol_changes(original, final)) == ()
+
+    def test_changes_come_in_text_order(self) -> None:
+        final = "与 Zorbix 和 Xorbyte 合作"
+        assert [c.after for c in name_changes("与 Zorbyx 和 Xorbite 合作", final, zh=True)] == ["Zorbix", "Xorbyte"]

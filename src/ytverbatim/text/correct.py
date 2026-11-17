@@ -8,6 +8,8 @@ In a diarized transcript each segment also carries its speaker's id ("S2", never
 the segments are turns of a conversation. A transcript with stretches in more than one language says so, and asks
 that every word stay in the language it was spoken.
 
+Every Latin-script name the LLM changed is flagged ``entity_corrected``, as tickers and acronyms are.
+
 Each batch's validated LLM reply is checkpointed before the guards run, so a resume never pays twice for a finished
 batch, and a guard change re-applies to cached replies for free.
 """
@@ -27,8 +29,8 @@ from ytverbatim.contract.models import Edit, Flag, LLMUsage
 from ytverbatim.llm.jsonio import complete_json
 from ytverbatim.llm.protocol import LLMClient, LLMRequest
 from ytverbatim.llm.usage import UsageMeter
-from ytverbatim.text.guards import GuardName, check_fix, symbol_changes
-from ytverbatim.text.segment import language_line
+from ytverbatim.text.guards import GuardName, check_fix, name_changes, symbol_changes
+from ytverbatim.text.segment import is_zh, language_line
 
 _log = logging.getLogger(__name__)
 
@@ -171,7 +173,10 @@ def correct_segments(
         ]
         for batch in _index_batches(run.texts, low, BATCH_CHARS):
             run.correct_batch(batch, "low_confidence")
-    flags = tuple(_entity_flags(before, after) for before, after in zip(segments, run.texts, strict=True))
+    flags = tuple(
+        _entity_flags(before, after, zh=is_zh((languages[index] if languages else None) or language))
+        for index, (before, after) in enumerate(zip(segments, run.texts, strict=True))
+    )
     result = CorrectionResult(
         texts=tuple(run.texts),
         edits=tuple(tuple(edits) for edits in run.edits),
@@ -281,7 +286,9 @@ class _Run:
         return fixes
 
 
-def _entity_flags(original: str, corrected: str) -> tuple[Flag, ...]:
+def _entity_flags(original: str, corrected: str, *, zh: bool) -> tuple[Flag, ...]:
+    tickers = symbol_changes(original, corrected)
+    names = name_changes(original, corrected, zh=zh, symbols=tickers)
     return tuple(
         Flag(
             kind="entity_corrected",
@@ -289,7 +296,7 @@ def _entity_flags(original: str, corrected: str) -> tuple[Flag, ...]:
             char_end=change.char_end,
             note=f"{change.before} → {change.after}",
         )
-        for change in symbol_changes(original, corrected)
+        for change in sorted((*tickers, *names), key=lambda c: (c.char_start, c.char_end))
     )
 
 
