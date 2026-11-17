@@ -60,18 +60,13 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def test_recording_jobs_carry_no_language_hint_and_only_language_id_hypotheses_the_allowed_set(root: Path):
     (item,) = load_items("ami", root=root)
-    expected = {
+    jobs = {h: recording_job(item, registry.get(h)) for h in E2_HYPOTHESES}
+    assert all(job.language is None and job.chunks is None and job.context is None for job in jobs.values())
+    assert {h: job.languages for h, job in jobs.items()} == {
         "w-prod": (),
         "w-vad": (),
         "w-vad-lid": ("zh", "en"),
         "w-runs-lid": ("zh", "en"),
-        "w-runs-cs": ("zh", "en"),
-    }
-    assert set(expected) == set(E2_HYPOTHESES)
-    jobs = {h: recording_job(item, registry.get(h)) for h in E2_HYPOTHESES if h in registry.HYPOTHESES}
-    assert all(job.language is None and job.chunks is None and job.context is None for job in jobs.values())
-    assert {h: job.languages for h, job in jobs.items()} == {
-        h: languages for h, languages in expected.items() if h in jobs
     }
 
 
@@ -163,15 +158,14 @@ def choices(command: str, option: str) -> tuple[str, ...]:
     return tuple(param.type.choices)
 
 
-def test_the_code_switched_hypothesis_is_a_choice_of_every_command_that_names_one():
-    assert "w-runs-cs" in E2_HYPOTHESES
+def test_every_e2_hypothesis_is_a_choice_of_every_command_that_names_one():
     for command, option in (
         ("run", "hypothesis"),
         ("score", "hypothesis"),
         ("compare", "first"),
         ("compare", "second"),
     ):
-        assert "w-runs-cs" in choices(command, option)
+        assert choices(command, option) == E2_HYPOTHESES
 
 
 def test_score_counts_rows_holding_a_special_token(root: Path):
@@ -677,11 +671,11 @@ def test_score_counts_recordings_whose_rows_hold_more_than_one_language(root: Pa
         (job,) = request.files
         second = "en" if job.id == "m1" else "zh"
         return [
-            spoken("w-runs-cs", job.id, pieces("hello there", 0.2), language="zh"),
-            spoken("w-runs-cs", job.id, pieces("now we begin", 70.2), chunk=1, language=second),
+            spoken("w-runs-lid", job.id, pieces("hello there", 0.2), language="zh"),
+            spoken("w-runs-lid", job.id, pieces("now we begin", 70.2), chunk=1, language=second),
         ]
 
     items = load_items("ami", root=root)
-    run_corpus(asr_layout("ami", root), "w-runs-cs", items, worker=FakeWorker(rows_for))
-    report = invoke("score", "--hyp", "w-runs-cs", "--corpus", "ami")["corpora"]
+    run_corpus(asr_layout("ami", root), "w-runs-lid", items, worker=FakeWorker(rows_for))
+    report = invoke("score", "--hyp", "w-runs-lid", "--corpus", "ami")["corpora"]
     assert report["ami"]["multi_language_recordings"] == 1  # type: ignore[index]

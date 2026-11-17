@@ -58,7 +58,6 @@ MIN_CUT_GAP_S = 0.75
 MEETINGS = "meetings"
 ASCEND_POOLED = "ascend-pooled"
 SPECIAL_TOKEN_MARK = "<|"
-LANGUAGE_TOKEN_FLAG = "language_token"
 MIN_CLUSTERS = 2
 
 
@@ -437,11 +436,8 @@ def pool(scored: Mapping[str, Scored], corpora: Sequence[str]) -> Scored:
 
 
 def special_token_rows(rows: Iterable[ChunkHypothesis]) -> int:
-    """Rows whose text still holds a Whisper special token such as ``<|en|>``, or that sampled a language token.
-
-    A guard repair rebuilds a row's text from its words, which never hold the token, so the flag is what remains.
-    """
-    return sum(SPECIAL_TOKEN_MARK in row.text or LANGUAGE_TOKEN_FLAG in row.flags for row in rows)
+    """Rows whose text still holds a Whisper special token such as ``<|en|>``."""
+    return sum(SPECIAL_TOKEN_MARK in row.text for row in rows)
 
 
 def multi_language_recordings(rows: Mapping[str, Sequence[ChunkHypothesis]]) -> int:

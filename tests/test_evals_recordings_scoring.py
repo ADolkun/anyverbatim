@@ -441,11 +441,6 @@ def test_special_token_rows_counts_rows_whose_text_holds_a_token():
     assert special_token_rows([]) == 0
 
 
-def test_special_token_rows_counts_a_row_flagged_for_a_sampled_language_token():
-    repaired = spoken("w", "m1", [(" hello", 0, 1)]).model_copy(update={"flags": ("redecoded", "language_token")})
-    assert special_token_rows([repaired, spoken("w", "m1", [(" hi", 1, 2)], chunk=1)]) == 1
-
-
 def test_multi_language_recordings_counts_recordings_whose_rows_report_two_languages():
     rows = {
         "mixed": [
