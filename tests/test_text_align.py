@@ -1,7 +1,7 @@
 import pytest
 
 from ytverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack, Word
-from ytverbatim.text.align import WINDOW_PAD_S, Timeline, align, caption_pieces, timeline, units
+from ytverbatim.text.align import WINDOW_PAD_S, Timeline, align, caption_pieces, caption_timeline, timeline, units
 
 
 def equal_runs(mine: str, theirs: str) -> list[tuple[int, int]]:
@@ -165,3 +165,44 @@ def test_a_cue_without_words_is_one_piece_and_a_cue_with_words_is_its_words() ->
 
 def test_a_track_without_cues_has_no_pieces() -> None:
     assert caption_pieces(track(CaptionKind.MANUAL)) == ("caption_manual", ())
+
+
+def test_chinese_cues_that_meet_in_latin_script_stay_two_words() -> None:
+    cues = (
+        CaptionSegment(start=0.0, end=2.0, text="他们收购了Zorbix"),
+        CaptionSegment(start=2.0, end=4.0, text="Zorbix曾经排第二"),
+        CaptionSegment(start=4.0, end=6.0, text="达到了21"),
+        CaptionSegment(start=6.0, end=8.0, text="3家公司"),
+    )
+
+    built = caption_timeline(track(CaptionKind.MANUAL, *cues))
+
+    assert "Zorbix Zorbix" in built.text
+    assert [u.key for u in built.units].count("zorbix") == 2
+    assert [u.token.value_itn for u in built.units if u.token is not None] == ["第2", "21", "3家"]
+
+
+def test_chinese_word_pieces_are_joined_without_spaces() -> None:
+    pieces = [
+        ("我们", 0.0, 0.5),
+        ("的", 0.5, 1.0),
+        ("Zor", 1.0, 1.5),
+        ("bix", 1.5, 2.0),
+        ("公司", 2.0, 2.5),
+        ("很好", 2.5, 3.0),
+    ]
+    cue = CaptionSegment(start=0.0, end=3.0, text="ignored", words=tuple(Word(*p) for p in pieces))
+
+    built = caption_timeline(track(CaptionKind.AUTO, cue))
+
+    assert built.text == "我们的Zorbix公司很好"
+    assert built.source == "caption_auto"
+
+
+def test_english_cues_are_spaced_as_before() -> None:
+    cues = (
+        CaptionSegment(start=0.0, end=2.0, text="we bought Zorbix"),
+        CaptionSegment(start=2.0, end=4.0, text="Zorbix was second"),
+    )
+
+    assert caption_timeline(track(CaptionKind.MANUAL, *cues)).text == "we bought Zorbix Zorbix was second"
