@@ -25,7 +25,7 @@ uv tool install "ytverbatim[whisper,asr] @ git+https://github.com/ADolkun/ytverb
 uv tool upgrade ytverbatim            # to update later
 ```
 
-There is no PyPI release yet, so the install comes from the repository. The part in brackets names two optional extras, which hold the speech engines. `run` checks for the extra it needs before it downloads anything, and its error names the extra that is missing.
+There is no PyPI release yet, so the install comes from the repository. That installs the newest `main`; to pin a release, add its tag, as in `…/ytverbatim@v0.1.0`. The part in brackets names two optional extras, which hold the speech engines. `run` checks for the extra it needs before it downloads anything, and its error names the extra that is missing.
 
 | You want | Extras |
 |---|---|
@@ -312,7 +312,7 @@ Not yet:
 - Chapters for recordings
 - A speaker count hint for the diarizer
 - Voice Memos listing, speaker naming and folder expansion in the library; they stay CLI features
-- A release that carries the breaking changes listed in [docs/library.md](docs/library.md)
+- Two language tokens for mixed Mandarin and English recordings, so short stretches in the other language are not translated (being evaluated)
 
 ## License
 
