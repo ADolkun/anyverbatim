@@ -123,6 +123,14 @@ uv run python -m evals.run_recordings_asr compare --a w-runs-lid --b w-prod
 counts and the verdict, never transcript or reference text. The engine it tested, `w-runs-cs`, was rejected and is not
 in the repository, so its commands there no longer run; `score` and `compare` still pair any two hypotheses.
 
+# Caption-corroboration results
+
+`corroboration-<date>.md` is the record of one pre-registered evaluation, written by hand from the report of an eval
+command that replayed three caption rules over the stored correction runs. It holds the decision rule, case counts and
+the owner's answers by kind, rates per hour and the verdict, never transcript, caption or reference text, names or video
+ids. Two of the rules were rejected; they and the command stayed on their branch, so the commands listed there do not
+run from this repository. The third, name flags, ships.
+
 # Diarization results
 
 Each `diarization-<date>.md` here is written by hand from what `evals.run_diarization run`, `compare` and the
