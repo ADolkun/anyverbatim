@@ -326,8 +326,7 @@ _LINKABLE = frozenset("一二两三四五六七八九十")
 _SCALE_LINKS = frozenset("到至～~-—")
 _TRAILING_MAGNITUDE = re.compile("[万亿]+$")
 # One digit, then 百 or 千 (or its zeros) before the magnitude: the 两 of 两到三百万 is 两百万.
-_LEAD_AND_PLACE = re.compile("[1-9一二两三四五六七八九](?P<place>[百千]|000|00)[万亿]+")
-_PLACE_EXPONENT = {"百": 2, "00": 2, "千": 3, "000": 3}
+_LEAD_AND_PLACE = re.compile("[1-9一二两三四五六七八九](?:[百千]|000|00)[万亿]+")
 _FRACTION = re.compile(rf"([{''.join(_DIGIT_VALUE)}]+)([万亿]*)")
 
 
@@ -778,84 +777,94 @@ def _with_range_ends(text: str, found: list[_Quantity], lone: list[tuple[int, in
     Only a figure with a value anchors a range, so 第三到五 (an ordinal) and 几到五 stay as they are. Neither does a
     percent, whose unit the lone end shares (百分之三到五): read alone it would be a bare 5, a value nobody said, so it
     stays no quantity at all. A figure that ends in 万 or 亿 lends its magnitude and currency sign to the start of its
-    range instead, Chinese or digits, lone or not: 三到五万 and 3到5万 are 30000 to 50000, 两到3亿美元 is $200000000 to
-    $300000000 (see `_scaled_start`). The end's measure word stays its own, as in 三到五个. A magnitude on the left
-    lends nothing (三万到五). 一到 before a date or a time is "as soon as" (一到三月份就涨), unless 从 opens the range;
-    一至三月 is a range.
+    range instead, Chinese or digits, lone or not, along a chain in either script: 三到五万 and 3到5万 are 30000 to
+    50000, 两到3亿美元 is $200000000 to $300000000 (see `_scaled_start`). The end's measure word stays its own, as in
+    三到五个. A magnitude on the left lends nothing (三万到五). 一到 before a date or a time is "as soon as"
+    (一到三月份就涨), unless 从 opens the range; 一至三月 is a range.
     """
+    scales = {
+        quantity.token.char_start: scale for quantity in found if (scale := _range_scale(text, quantity)) is not None
+    }
+    # Right to left, so each scaled start lends the scale on to the start before it: 三到五到七万, 3到五到七万.
+    events = [(quantity.token.char_start, index, None) for index, quantity in enumerate(found)]
+    events += [(span[0], -1, span) for span in lone]
+    for _, index, span in sorted(events, key=lambda event: event[0], reverse=True):
+        if span is None:
+            scaled = _scaled_start(text, found[index], scales)
+            if scaled is None:
+                continue
+            found[index] = scaled
+        else:
+            read = _cjk_quantity(text, span[0], "", span, "", lone=True)
+            scaled = None if read is None else _scaled_start(text, read, scales)
+            if scaled is None:
+                continue
+            found.append(scaled)
+            lone.remove(span)
+        scales[scaled.token.char_start] = scales[scaled.token.char_end + 1]
     anchors: dict[tuple[str, int], str] = {
         edge: quantity.unit
         for quantity in found
         if quantity.value is not None and quantity.prefix not in ("第", "百分之") and not quantity.magnitude
         for edge in (("end", quantity.token.char_end), ("start", quantity.token.char_start))
     }
-    scales = {
-        quantity.token.char_start: (quantity, exponents)
-        for quantity in found
-        if (exponents := _scale_exponents(text, quantity))
-    }
-    # Right to left, so a scaled start lends its scale on along a chain: 3到5到7万.
-    for index in reversed(range(len(found))):
-        scaled_start = _scaled_start(text, found[index], scales)
-        if scaled_start is not None:
-            found[index] = scaled_start
-            scales[scaled_start.token.char_start] = scales[scaled_start.token.char_end + 1]
     added = True
     while added:
         added = False
         for start, end in list(lone):
-            link = text[end : end + 1]
-            right = anchors.get(("start", end + 1)) if link in _RANGE_LINKS else None
-            as_soon_as = text[start] == "一" and link == "到" and text[start - 1 : start] != "从"
+            right = anchors.get(("start", end + 1)) if text[end : end + 1] in _RANGE_LINKS else None
+            as_soon_as = text[start] == "一" and text[end : end + 1] == "到" and text[start - 1 : start] != "从"
             if right in _CALENDAR_UNITS and as_soon_as:
                 right = None
             left = text[start - 1 : start] in _RANGE_LINKS and ("end", start - 1) in anchors
-            scaled = link in _SCALE_LINKS and end + 1 in scales and not left and right is None
             quantity = (
-                _cjk_quantity(text, start, "", (start, end), "", lone=True)
-                if left or right is not None or scaled
-                else None
+                _cjk_quantity(text, start, "", (start, end), "", lone=True) if left or right is not None else None
             )
-            if quantity is not None and scaled:
-                quantity = _scaled_start(text, quantity, scales)
             if quantity is None or quantity.value is None:
                 continue
             found.append(quantity)
-            if scaled:
-                scales[start] = scales[end + 1]
-            else:
-                anchors |= {("end", end): "", ("start", start): ""}
+            anchors |= {("end", end): "", ("start", start): ""}
             lone.remove((start, end))
             added = True
     return sorted(found, key=lambda quantity: quantity.token.char_start)
 
 
-def _scale_exponents(text: str, quantity: _Quantity) -> tuple[int, ...]:
-    """Return the powers of ten a range start may share with this figure as its end, largest first, or none.
+@dataclass(frozen=True, slots=True)
+class _RangeScale:
+    """What a range end lends its start.
 
-    A figure lends the 万, 亿 or 万亿 it ends in (五万, 3.5亿, 三点五万), never one inside it (一万五). After a single
-    leading digit a 百 or 千 may belong to the scale as well (三百万, 300万, 3千万), which `_scaled_start` tries first.
+    ``magnitude`` is the exponent of the 万, 亿 or 万亿 the end ends in, and ``compound`` whether the end is one digit
+    and a 百 or 千 before that magnitude (三百万, 300万, 3千万).
+    """
+
+    end: _Quantity
+    magnitude: int
+    compound: bool
+
+
+def _range_scale(text: str, quantity: _Quantity) -> _RangeScale | None:
+    """Return what this figure lends the start of a range it ends, or None if it lends nothing.
+
+    A figure lends the 万, 亿 or 万亿 it ends in (五万, 3.5亿, 三点五万), never one inside it (一万五).
     """
     if quantity.value is None or quantity.prefix or not quantity.magnitude:
-        return ()
+        return None
     run = _ascii_digits(_normalized(text[quantity.run[0] : quantity.run[1]]))
     trailing = _TRAILING_MAGNITUDE.search(run)
     if trailing is None:
-        return ()
-    exponent = _magnitude_exponent(trailing[0])
-    lead = _LEAD_AND_PLACE.fullmatch(run)
-    return (exponent + _PLACE_EXPONENT[lead["place"]], exponent) if lead else (exponent,)
+        return None
+    return _RangeScale(quantity, _magnitude_exponent(trailing[0]), _LEAD_AND_PLACE.fullmatch(run) is not None)
 
 
-def _scaled_start(
-    text: str, quantity: _Quantity, scales: dict[int, tuple[_Quantity, tuple[int, ...]]]
-) -> _Quantity | None:
+def _scaled_start(text: str, quantity: _Quantity, scales: dict[int, _RangeScale]) -> _Quantity | None:
     """Read a range start in the magnitude of the end a range link joins it to, or None if it shares none.
 
-    A start shares the scale only when it has none of its own (no 万 or 亿, prefix or unit) and stays below the end
-    in it: 两到三百万 is 2000000 to 3000000, but 五到两百万 is 50000 to 2000000, 二十到三十万 is 200000 to 300000 and
-    两千到三万 keeps 2000. Its `value` is the start counted in the end's 万 or 亿, the form the display writes so that
-    it reads back the same (两到三百万 → 200到300万, not 2到300万).
+    A start shares the scale only when it has none of its own (no 万 or 亿, prefix or unit) and stays below the end in
+    it. A start of more than one digit takes the end's magnitude (二十到三十万 is 200000 to 300000). A start of one
+    digit may also take the end's leading place: 五到十二万 can only be 50000, and 两到三亿 only 200000000. When both
+    readings stay below the end, the place is taken only when the end is that digit and a 百 or 千 (两到三百万 is
+    2000000); 两到三十万 and 两到三百五十万 could be either, so the start stays unscaled. Its `value` is the start
+    counted in the end's 万 or 亿, the form the display writes so that it reads back the same (两到三百万 → 200到300万).
     """
     token = quantity.token
     if (
@@ -868,18 +877,20 @@ def _scaled_start(
         or token.char_end + 1 not in scales
     ):
         return None
-    end, exponents = scales[token.char_end + 1]
-    if end.value is None:
+    scale = scales[token.char_end + 1]
+    if scale.end.value is None:
         return None
-    for exponent in exponents:
-        value = Decimal(quantity.value) * Decimal(10) ** exponent
-        if value < Decimal(end.value):
-            symbol = quantity.symbol or end.symbol
-            kind: QKind = "currency" if symbol else token.kind
-            in_end_unit = _plain(value / Decimal(10) ** exponents[-1])
-            itn = f"{symbol}{_plain(value)}"
-            return replace(quantity, token=replace(token, value_itn=itn, kind=kind), value=in_end_unit)
-    return None
+    start, top = Decimal(quantity.value), Decimal(scale.end.value)
+    readings = {scale.magnitude, top.adjusted()} if start.adjusted() == 0 else {scale.magnitude}
+    fits = sorted((exponent for exponent in readings if start * Decimal(10) ** exponent < top), reverse=True)
+    if not fits or (len(fits) > 1 and not scale.compound):
+        return None
+    value = start * Decimal(10) ** fits[0]
+    symbol = quantity.symbol or scale.end.symbol
+    kind: QKind = "currency" if symbol else token.kind
+    in_end_unit = _plain(value / Decimal(10) ** scale.magnitude)
+    itn = f"{symbol}{_plain(value)}"
+    return replace(quantity, token=replace(token, value_itn=itn, kind=kind), value=in_end_unit)
 
 
 def _bare(token: QToken) -> _Quantity:

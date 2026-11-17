@@ -660,6 +660,13 @@ def test_a_lone_numeral_without_a_figure_to_anchor_it_is_no_quantity(text: str) 
         ("一千到两千万", "1000到2000万", ["10000000", "20000000"]),
         ("三点五到四万", "3.5到4万", ["35000", "40000"]),
         ("三到五到七万", "3到5到7万", ["30000", "50000", "70000"]),
+        ("三到五到七万", "3到五到七万", ["30000", "50000", "70000"]),
+        ("一到二到三亿", "一到2到3亿", ["100000000", "200000000", "300000000"]),
+        ("五到十二万", "5到12万", ["50000", "120000"]),
+        ("两到十五万", "2到15万", ["20000", "150000"]),
+        ("两到十万", "2到10万", ["20000", "100000"]),
+        ("两到三点五亿", "2到3.5亿", ["200000000", "350000000"]),
+        ("一点五到两百万", "1.5到2百万", ["1500000", "2000000"]),
     ],
 )
 def test_a_range_start_shares_the_magnitude_and_currency_of_its_end_in_either_script(
@@ -683,6 +690,11 @@ def test_a_range_start_shares_the_magnitude_and_currency_of_its_end_in_either_sc
         ("三万到五万", ["30000", "50000"]),
         ("二十几到三十万", ["~20", "300000"]),
         ("2、3万", ["2", "30000"]),
+        # One digit could take the end's magnitude or its leading place, and only 两到三百万 says which.
+        ("两到三十万", ["300000"]),
+        ("两到三千五百万", ["35000000"]),
+        ("两到三百五十万", ["3500000"]),
+        ("2到30万", ["2", "300000"]),
     ],
 )
 def test_a_range_start_shares_a_magnitude_only_when_it_has_none_and_stays_below_the_end(
