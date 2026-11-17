@@ -625,11 +625,12 @@ def test_a_lone_numeral_linked_to_a_figure_is_the_other_end_of_its_range(
         "三到几个",
         "三块五",
         "说到三",
-        # A lone end shares the percent or magnitude of its partner, so read alone it would be a bare figure.
+        # A lone end shares the percent of its partner, so read alone it would be a bare figure, and a magnitude on
+        # the left is lent to nothing.
         "百分之三到五",
-        "三到五万",
-        "一到三万",
         "三万到五",
+        # 、 lists figures as often as it spans them, so it lends no magnitude.
+        "三、五万",
         # 一到 before a date or a time is "as soon as".
         "一到三月份就开始涨",
         "一到十二点就睡",
@@ -637,6 +638,65 @@ def test_a_lone_numeral_linked_to_a_figure_is_the_other_end_of_its_range(
 )
 def test_a_lone_numeral_without_a_figure_to_anchor_it_is_no_quantity(text: str) -> None:
     assert all(len(t.surface) > 1 for t in quantity_tokens(text))
+
+
+@pytest.mark.parametrize(
+    ("chinese", "digits", "values"),
+    [
+        ("两到三亿", "2到3亿", ["200000000", "300000000"]),
+        ("两到3亿", "2到3亿", ["200000000", "300000000"]),
+        ("两到3亿美元", "2到3亿美元", ["$200000000", "$300000000"]),
+        ("两到三亿美元", "2到3亿美元", ["$200000000", "$300000000"]),
+        ("三到五万", "3到5万", ["30000", "50000"]),
+        ("一到三万", "1到3万", ["10000", "30000"]),
+        ("两到3万", "2到3万", ["20000", "30000"]),
+        ("三至五万", "3至5万", ["30000", "50000"]),
+        ("三~五万", "3~5万", ["30000", "50000"]),
+        ("两到三万亿", "2到3万亿", ["2000000000000", "3000000000000"]),
+        ("两到三千万", "2到3千万", ["20000000", "30000000"]),
+        ("两到三百万", "2到300万", ["2000000", "3000000"]),
+        ("五到十万", "5到10万", ["50000", "100000"]),
+        ("二十到三十万", "20到30万", ["200000", "300000"]),
+        ("一千到两千万", "1000到2000万", ["10000000", "20000000"]),
+        ("三点五到四万", "3.5到4万", ["35000", "40000"]),
+        ("三到五到七万", "3到5到7万", ["30000", "50000", "70000"]),
+    ],
+)
+def test_a_range_start_shares_the_magnitude_and_currency_of_its_end_in_either_script(
+    chinese: str, digits: str, values: list[str]
+) -> None:
+    assert [t.value_itn for t in quantity_tokens(chinese)] == values
+    assert [t.value_itn for t in quantity_tokens(digits)] == values
+
+
+@pytest.mark.parametrize(
+    ("text", "values"),
+    [
+        # The end's measure word stays its own, as in 三到五个.
+        ("三到五万人", ["30000", "50000人"]),
+        # A start scaled to the end's size or above it is not the start of that range.
+        ("五到两百万", ["50000", "2000000"]),
+        ("两千到三万", ["2000", "30000"]),
+        # 千 and 百 alone are no magnitude to lend.
+        ("两到三千", ["2", "3000"]),
+        ("2到3千", ["2", "3000"]),
+        ("三万到五万", ["30000", "50000"]),
+        ("二十几到三十万", ["~20", "300000"]),
+        ("2、3万", ["2", "30000"]),
+    ],
+)
+def test_a_range_start_shares_a_magnitude_only_when_it_has_none_and_stays_below_the_end(
+    text: str, values: list[str]
+) -> None:
+    assert [t.value_itn for t in quantity_tokens(text)] == values
+
+
+def test_a_scaled_range_start_keeps_its_surface_and_offsets() -> None:
+    text = "大概两到3亿美元的收入"
+    assert [(t.char_start, t.char_end, t.surface, t.kind) for t in quantity_tokens(text)] == [
+        (2, 3, "两", "currency"),
+        (4, 8, "3亿美元", "currency"),
+    ]
 
 
 def test_a_rough_figure_never_shares_a_value_with_an_exact_one() -> None:

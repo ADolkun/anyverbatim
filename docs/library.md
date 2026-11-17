@@ -91,6 +91,7 @@ A Chinese numeral is a quantity when it has two or more numeral characters (`三
 - 点 before tens is a clock time: `三点四十分` is `3点` and `40`.
 - Ranges of adjacent digits (`三四个`), idioms (`万一`, `一样`, `十万八千里`) and weekdays are not quantities.
 - A fraction's `value_itn` is over/under: `三分之一` and `1/3` are `1/3`.
+- The start of a range linked by 到, 至, ~ or - shares its end's 万 or 亿 and currency sign, in either script: `两到3亿美元` and `2到3亿美元` are `$200000000` and `$300000000`, `三到五万` is `30000` and `50000`. A single leading digit takes a 百 or 千 before the magnitude too (`两到三百万` is `2000000` to `3000000`), but a start never takes a scale that would put it at or above its end (`五到两百万` is `50000`, `两千到三万` is `2000`). A start with its own magnitude, percent, ordinal or unit, a magnitude on the left (`三万到五`), 千 or 百 alone (`两到三千` is `2` and `3000`) and a list with 、 share nothing. The token's `surface` stays the start as written (`两`, `2`).
 - A rough figure with 几 or 数 carries `~`: `二十几岁` and `20几岁` are `~20`, and `数十亿` is `~1000000000`. Each agrees with its other spelling but never with an exact value.
 
 ### Errors

@@ -53,6 +53,8 @@ def rejected_by(original: str, fixed: str) -> str | None:
         ("prices rose then fell", "prices rose, then fell"),
         # A comma group of four digits is two numbers, so spacing them apart changes nothing.
         ("in 2023,2024 it grew", "in 2023, 2024 it grew"),
+        # Another link keeps the range and its values.
+        ("规模是三到五万", "规模是三至五万"),
     ],
 )
 def test_safe_fix_is_accepted(original: str, fixed: str) -> None:
@@ -107,6 +109,12 @@ def test_safe_fix_is_accepted(original: str, fixed: str) -> None:
         ("revenue was 10 million dollars", "revenue was 10 billion dollars", "quantities"),
         ("金额是一百美元", "金额是一百港元", "quantities"),
         ("现在价格是￥一百元", "现在价格是一百元", "quantities"),
+        # A range start shares its end's magnitude, so turning the link into a pause changes the start's value.
+        ("规模是三到五万", "规模是三，五万", "cjk_numerals"),
+        ("规模是二十到三十万", "规模是二十，三十万", "cjk_numerals"),
+        ("大概2到3亿美元", "大概5到6亿美元", "digits"),
+        # Both read 200000000 now, but a correction never re-spells a numeral, whatever its value.
+        ("大概两到3亿美元", "大概2到3亿美元", "digits"),
         ("价格100块", "价格100元", "quantities"),
         # 数十个 is a rough figure, so a fix that makes it a count states a quantity the speaker did not.
         ("公司有数十个项目", "公司有是十个项目", "cjk_numerals"),

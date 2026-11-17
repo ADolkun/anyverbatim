@@ -7,14 +7,14 @@ quantities: idioms (``一样``, ``千万不要``, ``万一``), weekdays (``周�
 """
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 import cn2an
 
 # Part of the stage key of every stage that reads quantities: bump it on any change to what is a token or its value.
-VERSION = "numbers-v2"
+VERSION = "numbers-v3"
 
 QKind = Literal["number", "currency", "percent", "ticker", "cjk_quantity"]
 
@@ -322,6 +322,12 @@ TIMES_OF_DAY = ("上午", "下午", "晚上", "早上", "凌晨", "中午", "傍
 # A lone numeral joined to a figure by one of these is that range's other end: the 三 of 三到五个.
 _RANGE_LINKS = frozenset("到至～~-—、")
 _LINKABLE = frozenset("一二两三四五六七八九十")
+# Only these make a range whose start shares its end's 万 or 亿; 、 lists figures as often as it spans them.
+_SCALE_LINKS = frozenset("到至～~-—")
+_TRAILING_MAGNITUDE = re.compile("[万亿]+$")
+# One digit, then 百 or 千 (or its zeros) before the magnitude: the 两 of 两到三百万 is 两百万.
+_LEAD_AND_PLACE = re.compile("[1-9一二两三四五六七八九](?P<place>[百千]|000|00)[万亿]+")
+_PLACE_EXPONENT = {"百": 2, "00": 2, "千": 3, "000": 3}
 _FRACTION = re.compile(rf"([{''.join(_DIGIT_VALUE)}]+)([万亿]*)")
 
 
@@ -427,7 +433,9 @@ class _Quantity:
     ``prefix`` is 百分之 or 第, ``run`` the span of the numeral or digit run (a digit token's magnitude included),
     ``unit`` the measure word or %, ``value`` the run's inverse text normalization without prefix or unit (None for a
     ticker, a spelled-out number, a fraction, a rough figure or a run that is not one number; a code read digit by
-    digit keeps its leading zeros) and ``magnitude`` the largest of 万亿, 亿 and 万 the run is spoken or written in.
+    digit keeps its leading zeros), ``magnitude`` the largest of 万亿, 亿 and 万 the run is spoken or written in and
+    ``symbol`` the currency sign of its ``value_itn``. A range start that shares its end's magnitude keeps the run's
+    own ``value`` (the 3 of 三到五万) while its ``value_itn`` is the scaled figure (30000).
     """
 
     token: QToken
@@ -436,6 +444,7 @@ class _Quantity:
     unit: str
     value: str | None
     magnitude: str
+    symbol: str = ""
 
 
 def _normalized(numerals: str) -> str:
@@ -471,7 +480,8 @@ def _cjk_quantity(
         itn = _ROUGH + itn
     kind: QKind = "percent" if prefix == "百分之" else "currency" if unit in _CURRENCY_WORDS else "cjk_quantity"
     token = QToken(start, end, surface, itn, kind)
-    return _Quantity(token, prefix, run, unit, None if rough else value, _top_magnitude(numerals))
+    symbol = "$" if unit in _USD_WORDS else ""
+    return _Quantity(token, prefix, run, unit, None if rough else value, _top_magnitude(numerals), symbol)
 
 
 def _is_approximation(text: str, prefix: str, run: tuple[int, int], numerals: str, unit: str) -> bool:
@@ -621,6 +631,7 @@ def _number_quantity(match: re.Match[str]) -> _Quantity:
         match.group("measure") or ("%" if percent else ""),
         None if rough else f"{sign}{digits}",
         _top_magnitude(magnitude.translate(_VARIANT_NUMERALS)),
+        symbol,
     )
 
 
@@ -729,7 +740,8 @@ def quantity_tokens(text: str) -> list[QToken]:
     ``350000000`` and ``2万亿`` becomes ``2000000000000``. English magnitudes scale the same way
     (``$1.5 billion`` and ``$1.5B`` become ``$1500000000``), a dollar amount is ``$`` however it
     is written (``15 dollars``, ``15美元``), ``15 percent`` is ``15%``, and spelled-out numbers
-    convert (``twenty-five`` is ``25``).
+    convert (``twenty-five`` is ``25``). The start of a range shares the 万 or 亿 and the currency sign of its end:
+    ``两到3亿美元`` and ``2到3亿美元`` both read ``$200000000`` and ``$300000000``.
     """
     return [quantity.token for quantity in _quantities(text)]
 
@@ -757,16 +769,19 @@ def _quantities(text: str) -> list[_Quantity]:
         else:
             surface = match.group(0)
             found.append(_bare(QToken(match.start(), match.end(), surface, surface, "ticker")))
-    return _with_range_ends(text, found, lone) if lone else found
+    return _with_range_ends(text, found, lone)
 
 
 def _with_range_ends(text: str, found: list[_Quantity], lone: list[tuple[int, int]]) -> list[_Quantity]:
     """Add each lone numeral that a range link joins to a figure: 三到五个 is 3 to 5个, and 三到五到七个 chains.
 
     Only a figure with a value anchors a range, so 第三到五 (an ordinal) and 几到五 stay as they are. Neither does a
-    percent or a figure in 万 or 亿, whose unit the lone end shares (百分之三到五, 三到五万): read alone it would be a
-    bare 5, a value nobody said, so it stays no quantity at all. 一到 before a date or a time is "as soon as"
-    (一到三月份就涨), unless 从 opens the range; 一至三月 is a range.
+    percent, whose unit the lone end shares (百分之三到五): read alone it would be a bare 5, a value nobody said, so it
+    stays no quantity at all. A figure that ends in 万 or 亿 lends its magnitude and currency sign to the start of its
+    range instead, Chinese or digits, lone or not: 三到五万 and 3到5万 are 30000 to 50000, 两到3亿美元 is $200000000 to
+    $300000000 (see `_scaled_start`). The end's measure word stays its own, as in 三到五个. A magnitude on the left
+    lends nothing (三万到五). 一到 before a date or a time is "as soon as" (一到三月份就涨), unless 从 opens the range;
+    一至三月 is a range.
     """
     anchors: dict[tuple[str, int], str] = {
         edge: quantity.unit
@@ -774,25 +789,94 @@ def _with_range_ends(text: str, found: list[_Quantity], lone: list[tuple[int, in
         if quantity.value is not None and quantity.prefix not in ("第", "百分之") and not quantity.magnitude
         for edge in (("end", quantity.token.char_end), ("start", quantity.token.char_start))
     }
+    scales = {
+        quantity.token.char_start: (quantity, exponents)
+        for quantity in found
+        if (exponents := _scale_exponents(text, quantity))
+    }
+    # Right to left, so a scaled start lends its scale on along a chain: 3到5到7万.
+    for index in reversed(range(len(found))):
+        scaled_start = _scaled_start(text, found[index], scales)
+        if scaled_start is not None:
+            found[index] = scaled_start
+            scales[scaled_start.token.char_start] = scales[scaled_start.token.char_end + 1]
     added = True
     while added:
         added = False
         for start, end in list(lone):
-            right = anchors.get(("start", end + 1)) if text[end : end + 1] in _RANGE_LINKS else None
-            as_soon_as = text[start] == "一" and text[end : end + 1] == "到" and text[start - 1 : start] != "从"
+            link = text[end : end + 1]
+            right = anchors.get(("start", end + 1)) if link in _RANGE_LINKS else None
+            as_soon_as = text[start] == "一" and link == "到" and text[start - 1 : start] != "从"
             if right in _CALENDAR_UNITS and as_soon_as:
                 right = None
             left = text[start - 1 : start] in _RANGE_LINKS and ("end", start - 1) in anchors
+            scaled = link in _SCALE_LINKS and end + 1 in scales and not left and right is None
             quantity = (
-                _cjk_quantity(text, start, "", (start, end), "", lone=True) if left or right is not None else None
+                _cjk_quantity(text, start, "", (start, end), "", lone=True)
+                if left or right is not None or scaled
+                else None
             )
+            if quantity is not None and scaled:
+                quantity = _scaled_start(text, quantity, scales)
             if quantity is None or quantity.value is None:
                 continue
             found.append(quantity)
-            anchors |= {("end", end): "", ("start", start): ""}
+            if scaled:
+                scales[start] = scales[end + 1]
+            else:
+                anchors |= {("end", end): "", ("start", start): ""}
             lone.remove((start, end))
             added = True
     return sorted(found, key=lambda quantity: quantity.token.char_start)
+
+
+def _scale_exponents(text: str, quantity: _Quantity) -> tuple[int, ...]:
+    """Return the powers of ten a range start may share with this figure as its end, largest first, or none.
+
+    A figure lends the 万, 亿 or 万亿 it ends in (五万, 3.5亿, 三点五万), never one inside it (一万五). After a single
+    leading digit a 百 or 千 may belong to the scale as well (三百万, 300万, 3千万), which `_scaled_start` tries first.
+    """
+    if quantity.value is None or quantity.prefix or not quantity.magnitude:
+        return ()
+    run = _ascii_digits(_normalized(text[quantity.run[0] : quantity.run[1]]))
+    trailing = _TRAILING_MAGNITUDE.search(run)
+    if trailing is None:
+        return ()
+    exponent = _magnitude_exponent(trailing[0])
+    lead = _LEAD_AND_PLACE.fullmatch(run)
+    return (exponent + _PLACE_EXPONENT[lead["place"]], exponent) if lead else (exponent,)
+
+
+def _scaled_start(
+    text: str, quantity: _Quantity, scales: dict[int, tuple[_Quantity, tuple[int, ...]]]
+) -> _Quantity | None:
+    """Read a range start in the magnitude of the end a range link joins it to, or None if it shares none.
+
+    A start shares the scale only when it has none of its own (no 万 or 亿, prefix or unit) and stays below the end
+    in it: 两到三百万 is 2000000 to 3000000, but 五到两百万 is 50000 to 2000000, 二十到三十万 is 200000 to 300000 and
+    两千到三万 keeps 2000. The run's own `value` is kept, as the display form writes it (三到五万 → 3到5万).
+    """
+    token = quantity.token
+    if (
+        quantity.value is None
+        or quantity.prefix
+        or quantity.unit
+        or quantity.magnitude
+        or not quantity.value[:1].isdigit()
+        or text[token.char_end : token.char_end + 1] not in _SCALE_LINKS
+        or token.char_end + 1 not in scales
+    ):
+        return None
+    end, exponents = scales[token.char_end + 1]
+    if end.value is None:
+        return None
+    for exponent in exponents:
+        value = Decimal(quantity.value) * Decimal(10) ** exponent
+        if value < Decimal(end.value):
+            symbol = quantity.symbol or end.symbol
+            kind: QKind = "currency" if symbol else token.kind
+            return replace(quantity, token=replace(token, value_itn=f"{symbol}{_plain(value)}", kind=kind))
+    return None
 
 
 def _bare(token: QToken) -> _Quantity:
