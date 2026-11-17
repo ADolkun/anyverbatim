@@ -279,7 +279,8 @@ Both need `ytverbatim[whisper,asr]`.
 
 When a recording has stretches in more than one language, each stretch is treated by its own language:
 
-- Simplified-Chinese conversion, full-width punctuation next to Chinese characters, and Chinese fillers apply to the Chinese stretches.
+- Chinese fillers apply to the Chinese stretches.
+- Simplified-Chinese conversion and full-width punctuation next to Chinese characters work on the characters, so they apply in every stretch whatever its language: Chinese inside an English stretch is converted too, and text without Chinese characters never changes.
 - Punctuation follows each language's own style.
 - [Chinese numerals as digits](../README.md#numerals) apply to the Chinese stretches.
 - The correction and number-check prompts say the transcript mixes languages and that every word stays in the language it was spoken in.

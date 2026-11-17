@@ -133,7 +133,7 @@ The stages run in this order:
 1. Metadata, captions and audio for YouTube, or the file's audio for a recording.
 2. ASR (or, with `--source captions`, the manual caption track).
 3. For a diarized source, speaker diarization (see [Speakers](#speakers)).
-4. Normalize: Simplified Chinese by default, with ASCII marks next to Chinese characters written full-width (`[text] script = "keep"` leaves both alone). Fillers are kept unless `[text] fillers = "remove"`.
+4. Normalize: Simplified Chinese by default, with ASCII marks next to Chinese characters written full-width (`[text] script = "keep"` leaves both alone). Both work on the characters, so Chinese inside an English stretch is converted too, whatever language the stretch was decoded in. Fillers are kept unless `[text] fillers = "remove"`, and they follow the stretch's language.
 5. Punctuation, only where the transcript has too few sentence marks.
 6. Correction, whenever the text stages have an LLM (`--no-correct` or `[text] correct = false` turns it off).
 7. Numeric verification against captions in the transcript's language. Without such captions or a second opinion the numbers rest on the transcript alone, and a warning says so (recordings have no captions).
@@ -294,6 +294,8 @@ Also in the library, all described in [docs/library.md](docs/library.md): `expan
 **Versions.** Minor versions only add optional fields. `load_document` reads any `2.x` document, dropping the fields a newer minor version adds, and upgrades a 1.0 or 1.1 document in memory (`video` and `access` become a YouTube `source`, with no speakers and its one language as `transcript.languages`). Any other version is refused with `ContractError`, whose `fix` says to upgrade ytverbatim when the document is newer. Readers refuse enum values they do not know, so a new flag kind, `origin` or `source.kind` comes with a new major version, never a minor one.
 
 **Upgrading from contract 1.1.** Every YouTube `context.json` becomes 2.0, and each video's `context.md` is written again. Its text changes only where two segments of a Mandarin transcript meet in Latin script on both sides, which is rare: an English sentence that follows another no longer runs into it ("end.Next" becomes "end. Next"), while a boundary at any Chinese character or punctuation still takes no space. The next `run` or `process` of each video rebuilds only the document from its stored stages: no download, no Whisper run and no LLM call. A reader of `document.video` reads `document.source` (after checking `source.kind == "youtube"`), and `document.access` is now `document.source.access`.
+
+**Upgrading to character-level script conversion.** With `[text] script = "zh-Hans"`, Chinese inside English stretches is now converted to Simplified and its marks written full-width, as it already was in Chinese stretches. The next `run` or `process` of each document normalizes it again once, then rebuilds the context from the stored stages. Only two things change: Chinese characters in a non-Chinese stretch with the marks next to them, and an ASCII mark that follows a full-width one with no Chinese character beside it (`Well…, ok`), which no longer turns full-width. Every other stretch keeps its text byte for byte. Stages after normalization are redone only where their input text changed, so a document with no such text makes no new LLM call.
 
 ## What ships, and what is next
 

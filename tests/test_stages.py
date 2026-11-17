@@ -539,6 +539,20 @@ def test_a_mandarin_stretch_in_an_english_recording_gets_mandarin_normalize_and_
     assert doc.transcript.script == "zh-Hans"
 
 
+def test_traditional_words_in_an_english_stretch_are_converted_with_their_text() -> None:
+    pieces = [" they", " said", " 這個", " 軟體", " ok"]
+    words = tuple(Word(text=p, start=1.0 + i, end=1.5 + i, conf=0.9) for i, p in enumerate(pieces))
+    source = source_of([row("".join(pieces), 0.0, 10.0, words, "en")], "en")
+    (stretch,) = source.stretches
+    (normal,) = normalize((stretch,), "en", script="zh-Hans", fillers="keep")
+    assert normal.text == "they said 这个 软体 ok"
+    assert [w.text for w in normal.words] == ["they", "said", "这个", "软体", "ok"]
+    assert [(w.start, w.end, w.conf) for w in normal.words] == [(w.start, w.end, w.conf) for w in stretch.words]
+    assert len(normal.words) == len(pieces)
+    (kept,) = normalize((stretch,), "en", script="keep", fillers="keep")
+    assert kept.words == stretch.words
+
+
 def test_an_english_stretch_in_a_mandarin_recording_keeps_english_rules() -> None:
     source = lid_source(ZH_DOMINANT)
     assert source.language == "zh" and [s.language for s in source.stretches] == [None, "en"]

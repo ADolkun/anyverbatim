@@ -52,7 +52,6 @@ def test_simplified_script_is_the_default_and_keep_leaves_traditional_text() -> 
     assert clean_zh("這個軟體很好", fillers="keep") == "这个软体很好"
     assert clean_zh("這個軟體很好", fillers="keep", script="keep") == "這個軟體很好"
     assert to_simplified("Apple 這個") == "Apple 这个"
-    assert normalize("這個", "en", script="zh-Hans", fillers="keep").text == "這個", "only zh text is converted"
 
 
 def test_steps_chain_from_the_input_to_the_output_one_replacement_at_a_time() -> None:
@@ -141,9 +140,33 @@ def test_a_converted_mark_drops_the_spaces_around_it_but_never_a_line_break(befo
 
 
 def test_full_width_marks_belong_to_the_zh_simplified_rule_only() -> None:
-    assert clean_en("我们走吧, OK.") == "我们走吧, OK."
     assert clean_zh("我们走吧, 你好?", script="keep") == "我们走吧, 你好?"
-    assert normalize("OK,所以", "en", script="zh-Hans", fillers="keep").text == "OK,所以"
+    assert normalize("OK,所以", "en", script="keep", fillers="keep").text == "OK,所以"
+    assert normalize("這個, 好...然后", "en", script="keep", fillers="keep").text == "這個, 好...然后"
+
+
+def test_chinese_inside_an_english_stretch_is_converted_by_character() -> None:
+    assert clean_en("we said 這個軟體很好 today") == "we said 这个软体很好 today"
+    assert normalize("這個", "en", script="zh-Hans", fillers="keep").text == "这个"
+    assert clean_en("我们走吧, OK.") == "我们走吧，OK."
+    assert clean_en("they said 福建,所以 yes") == "they said 福建，所以 yes"
+    assert clean_en("wait 好...然后") == "wait 好……然后"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Well, it rose 1,000 points at 3:30; see https://example.com/a?b=1,c now.",
+        "Wait... what? No!! Really: yes; ok.",
+        "Version v1.2, U.S. data, 5700...6000, a.b@example.com",
+        "Well…, ok — 「quoted」, done。",
+        "こんにちは、ありがとう. 한국어, ok.",
+        "keep    spacing , and ?",
+    ],
+)
+def test_text_without_han_characters_is_unchanged_in_any_stretch(text: str) -> None:
+    for language in ("en", "zh", "ja", "xx"):
+        assert normalize(text, language, script="zh-Hans", fillers="keep").text == text
 
 
 def test_a_converted_mark_lets_the_zh_filler_rules_see_the_boundary() -> None:

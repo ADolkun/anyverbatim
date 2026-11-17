@@ -300,7 +300,7 @@ def from_captions(track: CaptionTrack, language_hint: str | None) -> Transcribed
 def normalize(
     stretches: Sequence[Stretch], language: str, *, script: clean.Script, fillers: clean.Fillers
 ) -> tuple[Stretch, ...]:
-    """Convert script and remove fillers by each stretch's language.
+    """Convert script by character and remove fillers by each stretch's language.
 
     Flags move with the text and no edit is recorded (nothing was misheard).
     """
@@ -309,7 +309,7 @@ def normalize(
         spoken = stretch.language_or(language)
         result = clean.normalize(stretch.text, spoken, script=script, fillers=fillers)
         words = stretch.words
-        if seg.is_zh(spoken) and script == "zh-Hans":
+        if script == "zh-Hans":
             # The words are matched against the text by characters, so they must be in the same script.
             words = tuple(word.model_copy(update={"text": clean.to_simplified(word.text)}) for word in words)
         out.append(
