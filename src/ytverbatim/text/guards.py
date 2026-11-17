@@ -3,7 +3,8 @@
 A correction may fix homophones and garbled terms; it must never change what the speaker asserted. Every guard
 compares the original with the proposed text and rejects recognized data, negation or direction changes and
 destructive rewrites. They are conservative checks, not a proof of semantic equivalence. `check_numeric_fix` is the
-inverse guard for numeric verification, where the number is the one thing allowed to change.
+inverse guard for numeric verification, where the number is the one thing allowed to change. `name_changes` finds the
+Latin-script names a fix changed, for the caller to flag.
 
 Ported from ytscript's ``analyze/correct.py`` with one guard loosened: an uppercase acronym or ticker may take one
 inserted or deleted letter or one adjacent transposition (GAP→GAAP, SMCI→MSCI), never a substituted letter.
@@ -12,15 +13,18 @@ inserted or deleted letter or one adjacent transposition (GAP→GAAP, SMCI→MSC
 import re
 import unicodedata
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
+from itertools import takewhile
 from typing import Literal
+
+from rapidfuzz.distance import Levenshtein, Opcode, Opcodes
 
 from ytverbatim.text.numbers import quantity_tokens
 
 # Part of the stage key of every stage that applies these guards: bump it on any change to what they accept.
-VERSION = "guards-v1"
+VERSION = "guards-v2"
 
 GuardName = Literal[
     "empty",
@@ -67,6 +71,17 @@ _NON_DATA_CHAR = re.compile(rf"[^\s0-9０-９.,%％$¥€£A-Z{_CJK_NUMERAL_CHAR
 # Bare uppercase runs (NVDA, GAAP, SPX): acronyms and tickers, the one symbol class a fix may respell.
 _BARE_SYMBOL = re.compile(r"[A-Z]{2,}")
 _ASCII_ALNUM = re.compile(r"[A-Za-z0-9]")
+# A Latin word for name flags: Latin letters, accented ones too (Zörbix), and digits, joined by ' & . - (O'Brien,
+# AT&T, U.S., e-mail). Bare numbers are quantities, which have their own guards. × and ÷ sit among the Latin-1 letters
+# but are not letters.
+_LATIN_ALNUM = "A-Za-z0-9\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u024f\u1e00-\u1eff"
+_LATIN_WORD = re.compile(rf"[{_LATIN_ALNUM}]+(?:['&.\-][{_LATIN_ALNUM}]+)*")
+_PRONOUN_I = re.compile(r"I(?:'(?:m|d|ll|ve))?")
+_SENTENCE_END = ".!?…。！？"
+# A period after a title does not end the sentence: the word after it is a name (Dr. Zorbix).
+_TITLE_END = re.compile(r"(?<![A-Za-z])(?:Mr|Mrs|Ms|Dr|Prof|St|vs)\.$")
+# Besides case, a format-only change alters only spaces and the joiners of a Latin word (Zorb-ix→Zorbix).
+_FORMAT_ONLY = re.compile(r"[\s'’&.\-]")
 # Dotted, exchange-prefixed and share-class tickers stay exact: BRK.B→BRK.A or $F→$T is a different security even
 # though it is one letter away. Bare single letters (F, C, T) collide with English words, so only their explicit
 # financial forms are protected.
@@ -145,7 +160,7 @@ _DIRECTION_WORD = re.compile(
 
 @dataclass(frozen=True, slots=True)
 class EntityChange:
-    """One respelled acronym or ticker; the offsets are half-open into the corrected text."""
+    """One respelled acronym, ticker or name; the offsets are half-open into the corrected text."""
 
     before: str
     after: str
@@ -233,6 +248,136 @@ def symbol_changes(original: str, fixed: str) -> tuple[EntityChange, ...]:
         if old != new and change not in changes:
             changes.append(change)
     return tuple(changes)
+
+
+def name_changes(
+    original: str, final: str, *, zh: bool, symbols: Sequence[EntityChange] = ()
+) -> tuple[EntityChange, ...]:
+    """Latin-script names that differ between ``original`` and ``final``, with offsets into ``final``.
+
+    Words are diffed casefolded, and a stretch of changed words is one change. A word that a ticker change in
+    ``symbols`` (`symbol_changes`) overlaps is left to the ticker flag and splits its stretch. Format-only changes
+    (case, spaces and joiners: Open AI→OpenAI, Zorb-ix→Zorbix) and deletions, which leave nothing to point at, are not
+    changes. A change is a name when any of its final words is name-like: in a Chinese segment (``zh``) any Latin
+    word, otherwise a word with an uppercase letter after its first character or a capitalized one that does not start
+    a sentence, never the pronoun I or its contractions.
+
+    ``before`` is the original text in the change's place, found by aligning the two texts character by character:
+    a name that replaced Chinese characters names them (佐比→Zorbix), and one inserted into unchanged text names
+    nothing.
+    """
+    old, new = _name_tokens(original), _name_tokens(final)
+    ops = Levenshtein.opcodes([_token_key(t) for t in old], [_token_key(t) for t in new])
+    characters: Opcodes | None = None
+    changes: list[EntityChange] = []
+    for words in _changed_runs(ops, new, symbols):
+        if not any(_name_like(w, final, zh) for w in words):
+            continue
+        start, end = words[0].start(), words[-1].end()
+        if characters is None:
+            characters = Levenshtein.opcodes(original, final)
+        source_start, source_end = _source_range(characters, original, start, end)
+        before = original[source_start:source_end].strip()
+        if _squash(before) != _squash(final[start:end]):
+            changes.append(EntityChange(before, final[start:end], start, end))
+    return tuple(changes)
+
+
+def _name_tokens(text: str) -> list[re.Match[str] | None]:
+    """Latin words in order, with None between two words that other text than spaces separates (zorbix 和 xorbyte)."""
+    tokens: list[re.Match[str] | None] = []
+    previous: re.Match[str] | None = None
+    for word in _LATIN_WORD.finditer(text):
+        if not any(c.isalpha() for c in word[0]):
+            continue
+        if previous is not None and text[previous.end() : word.start()].strip():
+            tokens.append(None)
+        tokens.append(word)
+        previous = word
+    return tokens
+
+
+def _token_key(token: re.Match[str] | None) -> str:
+    return "" if token is None else token[0].casefold()
+
+
+def _squash(text: str) -> str:
+    return _FORMAT_ONLY.sub("", text).casefold()
+
+
+def _changed_runs(
+    ops: Opcodes, new: Sequence[re.Match[str] | None], symbols: Sequence[EntityChange]
+) -> list[list[re.Match[str]]]:
+    """Return the final words of each stretch of differing words, split by other text and by ticker changes."""
+    runs: list[list[re.Match[str]]] = []
+    k = 0
+    while k < len(ops):
+        if ops[k].tag == "equal":
+            k += 1
+            continue
+        first = k
+        while k < len(ops) and ops[k].tag != "equal":
+            k += 1
+        tokens = new[ops[first].dest_start : ops[k - 1].dest_end]
+        runs += _word_runs([None if t is not None and _overlaps(t, symbols) else t for t in tokens])
+    return runs
+
+
+def _overlaps(word: re.Match[str], symbols: Sequence[EntityChange]) -> bool:
+    return any(s.char_start < word.end() and word.start() < s.char_end for s in symbols)
+
+
+def _word_runs(tokens: Sequence[re.Match[str] | None]) -> list[list[re.Match[str]]]:
+    runs: list[list[re.Match[str]]] = [[]]
+    for token in tokens:
+        if token is None:
+            runs.append([])
+        else:
+            runs[-1].append(token)
+    return [run for run in runs if run]
+
+
+def _source_range(ops: Opcodes, original: str, start: int, end: int) -> tuple[int, int]:
+    """Return the original range in the place of the final range [start, end).
+
+    Equal and replaced characters map one to one (a Levenshtein replace has as many characters on each side), and a
+    position inside inserted text maps to where it was inserted. A deletion right at an edge adds the letters it
+    removed there, so a dropped last letter belongs to the name (Zorbyxe→Zorbix) and a dropped word before it, which
+    ends in a space, does not (um Zorbyx→Zorbix).
+    """
+    first = next(k for k, op in enumerate(ops) if op.dest_start <= start < op.dest_end)
+    last = next(k for k, op in enumerate(ops) if op.dest_start < end <= op.dest_end)
+    source_start, source_end = _source_position(ops[first], start), _source_position(ops[last], end)
+    if start == ops[first].dest_start and first > 0 and ops[first - 1].tag == "delete":
+        source_start -= _edge_letters(original[ops[first - 1].src_start : ops[first - 1].src_end], at_end=True)
+    if end == ops[last].dest_end and last + 1 < len(ops) and ops[last + 1].tag == "delete":
+        source_end += _edge_letters(original[ops[last + 1].src_start : ops[last + 1].src_end], at_end=False)
+    return source_start, source_end
+
+
+def _source_position(op: Opcode, position: int) -> int:
+    return op.src_start if op.tag == "insert" else op.src_start + position - op.dest_start
+
+
+def _edge_letters(text: str, *, at_end: bool) -> int:
+    """Count the letters, digits and CJK characters at one end of ``text``."""
+    return sum(1 for _ in takewhile(str.isalnum, reversed(text) if at_end else text))
+
+
+def _name_like(word: re.Match[str], text: str, zh: bool) -> bool:
+    if zh:
+        return True
+    surface = word[0]
+    if _PRONOUN_I.fullmatch(surface):
+        return False
+    if any(c.isupper() for c in surface[1:]):
+        return True
+    return surface[0].isupper() and not _starts_sentence(text, word.start())
+
+
+def _starts_sentence(text: str, position: int) -> bool:
+    before = text[:position].rstrip(" \t\n\"'“‘([«")
+    return not before or (before[-1] in _SENTENCE_END and _TITLE_END.search(before) is None)
 
 
 def _symbol_names(text: str, runs: list[re.Match[str]]) -> list[tuple[str, tuple[int, int]]]:

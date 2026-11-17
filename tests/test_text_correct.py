@@ -44,14 +44,17 @@ def run(
     *,
     context: CorrectionContext | None = None,
     confidence: list[list[float] | None] | None = None,
+    language: str = "zh",
+    languages: tuple[str | None, ...] = (),
 ) -> CorrectionResult:
     return correct_segments(
         texts,
         client=client,
-        language="zh",
+        language=language,
         context=context or CorrectionContext(),
         checkpoint_dir=tmp_path / "checkpoints",
         confidence=confidence,
+        languages=languages,
     )
 
 
@@ -93,7 +96,7 @@ def test_an_echoed_segment_is_neither_an_edit_nor_a_rejection(tmp_path: Path) ->
 
 def test_acronym_fixes_are_flagged_at_their_offsets_after_a_length_change(tmp_path: Path) -> None:
     client = FakeClient([fixed((0, "according to GAAP and MSCI"))])
-    result = run(["accordng to GAP and SMCI"], client, tmp_path)
+    result = run(["accordng to GAP and SMCI"], client, tmp_path, language="en")
     (text,) = result.texts
     assert text == "according to GAAP and MSCI"
     assert result.flags == (
@@ -261,7 +264,7 @@ class TestSecondPass:
                 return fixed((0, "according to GAAP rules"))
             return fixed((0, "acording to GAAP rules"))
 
-        result = run(["acordng to GAP rules"], FakeClient(respond=respond), tmp_path, confidence=[[0.1]])
+        result = run(["acordng to GAP rules"], FakeClient(respond=respond), tmp_path, confidence=[[0.1]], language="en")
         assert result.texts == ("according to GAAP rules",)
         assert [(e.before, e.after) for e in result.edits[0]] == [
             ("acordng to GAP rules", "acording to GAAP rules"),
@@ -309,3 +312,56 @@ def test_a_retried_batch_is_one_batch_but_two_calls(tmp_path: Path) -> None:
     result = run(["动态适应率"], client, tmp_path)
     assert len(client.requests) == 2
     assert result.batches == 1
+
+
+def proposes(text: str) -> FakeClient:
+    return FakeClient([fixed((0, text))])
+
+
+class TestNameFlags:
+    ORIGINAL = "大家可以在 Zorbyx 上支持我们的频道"
+    FINAL = "大家可以在 Zorbix 上支持我们的频道"
+
+    def test_a_changed_name_in_a_chinese_segment_is_flagged_at_the_final_offsets(self, tmp_path: Path) -> None:
+        result = run([self.ORIGINAL], proposes(self.FINAL), tmp_path)
+        assert result.flags == ((Flag(kind="entity_corrected", char_start=6, char_end=12, note="Zorbyx → Zorbix"),),)
+
+    def test_ordinary_lowercase_english_words_are_not_flagged(self, tmp_path: Path) -> None:
+        result = run(["we went too the park"], proposes("we went to the park"), tmp_path, language="en")
+        assert result.texts == ("we went to the park",)
+        assert result.flags == ((),)
+
+    @pytest.mark.parametrize(
+        ("original", "proposed"),
+        [("ok i'd go there", "Okay I'd go there"), ("so i think so", "so I think so")],
+    )
+    def test_a_sentence_initial_capital_and_the_pronoun_i_are_not_flagged(
+        self, tmp_path: Path, original: str, proposed: str
+    ) -> None:
+        result = run([original], proposes(proposed), tmp_path, language="en")
+        assert result.texts == (proposed,)
+        assert result.flags == ((),)
+
+    def test_a_mid_sentence_capitalized_name_is_flagged_in_english(self, tmp_path: Path) -> None:
+        result = run(["we talked with zorbyx today"], proposes("we talked with Zorbix today"), tmp_path, language="en")
+        assert result.flags == ((Flag(kind="entity_corrected", char_start=15, char_end=21, note="zorbyx → Zorbix"),),)
+
+    def test_a_segment_takes_its_own_language(self, tmp_path: Path) -> None:
+        texts = ["大家可以在 Zorbyx 上支持我们", "we use zorbyx today"]
+        client = FakeClient([fixed((0, "大家可以在 Zorbix 上支持我们"), (1, "we use zorbix today"))])
+        result = run(texts, client, tmp_path, languages=("zh", "en"))
+        assert [[f.note for f in flags] for flags in result.flags] == [["Zorbyx → Zorbix"], []]
+
+    def test_a_name_beside_a_ticker_change_is_flagged_beside_it(self, tmp_path: Path) -> None:
+        result = run(["按 zorbyx GAP 规则"], proposes("按 Zorbix GAAP 规则"), tmp_path)
+        assert [f.note for f in result.flags[0]] == ["zorbyx → Zorbix", "GAP → GAAP"]
+
+    def test_ticker_and_name_flags_come_in_text_order_without_duplicates(self, tmp_path: Path) -> None:
+        client = FakeClient([fixed((0, "Zorbix 报告了 GAAP 数据"))])
+        result = run(["Zorbyx 报告了 GAP 数据"], client, tmp_path)
+        assert result.flags == (
+            (
+                Flag(kind="entity_corrected", char_start=0, char_end=6, note="Zorbyx → Zorbix"),
+                Flag(kind="entity_corrected", char_start=11, char_end=15, note="GAP → GAAP"),
+            ),
+        )
