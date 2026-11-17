@@ -200,6 +200,63 @@ def test_a_range_start_with_another_value_still_disputes(tmp_path: Path) -> None
     assert result.stats == NumericStats(disputed=2)
 
 
+@pytest.mark.parametrize(
+    ("asr", "caption", "choice"),
+    [
+        # Restyled to 4, the start of 4到3亿 would read 4, not the chosen 400000000.
+        ("收入2到3亿左右", "收入4亿到3亿左右", "4亿"),
+        # The caption's 4 is 400000000 only through its range; written alone it is 4.
+        ("利润是两亿和5亿左右", "利润是4到5亿左右", "4"),
+    ],
+)
+def test_a_fix_that_would_not_read_back_as_the_chosen_value_is_never_applied(
+    asr: str, caption: str, choice: str, tmp_path: Path
+) -> None:
+    client = FakeClient([verdicts((0, choice, "high"))])
+    result = run(
+        [TimedText(asr, 0.0, 3.0)], Evidence(PRIMARY, captions=(manual((0.0, 3.0, caption)),)), client, tmp_path
+    )
+    assert result.texts == (asr,)
+    assert result.edits == ((),)
+    assert [f.kind for f in result.flags[0]] == ["numeric_disputed"]
+    assert "would not read as" in result.flags[0][0].note
+    assert result.stats == NumericStats(agreed=1, disputed=1)
+
+
+def test_a_fix_to_one_end_that_would_change_the_other_ends_value_is_never_applied(tmp_path: Path) -> None:
+    # 350万 is not one digit before 百 or 千, so the start of 2到350万 reads a bare 2, not the 2000000 it read before.
+    asr = "收入2到300万左右"
+    client = FakeClient([verdicts((0, "350万", "high"))])
+    result = run(
+        [TimedText(asr, 0.0, 3.0)],
+        Evidence(PRIMARY, captions=(manual((0.0, 3.0, "收入200万到350万左右")),)),
+        client,
+        tmp_path,
+    )
+    assert result.texts == (asr,)
+    assert [f.kind for f in result.flags[0]] == ["numeric_disputed"]
+    assert "would change another figure" in result.flags[0][0].note
+    assert result.stats == NumericStats(agreed=1, disputed=1)
+
+
+@pytest.mark.parametrize(
+    ("asr", "caption", "choice", "fixed"),
+    [
+        ("营收增长了15%，利润也不错", "营收增长了50%利润也不错", "50%", "营收增长了50%，利润也不错"),
+        ("利润是两亿到5亿左右", "利润是4到5亿左右", "4", "利润是4到5亿左右"),
+    ],
+)
+def test_a_fix_that_reads_back_as_the_chosen_value_is_applied(
+    asr: str, caption: str, choice: str, fixed: str, tmp_path: Path
+) -> None:
+    client = FakeClient([verdicts((0, choice, "high"))])
+    result = run(
+        [TimedText(asr, 0.0, 3.0)], Evidence(PRIMARY, captions=(manual((0.0, 3.0, caption)),)), client, tmp_path
+    )
+    assert result.texts == (fixed,)
+    assert result.stats.fixed == 1
+
+
 def test_a_rough_figure_disputes_an_exact_one(tmp_path: Path) -> None:
     result = verify_numbers(
         [TimedText("他今年二十几岁了", 0.0, 3.0)],
