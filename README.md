@@ -312,7 +312,7 @@ Not yet:
 - Chapters for recordings
 - A speaker count hint for the diarizer
 - Voice Memos listing, speaker naming and folder expansion in the library; they stay CLI features
-- Two language tokens for mixed Mandarin and English recordings, so short stretches in the other language are not translated (being evaluated)
+- A fix for short stretches of a mixed Mandarin and English recording that come out translated: decoding each run with both language tokens [did not clear its pre-registered rule](evals/results/two-token-2026-11-16.md)
 
 ## License
 
