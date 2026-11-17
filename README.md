@@ -317,6 +317,7 @@ Not yet:
 - A speaker count hint for the diarizer
 - Voice Memos listing, speaker naming and folder expansion in the library; they stay CLI features
 - A fix for short stretches of a mixed Mandarin and English recording that come out translated: decoding each run with both language tokens [did not clear its pre-registered rule](evals/results/two-token-2026-11-16.md)
+- Checking correction against a video's manual captions: the uploaders' captions in the evaluation repeated the recognizer's errors, so vetoing fixes they contradict and taking their spelling of names [did not clear their pre-registered rules](evals/results/corroboration-2026-11-17.md)
 
 ## License
 
