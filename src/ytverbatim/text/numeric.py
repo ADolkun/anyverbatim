@@ -17,7 +17,6 @@ flag is the honest outcome when the judge is unusable.
 import hashlib
 import json
 import logging
-import math
 import re
 from bisect import bisect_left, bisect_right
 from collections import Counter
@@ -28,10 +27,9 @@ from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
-from rapidfuzz.distance import Levenshtein
 
 from ytverbatim import atomic
-from ytverbatim.acquire.captions import CaptionKind, CaptionTrack
+from ytverbatim.acquire.captions import CaptionTrack
 from ytverbatim.asr.chunks import Chunk
 from ytverbatim.asr.models import ChunkHypothesis, FileJob, WorkerRequest
 from ytverbatim.asr.protocol import AsrContext, EngineDef
@@ -41,6 +39,7 @@ from ytverbatim.llm.jsonio import complete_json
 from ytverbatim.llm.protocol import LLMClient, LLMRequest
 from ytverbatim.llm.usage import UsageMeter
 from ytverbatim.text import offsets
+from ytverbatim.text.align import CJK, TimedText, Timeline, Unit, align, caption_pieces, clean, timeline, units
 from ytverbatim.text.guards import check_numeric_fix
 from ytverbatim.text.numbers import QToken, quantity_tokens
 from ytverbatim.text.segment import language_line
@@ -56,24 +55,15 @@ BATCH_SIZE = 8
 # Whisper word probability below which a span heard by one source only is also flagged `low_confidence`.
 LOW_CONFIDENCE = 0.35
 CONTEXT_NEIGHBORS = 2
-# Caption and second-engine timings drift from the transcript's by up to a second or so; untimed cues and chunks are
-# interpolated, which drifts more. A wider window costs only some extra unmatched units around the segment.
-WINDOW_PAD_S = 2.0
 SECOND_OPINION_PAD_S = 0.5
 # Re-decoding the short pause between two nearby numeric segments is cheaper than a separate chunk and gives the second
 # engine more context.
 MERGE_GAP_S = 3.0
-# Below this share of matching plain units the window is not the same speech, so pairing its numbers would be noise.
-_MIN_ANCHOR_RATIO = 0.4
-_MIN_ANCHOR_UNITS = 4
 _MAX_OUTPUT_TOKENS = 4096
 _MAX_REASON_CHARS = 200
 _MARK_OPEN, _MARK_CLOSE = "⟦", "⟧"
 NO_LLM_NOTE = "independent readings disagree and no LLM was configured to choose among them; re-verify"
 
-_CJK = re.compile(r"[一-鿿]")
-_PLAIN_UNIT = re.compile(r"[A-Za-z0-9]+(?:'[A-Za-z]+)?|[一-鿿]")
-_SPACE_BY_CJK = re.compile(r"\s+(?=[一-鿿])|(?<=[一-鿿])\s+")
 _VALUE_NUMBER = re.compile(r"\d+(?:\.\d+)?")
 _SURFACE_NUMBER = re.compile(r"[0-9０-９][0-9０-９,]*(?:\.[0-9０-９]+)?|\.[0-9０-９]+")
 # Digits and Chinese numerals write the same kind of quantity; only the script differs.
@@ -92,15 +82,6 @@ _SYSTEM = (
 
 
 Status = Literal["agreed", "disputed", "single_source"]
-
-
-@dataclass(frozen=True, slots=True)
-class TimedText:
-    """Text with absolute start and end times in seconds: a transcript segment, a decoded chunk or a word."""
-
-    text: str
-    start: float
-    end: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,31 +174,6 @@ class _Checkpoint(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class _Unit:
-    """An alignment unit: a whole quantity token, a CJK character or a Latin word. Offsets index the cleaned text."""
-
-    key: str
-    start: int
-    end: int
-    token: QToken | None
-
-
-@dataclass(frozen=True, slots=True)
-class _Timeline:
-    """An independent transcript as units with a time span and a confidence each; ``starts`` never decrease."""
-
-    source: str
-    text: str
-    units: tuple[_Unit, ...]
-    starts: tuple[float, ...]
-    ends: tuple[float, ...]
-    confs: tuple[float | None, ...]
-
-    def window(self, start: float, end: float) -> range:
-        return range(bisect_left(self.starts, start - WINDOW_PAD_S), bisect_right(self.starts, end + WINDOW_PAD_S))
-
-
-@dataclass(frozen=True, slots=True)
 class _Pair:
     """A transcript quantity (unit ``mine`` of ``segment``) and the timeline quantity unit ``theirs`` heard for it.
 
@@ -298,22 +254,22 @@ def verify_numbers(
     window (a captions-only transcript, or a gap in the captions) the span is flagged ``low_confidence`` alone, and only
     when the engine's word confidence is low: a flag on every number would say nothing about any one of them.
     """
-    words = _timeline(evidence.primary, ((w.text, w.start, w.end, w.conf) for w in evidence.words))
+    words = timeline(evidence.primary, ((w.text, w.start, w.end, w.conf) for w in evidence.words))
     alternates = [
-        _timeline(source, ((p.text, p.start, p.end, None) for p in pieces))
+        timeline(source, ((p.text, p.start, p.end, None) for p in pieces))
         for source, pieces in _alternate_pieces(evidence)
     ]
-    units: list[list[_Unit]] = []
+    segment_units: list[list[Unit]] = []
     spans: list[dict[int, _Span]] = []
     for index, segment in enumerate(segments):
-        clean, origins = _clean(segment.text)
-        units.append(_units(clean))
-        spans.append(_segment_spans(index, segment, units[-1], origins, evidence.primary))
-    pairs, _ = _claim(words, segments, units)
+        cleaned, origins = clean(segment.text)
+        segment_units.append(units(cleaned))
+        spans.append(_segment_spans(index, segment, segment_units[-1], origins, evidence.primary))
+    pairs, _ = _claim(words, segments, segment_units)
     for pair in pairs:
         spans[pair.segment][pair.mine].confidence = words.confs[pair.theirs]
     for alternate in alternates:
-        pairs, covered = _claim(alternate, segments, units)
+        pairs, covered = _claim(alternate, segments, segment_units)
         for index in covered:
             for span in spans[index].values():
                 span.covered = True
@@ -392,12 +348,12 @@ def second_opinion_request(
     if not ranges:
         return None
     pieces = [(w.text, w.start, w.end, None) for w in words] or [(s.text, s.start, s.end, None) for s in segments]
-    chunks = _chunks(ranges, max_chunk_s, _timeline("", pieces))
+    chunks = _chunks(ranges, max_chunk_s, timeline("", pieces))
     job = FileJob(id=file_id, wav=str(wav), language=language, context=context, chunks=chunks)
     return WorkerRequest(engine=engine, out_dir=str(out_dir), files=(job,))
 
 
-def _chunks(ranges: list[tuple[float, float]], max_chunk_s: float, timeline: _Timeline) -> tuple[Chunk, ...]:
+def _chunks(ranges: list[tuple[float, float]], max_chunk_s: float, timeline: Timeline) -> tuple[Chunk, ...]:
     merged: list[tuple[float, float]] = []
     for start, end in ranges:
         if merged and start - merged[-1][1] <= MERGE_GAP_S and max(end, merged[-1][1]) - merged[-1][0] <= max_chunk_s:
@@ -417,7 +373,7 @@ def _chunks(ranges: list[tuple[float, float]], max_chunk_s: float, timeline: _Ti
     return tuple(chunks)
 
 
-def _cut(timeline: _Timeline, earliest: float, latest: float) -> tuple[float, bool]:
+def _cut(timeline: Timeline, earliest: float, latest: float) -> tuple[float, bool]:
     """Find the widest gap between two units within [earliest, latest], the latest on a tie, and whether it pauses.
 
     A quantity is a single unit, so no cut lands inside one. With no unit boundary in reach the cut falls at ``latest``.
@@ -437,96 +393,16 @@ def _cut(timeline: _Timeline, earliest: float, latest: float) -> tuple[float, bo
 def _alternate_pieces(evidence: Evidence) -> list[tuple[str, tuple[TimedText, ...]]]:
     sources: list[tuple[str, tuple[TimedText, ...]]] = []
     for track in evidence.captions:
-        source = "caption_manual" if track.kind is CaptionKind.MANUAL else "caption_auto"
-        if source == evidence.primary:
-            continue
-        pieces: list[TimedText] = []
-        for cue in track.segments:
-            if cue.words:
-                pieces.extend(TimedText(w.text, w.start, w.end) for w in cue.words)
-            else:
-                pieces.append(TimedText(cue.text, cue.start, cue.end))
-        sources.append((source, tuple(pieces)))
+        source, pieces = caption_pieces(track)
+        if source != evidence.primary:
+            sources.append((source, pieces))
     if evidence.second_opinion is not None:
         sources.append((f"asr2:{evidence.second_opinion.engine}", evidence.second_opinion.pieces))
     return sources
 
 
-def _clean(text: str) -> tuple[str, list[int]]:
-    """Drop whitespace next to CJK (150 期 reads as 150期) and map each kept character to its original offset."""
-    kept: list[int] = []
-    cursor = 0
-    for match in _SPACE_BY_CJK.finditer(text):
-        kept.extend(range(cursor, match.start()))
-        cursor = match.end()
-    kept.extend(range(cursor, len(text)))
-    return "".join(text[i] for i in kept), kept
-
-
-def _units(text: str) -> list[_Unit]:
-    units: list[_Unit] = []
-    cursor = 0
-
-    def plain(stop: int) -> None:
-        for match in _PLAIN_UNIT.finditer(text, cursor, stop):
-            units.append(_Unit(match[0].casefold(), match.start(), match.end(), None))
-
-    for token in quantity_tokens(text):
-        plain(token.char_start)
-        # Keyed by value, so 一百五十期 aligns with 150期 as the same unit.
-        units.append(_Unit(f"\x00{token.value_itn}", token.char_start, token.char_end, token))
-        cursor = token.char_end
-    plain(len(text))
-    return units
-
-
-def _timeline(source: str, pieces: Iterable[tuple[str, float, float, float | None]]) -> _Timeline:
-    kept = sorted(
-        ((piece, start, end, conf) for raw, start, end, conf in pieces if (piece := _clean(raw)[0]).strip()),
-        key=lambda item: item[1],
-    )
-    joined = "".join(piece for piece, *_ in kept)
-    # Whisper words carry their own leading space and Chinese is written without spaces, so only stripped Latin pieces
-    # (caption words, chunk texts) need one; inserting it elsewhere would split 15 + 00 into two numbers.
-    add_spaces = not any(piece[0].isspace() for piece, *_ in kept[1:]) and not _mostly_cjk(joined)
-    text: list[str] = []
-    starts: list[float] = []
-    ends: list[float] = []
-    confs: list[float | None] = []
-    # Rolling caption cues overlap; clamping keeps character times in order so windows can bisect them.
-    floor = -math.inf
-    for piece, start, end, conf in kept:
-        if add_spaces and text and not (text[-1][-1].isspace() or _CJK.match(text[-1][-1]) or _CJK.match(piece[0])):
-            text.append(" ")
-            starts.append(max(start, floor))
-            ends.append(starts[-1])
-            confs.append(None)
-        step = max(end - start, 0.0) / len(piece)
-        for k in range(len(piece)):
-            floor = max(start + step * k, floor)
-            starts.append(floor)
-            ends.append(max(start + step * (k + 1), floor))
-        text.append(piece)
-        confs.extend(conf for _ in piece)
-    full = "".join(text)
-    units = _units(full)
-    return _Timeline(
-        source=source,
-        text=full,
-        units=tuple(units),
-        starts=tuple(starts[u.start] for u in units),
-        ends=tuple(ends[u.end - 1] for u in units),
-        confs=tuple(min((c for c in confs[u.start : u.end] if c is not None), default=None) for u in units),
-    )
-
-
-def _mostly_cjk(text: str) -> bool:
-    non_space = sum(1 for ch in text if not ch.isspace())
-    return non_space > 0 and len(_CJK.findall(text)) >= 0.5 * non_space
-
-
 def _segment_spans(
-    index: int, segment: TimedText, units: list[_Unit], origins: list[int], primary: str
+    index: int, segment: TimedText, units: list[Unit], origins: list[int], primary: str
 ) -> dict[int, _Span]:
     spans: dict[int, _Span] = {}
     for k, unit in enumerate(units):
@@ -538,9 +414,7 @@ def _segment_spans(
     return spans
 
 
-def _claim(
-    timeline: _Timeline, segments: Sequence[TimedText], units: list[list[_Unit]]
-) -> tuple[list[_Pair], set[int]]:
+def _claim(timeline: Timeline, segments: Sequence[TimedText], units: list[list[Unit]]) -> tuple[list[_Pair], set[int]]:
     """Pair every segment's quantities with ``timeline``'s; also return the segments whose window it covered.
 
     Windows overlap, so one heard number could otherwise back two spans: each timeline unit backs at most one. Anchored
@@ -568,7 +442,7 @@ def _claim(
     return pairs, covered
 
 
-def _pair_quantities(mine: Sequence[_Unit], theirs: Sequence[_Unit]) -> dict[int, tuple[int, bool]]:
+def _pair_quantities(mine: Sequence[Unit], theirs: Sequence[Unit]) -> dict[int, tuple[int, bool]]:
     """Map quantity units of ``mine`` to the quantity units of ``theirs`` heard in their place, and whether anchored.
 
     Equal units pair as anchored. Between two runs of matching units, quantities pair in order, also anchored, only
@@ -576,12 +450,12 @@ def _pair_quantities(mine: Sequence[_Unit], theirs: Sequence[_Unit]) -> dict[int
     and after the last match, ``theirs`` also holds the window's padding, so there the quantities nearest the match pair
     up, unanchored. A window with no match, or one that barely matches, pairs nothing.
     """
-    if not theirs:
+    alignment = align(mine, theirs)
+    if not alignment.anchored:
         return {}
     pairs: dict[int, tuple[int, bool]] = {}
-    anchors = 0
     gaps: list[tuple[list[int], list[int]]] = [([], [])]
-    for op in Levenshtein.opcodes([u.key for u in mine], [u.key for u in theirs]):
+    for op in alignment.opcodes:
         if op.tag != "equal":
             gap_mine, gap_theirs = gaps[-1]
             gap_mine.extend(i for i in range(op.src_start, op.src_end) if mine[i].token is not None)
@@ -590,16 +464,9 @@ def _pair_quantities(mine: Sequence[_Unit], theirs: Sequence[_Unit]) -> dict[int
         gaps.append(([], []))
         for offset in range(op.src_end - op.src_start):
             i = op.src_start + offset
-            if mine[i].token is None:
-                anchors += 1
-            else:
+            if mine[i].token is not None:
                 pairs[i] = (op.dest_start + offset, True)
     last = len(gaps) - 1
-    if last == 0:
-        return {}
-    plain = sum(1 for u in mine if u.token is None)
-    if plain >= _MIN_ANCHOR_UNITS and anchors < _MIN_ANCHOR_RATIO * plain:
-        return {}
     for k, (gap_mine, gap_theirs) in enumerate(gaps):
         n = len(gap_mine)
         if 0 < k < last:
@@ -730,7 +597,7 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _is_word_char(char: str) -> bool:
-    return char.isalnum() and not _CJK.match(char)
+    return char.isalnum() and not CJK.match(char)
 
 
 def _match_option(proposed: str, options: list[_Option]) -> _Option | None:
@@ -872,7 +739,7 @@ def _reads_as(before: str, after: str, start: int, end: int, new_end: int, value
 
 def _values_around(text: str, start: int, end: int) -> tuple[list[str], list[str]]:
     """Split the values of ``text``'s quantities into those covering ``text[start:end]`` and the rest, in order."""
-    cleaned, origins = _clean(text)
+    cleaned, origins = clean(text)
     covering: list[str] = []
     others: list[str] = []
     for token in quantity_tokens(cleaned):
