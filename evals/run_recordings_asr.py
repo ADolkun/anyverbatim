@@ -69,7 +69,7 @@ from ytverbatim.asr.models import ChunkHypothesis, RunMetrics, WorkerRequest
 from ytverbatim.asr.runner import WorkerResult, memory_cap_bytes, run_worker
 from ytverbatim.errors import ConfigError, YtverbatimError
 
-E2_HYPOTHESES = ("w-prod", "w-vad", "w-vad-lid", "w-runs-lid", "w-runs-cs")
+E2_HYPOTHESES = ("w-prod", "w-vad", "w-vad-lid", "w-runs-lid")
 UTTERANCE_BATCH = 50
 MEETING_CORPORA = (AMI, ALIMEETING)
 ASCEND_CORPORA = (ASCEND, ASCEND_UTTERANCES)
@@ -238,8 +238,8 @@ def run(hypothesis: str, corpora: tuple[str, ...], recordings: str | None, batch
 def score(hypothesis: str, corpora: tuple[str, ...], recordings: str | None, view: View) -> None:
     """Error rate and translation incidents per corpus; for the owner corpus, the languages the run chose.
 
-    ``special_token_rows`` counts rows whose text holds a ``<|`` token or that sampled a language token: any is a
-    decoder bug. ``multi_language_recordings`` counts recordings whose rows report more than one language.
+    ``special_token_rows`` counts rows whose text holds a ``<|`` token: any is a decoder bug.
+    ``multi_language_recordings`` counts recordings whose rows report more than one language.
     """
     report: dict[str, object] = {}
     for corpus, items in _load_all(corpora, _only(corpora, recordings)).items():
