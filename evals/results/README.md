@@ -115,3 +115,16 @@ uv run python -m evals.run_recordings_asr run --hyp w-runs-lid          # each h
 uv run python -m evals.run_recordings_asr score --hyp w-runs-lid
 uv run python -m evals.run_recordings_asr compare --a w-runs-lid --b w-prod
 ```
+
+# Diarization results
+
+Each `diarization-<date>.md` here is written by hand from what `evals.run_diarization run`, `compare` and the
+per-recording `score.json` files give, over the public meeting corpora. It holds DER, WDER with and without smoothing,
+speaker-count error, speed and memory, and the paired intervals, never transcript or reference text:
+
+```bash
+uv run python -m evals.run_diarization run --diarizer d-nemotron-8bit
+uv run python -m evals.run_diarization compare --challenger d-nemotron-bf16
+```
+
+WDER needs the words of an ASR run: `evals.run_recordings_asr words --hyp w-runs-lid` writes them first.
