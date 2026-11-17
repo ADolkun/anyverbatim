@@ -232,6 +232,24 @@ def test_conversions_are_sorted_spans_of_the_input() -> None:
     assert apply(text, changes) == "下午3点10分涨了20%，3万到5万"
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("两到三亿", "2到3亿"),
+        ("二十到三十万", "20到30万"),
+        # A start that takes the end's 百 or 千 is written in the end's 万, so its lower bound never reads as 2.
+        ("两到三百万", "200到300万"),
+        ("两到三千万", "2000到3000万"),
+        ("五到两百万", "5到200万"),
+        ("三点五到四万", "3.5到4万"),
+        ("三到五到七万", "3到5到7万"),
+    ],
+)
+def test_a_range_start_is_written_in_its_ends_magnitude_and_reads_back_the_same(text: str, expected: str) -> None:
+    assert display(text) == expected
+    assert [t.value_itn for t in quantity_tokens(expected)] == [t.value_itn for t in quantity_tokens(text)]
+
+
 def test_a_rewrite_that_the_tokenizer_would_read_otherwise_is_dropped() -> None:
     # 数一千万 is an exact figure, while 数1000万 reads as a rough one, so the digits would change its value.
     assert display("人数一千万") == "人数一千万"

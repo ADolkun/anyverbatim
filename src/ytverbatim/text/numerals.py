@@ -8,7 +8,8 @@ speaker's unit with an Arabic coefficient (三万五 → 3.5万, 一亿五千三
 by digit (二零二六年 → 2026年), counts of two and up (三个, 两年 → 3个, 2年), value units (一倍 → 1倍), dates
 (一月一日 → 1月1日), clock times (下午三点, 两点零五分 → 下午3点, 2点05分), index points (涨了三点, 指数两千八百点
 → 涨了3点, 指数2800点), bare numbers of two or more numerals, decimals, and ranges, whole or not at all (三到五个
-→ 3到5个, 下午两点到四点 → 下午2点到4点; 两到三亿 → 2到3亿, whose start shares the 亿 of its end).
+→ 3到5个, 下午两点到四点 → 下午2点到4点; a start that shares its end's 万 or 亿 is written in that unit: 两到三亿
+→ 2到3亿, 两到三百万 → 200到300万).
 
 Stays Chinese: approximations (三四个, 几十, 二十几), idioms and set words (一样, 万一, 三大), ordinals
 (第二十五期, 二季度), a bare 一 before a count word (一个, 一次), lunar dates (腊月二十三), fractions

@@ -434,8 +434,8 @@ class _Quantity:
     ``unit`` the measure word or %, ``value`` the run's inverse text normalization without prefix or unit (None for a
     ticker, a spelled-out number, a fraction, a rough figure or a run that is not one number; a code read digit by
     digit keeps its leading zeros), ``magnitude`` the largest of 万亿, 亿 and 万 the run is spoken or written in and
-    ``symbol`` the currency sign of its ``value_itn``. A range start that shares its end's magnitude keeps the run's
-    own ``value`` (the 3 of 三到五万) while its ``value_itn`` is the scaled figure (30000).
+    ``symbol`` the currency sign of its ``value_itn``. A range start that shares its end's magnitude has its ``value``
+    in the end's 万 or 亿 (the 3 of 三到五万, the 200 of 两到三百万) while its ``value_itn`` is the scaled figure.
     """
 
     token: QToken
@@ -854,7 +854,8 @@ def _scaled_start(
 
     A start shares the scale only when it has none of its own (no 万 or 亿, prefix or unit) and stays below the end
     in it: 两到三百万 is 2000000 to 3000000, but 五到两百万 is 50000 to 2000000, 二十到三十万 is 200000 to 300000 and
-    两千到三万 keeps 2000. The run's own `value` is kept, as the display form writes it (三到五万 → 3到5万).
+    两千到三万 keeps 2000. Its `value` is the start counted in the end's 万 or 亿, the form the display writes so that
+    it reads back the same (两到三百万 → 200到300万, not 2到300万).
     """
     token = quantity.token
     if (
@@ -875,7 +876,9 @@ def _scaled_start(
         if value < Decimal(end.value):
             symbol = quantity.symbol or end.symbol
             kind: QKind = "currency" if symbol else token.kind
-            return replace(quantity, token=replace(token, value_itn=f"{symbol}{_plain(value)}", kind=kind))
+            in_end_unit = _plain(value / Decimal(10) ** exponents[-1])
+            itn = f"{symbol}{_plain(value)}"
+            return replace(quantity, token=replace(token, value_itn=itn, kind=kind), value=in_end_unit)
     return None
 
 
