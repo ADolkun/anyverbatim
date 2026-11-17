@@ -1,6 +1,6 @@
 import pytest
 
-from evals.metrics import MIN_INCIDENT_UNITS, ScriptMix, script_mix, translation_incident
+from evals.metrics import MIN_INCIDENT_UNITS, ScriptMix, script_mix, sign_test, translation_incident
 from evals.normalize import script_counts
 
 
@@ -56,3 +56,19 @@ def test_an_empty_or_script_free_hypothesis_is_no_incident():
 @pytest.mark.parametrize("text", ["", "   ", "…"])
 def test_empty_text_has_no_units(text: str):
     assert script_mix(text) == ScriptMix(0, 0)
+
+
+def test_the_sign_test_is_a_one_sided_exact_binomial():
+    assert sign_test(5, 0) == 0.03125
+    assert sign_test(8, 2) == pytest.approx(56 / 1024)
+    assert sign_test(1, 1) == 0.75
+    assert sign_test(0, 3) == 1.0
+
+
+def test_the_sign_test_has_nothing_to_say_without_discordant_lines():
+    assert sign_test(0, 0) == 1.0
+
+
+def test_the_plan_s_cases_fall_either_side_of_five_percent():
+    assert sign_test(5, 0) < 0.05
+    assert sign_test(8, 2) > 0.05

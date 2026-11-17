@@ -212,6 +212,15 @@ def win_rate(challenger_wins: int, control_wins: int, confidence: float = DEFAUL
     return WinRate(challenger_wins, control_wins, low, high)
 
 
+def sign_test(fixed: int, introduced: int) -> float:
+    """One-sided exact sign test: the chance of at least ``fixed`` wins in ``fixed + introduced`` fair coin flips.
+
+    Lines both sides get the same way are not discordant and stay out of both counts.
+    """
+    trials = fixed + introduced
+    return sum(math.comb(trials, k) for k in range(fixed, trials + 1)) / 2**trials
+
+
 @dataclass(frozen=True, slots=True)
 class ScriptMix:
     """How many Han and Latin units a text has; the basis of the translation-incident counter."""
