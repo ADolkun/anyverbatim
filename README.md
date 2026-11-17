@@ -25,7 +25,7 @@ uv tool install "ytverbatim[whisper,asr] @ git+https://github.com/ADolkun/ytverb
 uv tool upgrade ytverbatim            # to update later
 ```
 
-There is no PyPI release yet, so the install comes from the repository. That installs the newest `main`; to pin a release, add its tag, as in `…/ytverbatim@v0.1.0`. The part in brackets names two optional extras, which hold the speech engines. `run` checks for the extra it needs before it downloads anything, and its error names the extra that is missing.
+There is no PyPI release yet, so the install comes from the repository. That installs the newest `main`; to pin a release, add its tag, as in `…/ytverbatim@v0.1.1`. The part in brackets names two optional extras, which hold the speech engines. `run` checks for the extra it needs before it downloads anything, and its error names the extra that is missing.
 
 | You want | Extras |
 |---|---|

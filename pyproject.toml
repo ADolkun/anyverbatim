@@ -1,6 +1,6 @@
 [project]
 name = "ytverbatim"
-version = "0.1.0"
+version = "0.1.1"
 description = "Verified, timestamped YouTube transcripts for LLM context, with local ASR on Apple Silicon."
 readme = "README.md"
 license = "MIT"
