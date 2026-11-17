@@ -10,12 +10,18 @@ from evals.normalize import to_units
 from evals.recordings_corpus import FOLDER_CORPORA, Item, Reference
 from evals.recordings_data import RefUtterance
 from evals.recordings_scoring import (
+    ChunkScore,
+    Scored,
     WindowScore,
     count_units,
     language_seconds,
+    overlapped_lines,
     paired,
+    paired_incidents,
+    pool,
     reference_cuts,
     score_item,
+    special_token_rows,
     summarize_corpus,
     words_from_rows,
     write_words,
@@ -211,6 +217,66 @@ def test_incidents_are_counted_per_window_and_split_by_mixed_references():
     assert summary.window_incidents.rate_in_mixed == 0
 
 
+def test_overlap_means_another_line_shares_time_and_touching_lines_do_not_overlap():
+    lines = utterances((0, 5, "a"), (4, 8, "b"), (8, 9, "c"), (10, 20, "d"), (12, 13, "e"), (30, 31, "f"))
+    assert overlapped_lines(lines) == [True, True, False, True, True, False]
+
+
+def test_a_line_another_speaker_overlaps_counts_in_the_old_fields_but_not_the_clean_ones():
+    lines = utterances(
+        (0, 5, "我们今天开会讨论预算问题"),
+        (4, 8, "we shipped it today"),
+        (10, 14, "明天我们继续开会讨论"),
+        (15, 18, "see you all tomorrow"),
+    )
+    reference = Reference(" ".join(line.text for line in lines), lines)
+    heard = (
+        pieces("we discuss the budget today", 0.2, 0.4)
+        + pieces("we shipped it today", 6.0, 0.4)
+        + pieces("明天我们继续开会讨论", 10.2, 0.3)
+        + pieces("see you all tomorrow", 15.2, 0.4)
+    )
+    recording = item(reference, "zh", "ascend")
+    scored = score_item(recording, [spoken("w", "m1", heard)], "mer", "raw")
+    assert [c.overlapped for c in scored.chunks] == [True, True, False, False]
+    chunks = summarize_corpus("ascend", "mer", "raw", [recording], scored).chunk_incidents
+    assert (chunks.dominated_in_mixed_recordings, chunks.incidents_in_mixed_recordings) == (4, 1)
+    assert chunks.rate_in_mixed_recordings == pytest.approx(1 / 4)
+    assert (chunks.clean_in_mixed_recordings, chunks.clean_incidents_in_mixed_recordings) == (2, 0)
+    assert chunks.clean_rate_in_mixed_recordings == 0
+
+
+def test_a_clean_line_that_is_translated_counts_in_both():
+    reference, rows = reference_with_a_translated_phrase()
+    recording = item(reference, "zh", "ascend")
+    chunks = summarize_corpus(
+        "ascend", "mer", "raw", [recording], score_item(recording, rows, "mer", "raw")
+    ).chunk_incidents
+    assert (chunks.clean_in_mixed_recordings, chunks.clean_incidents_in_mixed_recordings) == (3, 1)
+    assert chunks.clean_rate_in_mixed_recordings == chunks.rate_in_mixed_recordings
+
+
+def test_a_clip_is_never_overlapped_so_its_clean_set_is_the_rule_three_set():
+    reference = Reference("我们今天开会 meeting 很重要")
+    row = ChunkHypothesis(hypothesis="w", file="u1", chunk=0, start=0, end=3, text="we meet today for the meeting")
+    scored = score_item(item(reference, "zh", "ascend-utterances"), [row], "mer", "itn")
+    assert [c.overlapped for c in scored.chunks] == [False]
+    chunks = summarize_corpus("ascend-utterances", "mer", "itn", [item(reference, "zh")], scored).chunk_incidents
+    assert chunks.clean_in_mixed_recordings == chunks.dominated_in_mixed_recordings == 1
+    assert chunks.clean_incidents_in_mixed_recordings == chunks.incidents_in_mixed_recordings == 1
+
+
+def test_a_recording_that_is_not_mixed_has_no_clean_lines():
+    lines = utterances((0, 5, "我们今天开会讨论预算问题"), (10, 14, "明天我们继续开会讨论"))
+    reference = Reference(" ".join(line.text for line in lines), lines)
+    heard = pieces("we discuss the budget today", 0.2) + pieces("see you tomorrow", 10.2)
+    recording = item(reference, "zh", "ascend")
+    chunks = summarize_corpus(
+        "ascend", "mer", "raw", [recording], score_item(recording, [spoken("w", "m1", heard)], "mer", "raw")
+    ).chunk_incidents
+    assert chunks.clean_in_mixed_recordings == 0 and chunks.clean_rate_in_mixed_recordings is None
+
+
 def test_an_item_without_a_reference_cannot_be_scored():
     with pytest.raises(ConfigError, match="no reference"):
         score_item(item(None), [], "wer", "itn")  # type: ignore[arg-type]
@@ -310,3 +376,65 @@ def test_language_seconds_sum_what_each_language_was_decoded_for():
         spoken("w", "m1", [("c", 6, 7)], chunk=2),
     ]
     assert language_seconds(rows) == {"zh": 4.0, "en": 2.0, "none": 1.0}
+
+
+def chunk(
+    item_id: str, index: int, incident: bool, *, overlapped: bool = False, mixed_recording: bool = True
+) -> ChunkScore:
+    return ChunkScore(
+        item_id,
+        index,
+        judged=True,
+        dominated=True,
+        mixed_recording=mixed_recording,
+        overlapped=overlapped,
+        incident=incident,
+    )
+
+
+def test_paired_incidents_count_fixed_and_introduced_lines_on_the_clean_lines_only():
+    # Clean lines 0-5; an overlapped line and a line of an unmixed recording differ too but are left out.
+    flags_a = [False, False, False, True, True, False]
+    flags_b = [True, True, False, False, True, False]
+    a = [chunk("m", i, x) for i, x in enumerate(flags_a)] + [chunk("m", 6, False, overlapped=True)]
+    b = [chunk("m", i, x) for i, x in enumerate(flags_b)] + [chunk("m", 6, True, overlapped=True)]
+    a.append(chunk("n", 0, False, mixed_recording=False))
+    b.append(chunk("n", 0, True, mixed_recording=False))
+    result = paired_incidents(a, b)
+    assert (result.lines, result.a_incidents, result.b_incidents) == (6, 2, 3)
+    assert (result.fixed, result.introduced) == (2, 1)
+    assert result.p == pytest.approx(0.5)
+
+
+def test_paired_incidents_report_the_significance_of_a_clean_win():
+    a = [chunk("m", i, False) for i in range(5)]
+    b = [chunk("m", i, True) for i in range(5)]
+    result = paired_incidents(a, b)
+    assert (result.fixed, result.introduced, result.p) == (5, 0, 0.03125)
+    assert paired_incidents(b, a).p == 1.0
+
+
+def test_paired_incidents_need_the_same_lines():
+    with pytest.raises(ConfigError, match="different lines"):
+        paired_incidents([chunk("m", 0, False)], [chunk("m", 1, False)])
+
+
+def test_pooling_corpora_prefixes_every_item_so_the_same_id_never_collides():
+    windows = {
+        "ascend": Scored([window("s1", 0, 1, 10)], [chunk("s1", 0, True)]),
+        "ascend-utterances": Scored([window("s1", 0, 2, 10)], [chunk("s1", 0, False)]),
+    }
+    pooled = pool(windows, ["ascend", "ascend-utterances"])
+    assert [(w.item, w.counts.substitutions) for w in pooled.windows] == [("ascend/s1", 1), ("ascend-utterances/s1", 2)]
+    assert [(c.item, c.incident) for c in pooled.chunks] == [("ascend/s1", True), ("ascend-utterances/s1", False)]
+    assert paired_incidents(pooled.chunks, pooled.chunks).lines == 2
+
+
+def test_special_token_rows_counts_rows_whose_text_holds_a_token():
+    rows = [
+        spoken("w", "m1", [(" hello", 0, 1)]),
+        spoken("w", "m1", [(" <|en|>", 1, 2), (" hello", 2, 3)], chunk=1),
+        spoken("w", "m1", [("<|zh|>你好", 3, 4)], chunk=2),
+    ]
+    assert special_token_rows(rows) == 2
+    assert special_token_rows([]) == 0

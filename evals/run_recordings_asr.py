@@ -4,9 +4,11 @@ One hypothesis at a time: ``run --hyp H`` decodes AMI, AliMeeting, the ASCEND se
 recordings only with ``--corpus owner``), resuming per chunk and per finished worker folder. Each worker folder keeps
 a digest of its audio, so replaced audio under the same id is refused, not scored with the old rows.
 
-Then ``score --hyp H`` (error rate and translation incidents per corpus), ``compare --a H --b H`` (paired bootstrap
-per corpus and over the two meeting corpora; the recording-clustered ``decision`` interval is the one to decide on)
-and ``words --hyp H`` (the ``words.json`` that ``evals.run_diarization`` scores WDER with). Everything prints
+Then ``score --hyp H`` (error rate, translation incidents and rows holding a ``<|`` special token, per corpus),
+``compare --a H --b H`` (paired bootstrap per corpus and over the two meeting corpora; the recording-clustered
+``decision`` interval is the one to decide on; paired translation incidents on the clean lines of every corpus with
+a mixed recording, and the ASCEND sessions and clips pooled as ``ascend-pooled``) and ``words --hyp H`` (the
+``words.json`` that ``evals.run_diarization`` scores WDER with). Everything prints
 aggregates only; the owner's disputes come from ``python -m evals.disputes``.
 
 After a decode fix, ``rescore --hyp H --corpus C --recordings ids --before DIR`` compares those recordings' rows in
@@ -18,9 +20,10 @@ No hypothesis gets a language hint. The two language-ID hypotheses choose within
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -28,6 +31,7 @@ from evals.normalize import View
 from evals.recordings_corpus import (
     ALIMEETING,
     AMI,
+    ASCEND,
     ASCEND_UTTERANCES,
     ASR_CORPORA,
     FOLDER_CORPORA,
@@ -45,12 +49,15 @@ from evals.recordings_corpus import (
 from evals.recordings_data import OWNER
 from evals.recordings_rescore import CorpusRescore, Errors, build_rules, rescore_item, total_repair
 from evals.recordings_scoring import (
+    ASCEND_POOLED,
     MEETINGS,
     Scored,
-    WindowScore,
     language_seconds,
     paired,
+    paired_incidents,
+    pool,
     score_items,
+    special_token_rows,
     summarize_corpus,
     write_words_for,
 )
@@ -61,9 +68,10 @@ from ytverbatim.asr.models import ChunkHypothesis, RunMetrics, WorkerRequest
 from ytverbatim.asr.runner import WorkerResult, memory_cap_bytes, run_worker
 from ytverbatim.errors import ConfigError, YtverbatimError
 
-E2_HYPOTHESES = ("w-prod", "w-vad", "w-vad-lid", "w-runs-lid")
+E2_HYPOTHESES = ("w-prod", "w-vad", "w-vad-lid", "w-runs-lid", "w-runs-cs")
 UTTERANCE_BATCH = 50
 MEETING_CORPORA = (AMI, ALIMEETING)
+ASCEND_CORPORA = (ASCEND, ASCEND_UTTERANCES)
 SCORED_CORPORA = tuple(c for c in ASR_CORPORA if c != OWNER)
 
 Worker = Callable[[WorkerRequest], WorkerResult]
@@ -227,7 +235,10 @@ def run(hypothesis: str, corpora: tuple[str, ...], recordings: str | None, batch
 @_recordings_option
 @_view_option
 def score(hypothesis: str, corpora: tuple[str, ...], recordings: str | None, view: View) -> None:
-    """Error rate and translation incidents per corpus; for the owner corpus, the languages the run chose."""
+    """Error rate and translation incidents per corpus; for the owner corpus, the languages the run chose.
+
+    ``special_token_rows`` counts rows whose text holds a ``<|`` token: any is a decoder bug.
+    """
     report: dict[str, object] = {}
     for corpus, items in _load_all(corpora, _only(corpora, recordings)).items():
         if corpus == OWNER:
@@ -237,10 +248,14 @@ def score(hypothesis: str, corpora: tuple[str, ...], recordings: str | None, vie
                 "audio_hours": sum(i.duration_s for i in items) / 3600,
                 "decoded_recordings": len(rows),
                 "language_seconds": language_seconds([r for rs in rows.values() for r in rs]),
+                "special_token_rows": special_token_rows(r for rs in rows.values() for r in rs),
             }
             continue
-        scores = scored(corpus, hypothesis, view, items)
-        report[corpus] = summarize_corpus(corpus, METRICS[corpus], view, items, scores).model_dump()
+        rows, scores = _scored(asr_layout(corpus), corpus, hypothesis, view, items)
+        report[corpus] = {
+            **summarize_corpus(corpus, METRICS[corpus], view, items, scores).model_dump(),
+            "special_token_rows": special_token_rows(r for rs in rows.values() for r in rs),
+        }
     click.echo(json.dumps({"hypothesis": hypothesis, "corpora": report}, indent=2))
 
 
@@ -258,19 +273,26 @@ def compare_command(first: str, second: str, corpora: tuple[str, ...], view: Vie
 
     ``meetings`` pools the AMI and AliMeeting windows by reference unit, so AliMeeting's characters outnumber AMI's
     words and dominate the figure; ``macro_difference`` averages the two corpora's differences with equal weight.
+
+    ``incidents`` pairs the translation incidents on clean lines (see ``evals.recordings_scoring``) in each corpus
+    with a mixed recording: ``fixed`` lines are A's non-incidents among B's incidents, ``introduced`` the reverse, and
+    ``p`` is a one-sided exact sign test that A fixes more than it introduces. ``ascend-pooled`` pools the ASCEND
+    sessions and clips for both the error rate and the incidents.
     """
-    left: dict[str, list[WindowScore]] = {}
-    right: dict[str, list[WindowScore]] = {}
+    left: dict[str, Scored] = {}
+    right: dict[str, Scored] = {}
     for corpus, items in _load_all(corpora, ()).items():
-        left[corpus] = scored(corpus, first, view, items).windows
-        right[corpus] = scored(corpus, second, view, items).windows
-    results = {corpus: paired(left[corpus], right[corpus], seed).model_dump() for corpus in corpora}
+        left[corpus] = scored(corpus, first, view, items)
+        right[corpus] = scored(corpus, second, view, items)
+    results = {corpus: _paired_entry(left[corpus], right[corpus], seed) for corpus in corpora}
     if set(MEETING_CORPORA) <= set(corpora):
         results[MEETINGS] = {
-            **paired(_pool(left, MEETING_CORPORA), _pool(right, MEETING_CORPORA), seed).model_dump(),
+            **paired(pool(left, MEETING_CORPORA).windows, pool(right, MEETING_CORPORA).windows, seed).model_dump(),
             "macro_difference": sum(results[c]["difference"] for c in MEETING_CORPORA) / len(MEETING_CORPORA),
             "note": "pooled over reference units: AliMeeting characters outnumber AMI words and dominate",
         }
+    if set(ASCEND_CORPORA) <= set(corpora):
+        results[ASCEND_POOLED] = _paired_entry(pool(left, ASCEND_CORPORA), pool(right, ASCEND_CORPORA), seed)
     click.echo(
         json.dumps(
             {
@@ -285,9 +307,11 @@ def compare_command(first: str, second: str, corpora: tuple[str, ...], view: Vie
     )
 
 
-def _pool(windows: Mapping[str, Sequence[WindowScore]], corpora: Sequence[str]) -> list[WindowScore]:
-    """Prefix each window's item with its corpus, so recordings of different corpora never collide when pooled."""
-    return [replace(w, item=f"{c}/{w.item}") for c in corpora for w in windows[c]]
+def _paired_entry(first: Scored, second: Scored, seed: int) -> dict[str, Any]:
+    entry = paired(first.windows, second.windows, seed).model_dump()
+    if any(c.mixed_recording for c in first.chunks):
+        entry["incidents"] = paired_incidents(first.chunks, second.chunks).model_dump()
+    return entry
 
 
 @main.command()

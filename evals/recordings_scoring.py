@@ -13,6 +13,12 @@ Two translation-incident counts come out of the same run:
   hypothesis units timed inside the line. The plan's rule 3, "translation incidents in more than 1% of mixed
   chunks", reads ``rate_in_mixed_recordings``: incidents over the chunks whose reference is at least 70% one script
   inside recordings whose reference holds both scripts. Overlapping lines each count the units timed inside them.
+
+The rule 3 count stays as defined, so runs can be compared with earlier ones, but on a recording of overlapping
+speakers it mostly measures another speaker's words: a line another reference line overlaps is charged the words timed
+inside it, whoever said them. ``clean_*`` is the same count over the lines no other reference line overlaps, where an
+incident is the line's own speech decoded in the other script. ``paired_incidents`` compares two hypotheses on those
+lines.
 """
 
 from __future__ import annotations
@@ -21,8 +27,8 @@ import bisect
 import itertools
 import json
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -33,6 +39,7 @@ from evals.metrics import (
     ErrorCounts,
     paired_bootstrap,
     script_mix,
+    sign_test,
     translation_incident,
     unit_error_counts,
 )
@@ -49,6 +56,8 @@ WINDOW_TARGET_S = 30.0
 # A cut in a shorter pause could split a phrase the two sides time slightly differently.
 MIN_CUT_GAP_S = 0.75
 MEETINGS = "meetings"
+ASCEND_POOLED = "ascend-pooled"
+SPECIAL_TOKEN_MARK = "<|"
 MIN_CLUSTERS = 2
 
 
@@ -76,7 +85,14 @@ class ChunkScore:
     dominated: bool
     # The recording's whole reference holds both scripts.
     mixed_recording: bool
+    # Another reference line overlaps this one in time; always false for a clip.
+    overlapped: bool
     incident: bool
+
+    @property
+    def clean(self) -> bool:
+        """A judged line mostly in one script, in a mixed recording, that no other reference line overlaps."""
+        return self.judged and self.dominated and self.mixed_recording and not self.overlapped
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +118,10 @@ class ChunkIncidents(_Frozen):
     dominated_in_mixed_recordings: int
     incidents_in_mixed_recordings: int
     rate_in_mixed_recordings: float | None
+    # The same, over the lines no other reference line overlaps; always equal to rule 3's count for clips.
+    clean_in_mixed_recordings: int
+    clean_incidents_in_mixed_recordings: int
+    clean_rate_in_mixed_recordings: float | None
 
 
 class CorpusScore(_Frozen):
@@ -116,6 +136,18 @@ class CorpusScore(_Frozen):
     rate: float | None
     window_incidents: Incidents
     chunk_incidents: ChunkIncidents
+
+
+class PairedIncidents(_Frozen):
+    """``a`` against ``b`` over the clean lines: ``fixed`` are incidents of ``b`` that ``a`` avoids."""
+
+    lines: int
+    a_incidents: int
+    b_incidents: int
+    fixed: int
+    introduced: int
+    # One-sided exact sign test that ``a`` fixes more lines than it introduces.
+    p: float
 
 
 class Interval(_Frozen):
@@ -191,7 +223,9 @@ def _window(item: str, index: int, reference: Sequence[str], hypothesis: Sequenc
     )
 
 
-def _chunk(item: str, index: int, reference: str, hypothesis: str, mixed_recording: bool) -> ChunkScore:
+def _chunk(
+    item: str, index: int, reference: str, hypothesis: str, mixed_recording: bool, overlapped: bool = False
+) -> ChunkScore:
     ref_mix, hyp_mix = script_mix(reference), script_mix(hypothesis)
     return ChunkScore(
         item,
@@ -199,8 +233,20 @@ def _chunk(item: str, index: int, reference: str, hypothesis: str, mixed_recordi
         judged=ref_mix.total >= MIN_INCIDENT_UNITS,
         dominated=ref_mix.mostly("han") or ref_mix.mostly("latin"),
         mixed_recording=mixed_recording,
+        overlapped=overlapped,
         incident=translation_incident(ref_mix, hyp_mix),
     )
+
+
+def overlapped_lines(lines: Sequence[RefUtterance]) -> list[bool]:
+    """Per line, whether another line starts before it ends and ends after it starts; ``lines`` sorted by start."""
+    flags: list[bool] = []
+    latest_end = float("-inf")
+    for i, line in enumerate(lines):
+        follows = i + 1 < len(lines) and lines[i + 1].start < line.end
+        flags.append(latest_end > line.start or follows)
+        latest_end = max(latest_end, line.end)
+    return flags
 
 
 def _reference_units(item: Item, lines: Sequence[RefUtterance], view: View) -> list[TimedUnit]:
@@ -243,6 +289,7 @@ def score_item(item: Item, rows: Sequence[ChunkHypothesis], metric: Metric, view
     ordered = sorted(hyp_units, key=lambda u: u.midpoint_s)
     midpoints = [u.midpoint_s for u in ordered]
     mixed = script_mix(" ".join(u.text for u in lines)).mixed
+    overlapped = overlapped_lines(lines)
     chunks = [
         _chunk(
             item.id,
@@ -257,6 +304,7 @@ def score_item(item: Item, rows: Sequence[ChunkHypothesis], metric: Metric, view
                 ]
             ),
             mixed,
+            overlapped[i],
         )
         for i, line in enumerate(lines)
     ]
@@ -282,6 +330,8 @@ def summarize_corpus(corpus: str, metric: Metric, view: View, items: Sequence[It
     eligible = [c for c in chunks if c.dominated and c.mixed_recording]
     chunk_found = sum(c.incident for c in chunks)
     eligible_found = sum(c.incident for c in eligible)
+    clean = [c for c in chunks if c.clean]
+    clean_found = sum(c.incident for c in clean)
     return CorpusScore(
         corpus=corpus,
         metric=metric,
@@ -307,6 +357,9 @@ def summarize_corpus(corpus: str, metric: Metric, view: View, items: Sequence[It
             dominated_in_mixed_recordings=len(eligible),
             incidents_in_mixed_recordings=eligible_found,
             rate_in_mixed_recordings=eligible_found / len(eligible) if eligible else None,
+            clean_in_mixed_recordings=len(clean),
+            clean_incidents_in_mixed_recordings=clean_found,
+            clean_rate_in_mixed_recordings=clean_found / len(clean) if clean else None,
         ),
     )
 
@@ -353,6 +406,38 @@ def paired(a: Sequence[WindowScore], b: Sequence[WindowScore], seed: int = 0) ->
         decision=clustered,
         by_window=Interval(low=windowed.low, high=windowed.high, excludes_zero=windowed.excludes_zero),
     )
+
+
+def paired_incidents(a: Sequence[ChunkScore], b: Sequence[ChunkScore]) -> PairedIncidents:
+    """Compare the translation incidents of ``a`` and ``b`` on the clean lines both were scored on."""
+    by_a = {(c.item, c.index): c for c in a}
+    by_b = {(c.item, c.index): c for c in b}
+    if by_a.keys() != by_b.keys():
+        raise ConfigError("the two hypotheses were scored over different lines; finish both runs first")
+    keys = [k for k in sorted(by_a) if by_a[k].clean]
+    fixed = sum(by_b[k].incident and not by_a[k].incident for k in keys)
+    introduced = sum(by_a[k].incident and not by_b[k].incident for k in keys)
+    return PairedIncidents(
+        lines=len(keys),
+        a_incidents=sum(by_a[k].incident for k in keys),
+        b_incidents=sum(by_b[k].incident for k in keys),
+        fixed=fixed,
+        introduced=introduced,
+        p=sign_test(fixed, introduced),
+    )
+
+
+def pool(scored: Mapping[str, Scored], corpora: Sequence[str]) -> Scored:
+    """Merge corpora into one ``Scored``, prefixing each item with its corpus so recordings never collide."""
+    return Scored(
+        [replace(w, item=f"{c}/{w.item}") for c in corpora for w in scored[c].windows],
+        [replace(k, item=f"{c}/{k.item}") for c in corpora for k in scored[c].chunks],
+    )
+
+
+def special_token_rows(rows: Iterable[ChunkHypothesis]) -> int:
+    """Rows whose text still holds a Whisper special token such as ``<|en|>``."""
+    return sum(SPECIAL_TOKEN_MARK in row.text for row in rows)
 
 
 def words_from_rows(rows: Sequence[ChunkHypothesis]) -> list[Word]:

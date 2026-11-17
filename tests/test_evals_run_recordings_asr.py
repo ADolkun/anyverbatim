@@ -3,6 +3,7 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 
+import click
 import pytest
 from click.testing import CliRunner
 from recordings_fixture import FakeWorker, make_clips, make_meeting, make_owner, pieces, silent, spoken
@@ -22,7 +23,7 @@ from evals.recordings_corpus import (
 )
 from evals.recordings_data import RefUtterance
 from evals.recordings_rescore import rescore_item, total_repair
-from evals.recordings_scoring import MEETINGS
+from evals.recordings_scoring import ASCEND_POOLED, MEETINGS
 from evals.run_diarization import load_words
 from evals.run_recordings_asr import E2_HYPOTHESES, _load_all, run_corpus, scored
 from evals.store import Layout
@@ -59,13 +60,18 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def test_recording_jobs_carry_no_language_hint_and_only_language_id_hypotheses_the_allowed_set(root: Path):
     (item,) = load_items("ami", root=root)
-    jobs = {h: recording_job(item, registry.get(h)) for h in E2_HYPOTHESES}
-    assert all(job.language is None and job.chunks is None and job.context is None for job in jobs.values())
-    assert {h: job.languages for h, job in jobs.items()} == {
+    expected = {
         "w-prod": (),
         "w-vad": (),
         "w-vad-lid": ("zh", "en"),
         "w-runs-lid": ("zh", "en"),
+        "w-runs-cs": ("zh", "en"),
+    }
+    assert set(expected) == set(E2_HYPOTHESES)
+    jobs = {h: recording_job(item, registry.get(h)) for h in E2_HYPOTHESES if h in registry.HYPOTHESES}
+    assert all(job.language is None and job.chunks is None and job.context is None for job in jobs.values())
+    assert {h: job.languages for h, job in jobs.items()} == {
+        h: languages for h, languages in expected.items() if h in jobs
     }
 
 
@@ -149,6 +155,33 @@ def test_compare_pairs_each_corpus_and_pools_the_two_meeting_corpora(root: Path)
     assert results["ami"]["difference"] == pytest.approx(1 / 6)
     assert results[MEETINGS]["windows"] == 4
     assert results[MEETINGS]["difference"] == pytest.approx(2 / 18)
+
+
+def choices(command: str, option: str) -> tuple[str, ...]:
+    (param,) = (p for p in run_recordings_asr.main.commands[command].params if p.name == option)
+    assert isinstance(param.type, click.Choice)
+    return tuple(param.type.choices)
+
+
+def test_the_code_switched_hypothesis_is_a_choice_of_every_command_that_names_one():
+    assert "w-runs-cs" in E2_HYPOTHESES
+    for command, option in (
+        ("run", "hypothesis"),
+        ("score", "hypothesis"),
+        ("compare", "first"),
+        ("compare", "second"),
+    ):
+        assert "w-runs-cs" in choices(command, option)
+
+
+def test_score_counts_rows_holding_a_special_token(root: Path):
+    table = {("w-runs-lid", "m1"): [pieces("hello there", 0.2), pieces("<|zh|> now we begin", 70.2)]}
+    run_corpus(
+        asr_layout("ami", root), "w-runs-lid", load_items("ami", root=root), worker=FakeWorker(transcripts(table))
+    )
+    report = invoke("score", "--hyp", "w-runs-lid", "--corpus", "ami")["corpora"]
+    assert report["ami"]["special_token_rows"] == 1  # type: ignore[index]
+    assert report["ami"]["chunk_incidents"]["clean_in_mixed_recordings"] == 0  # type: ignore[index]
 
 
 def test_words_writes_a_file_wder_can_read(root: Path):
@@ -300,6 +333,56 @@ def test_compare_names_the_decision_interval_and_reports_the_meetings_macro_aver
     assert "dominate" in pooled["note"]
     assert pooled["recordings"] == 2
     assert set(pooled["by_window"]) == {"low", "high", "excludes_zero"}
+
+
+ASCEND_LINES = (
+    RefUtterance(0, 5, "A", "我们今天开会讨论预算问题"),
+    RefUtterance(10, 13, "B", "we shipped it today"),
+    RefUtterance(20, 24, "A", "明天我们继续开会讨论"),
+)
+
+
+def decode_ascend(root: Path, hypothesis: str, translated: bool) -> None:
+    """Sessions and a clip that share the id ``m1``; ``translated`` renders the first line and the clip in English."""
+    first = pieces("we discuss the budget today", 0.2) if translated else pieces("我们今天开会讨论预算问题", 0.2, 0.3)
+    session = [first + pieces("we shipped it today", 10.2) + pieces("明天我们继续开会讨论", 20.2, 0.3)]
+    clip = [pieces("how are you friends", 0.2) if translated else pieces("你好吗朋友 ok now", 0.2)]
+    for corpus, rows in (("ascend", session), ("ascend-utterances", clip)):
+        items = load_items(corpus, root=root)
+        run_corpus(
+            asr_layout(corpus, root), hypothesis, items, worker=FakeWorker(transcripts({(hypothesis, "m1"): rows}))
+        )
+
+
+def test_compare_pairs_incidents_per_corpus_and_pools_the_ascend_sessions_with_the_clips(root: Path):
+    make_meeting(root, "ascend", "m1", ASCEND_LINES)
+    make_clips(root, [("m1", "你好吗朋友 ok now")])
+    decode_ascend(root, "w-runs-lid", translated=False)
+    decode_ascend(root, "w-prod", translated=True)
+    results = invoke(
+        "compare", "--a", "w-runs-lid", "--b", "w-prod", "--corpus", "ascend", "--corpus", "ascend-utterances"
+    )["results"]
+    assert set(results) == {"ascend", "ascend-utterances", ASCEND_POOLED}  # type: ignore[arg-type]
+    sessions, clips, pooled = (results[k] for k in ("ascend", "ascend-utterances", ASCEND_POOLED))  # type: ignore[index]
+    assert (sessions["incidents"]["fixed"], clips["incidents"]["fixed"]) == (1, 1)
+    assert pooled["incidents"] == {
+        "lines": 4,
+        "a_incidents": 0,
+        "b_incidents": 2,
+        "fixed": 2,
+        "introduced": 0,
+        "p": 0.25,
+    }
+    assert pooled["windows"] == sessions["windows"] + clips["windows"]
+    assert pooled["recordings"] == 2
+
+
+def test_compare_leaves_out_incidents_for_corpora_without_a_mixed_recording(root: Path):
+    run_both(root)
+    results = invoke("compare", "--a", "w-runs-lid", "--b", "w-prod", "--corpus", "ami", "--corpus", "alimeeting")[
+        "results"
+    ]
+    assert all("incidents" not in entry for entry in results.values())  # type: ignore[attr-defined]
 
 
 LOOP_LINES = (
