@@ -53,6 +53,7 @@ from evals.recordings_scoring import (
     MEETINGS,
     Scored,
     language_seconds,
+    multi_language_recordings,
     paired,
     paired_incidents,
     pool,
@@ -237,7 +238,8 @@ def run(hypothesis: str, corpora: tuple[str, ...], recordings: str | None, batch
 def score(hypothesis: str, corpora: tuple[str, ...], recordings: str | None, view: View) -> None:
     """Error rate and translation incidents per corpus; for the owner corpus, the languages the run chose.
 
-    ``special_token_rows`` counts rows whose text holds a ``<|`` token: any is a decoder bug.
+    ``special_token_rows`` counts rows whose text holds a ``<|`` token or that sampled a language token: any is a
+    decoder bug. ``multi_language_recordings`` counts recordings whose rows report more than one language.
     """
     report: dict[str, object] = {}
     for corpus, items in _load_all(corpora, _only(corpora, recordings)).items():
@@ -249,12 +251,14 @@ def score(hypothesis: str, corpora: tuple[str, ...], recordings: str | None, vie
                 "decoded_recordings": len(rows),
                 "language_seconds": language_seconds([r for rs in rows.values() for r in rs]),
                 "special_token_rows": special_token_rows(r for rs in rows.values() for r in rs),
+                "multi_language_recordings": multi_language_recordings(rows),
             }
             continue
         rows, scores = _scored(asr_layout(corpus), corpus, hypothesis, view, items)
         report[corpus] = {
             **summarize_corpus(corpus, METRICS[corpus], view, items, scores).model_dump(),
             "special_token_rows": special_token_rows(r for rs in rows.values() for r in rs),
+            "multi_language_recordings": multi_language_recordings(rows),
         }
     click.echo(json.dumps({"hypothesis": hypothesis, "corpora": report}, indent=2))
 

@@ -15,6 +15,7 @@ from evals.recordings_scoring import (
     WindowScore,
     count_units,
     language_seconds,
+    multi_language_recordings,
     overlapped_lines,
     paired,
     paired_incidents,
@@ -438,3 +439,24 @@ def test_special_token_rows_counts_rows_whose_text_holds_a_token():
     ]
     assert special_token_rows(rows) == 2
     assert special_token_rows([]) == 0
+
+
+def test_special_token_rows_counts_a_row_flagged_for_a_sampled_language_token():
+    repaired = spoken("w", "m1", [(" hello", 0, 1)]).model_copy(update={"flags": ("redecoded", "language_token")})
+    assert special_token_rows([repaired, spoken("w", "m1", [(" hi", 1, 2)], chunk=1)]) == 1
+
+
+def test_multi_language_recordings_counts_recordings_whose_rows_report_two_languages():
+    rows = {
+        "mixed": [
+            spoken("w", "mixed", [("你好", 0, 1)], language="zh"),
+            spoken("w", "mixed", [(" hi", 1, 2)], chunk=1, language="en"),
+        ],
+        "zh": [
+            spoken("w", "zh", [("你", 0, 1)], language="zh"),
+            spoken("w", "zh", [("好", 1, 2)], chunk=1, language="zh"),
+        ],
+        "unlabelled": [spoken("w", "unlabelled", [(" a", 0, 1)]), spoken("w", "unlabelled", [(" b", 1, 2)], chunk=1)],
+    }
+    assert multi_language_recordings(rows) == 1
+    assert multi_language_recordings({}) == 0
