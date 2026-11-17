@@ -19,7 +19,7 @@ import opencc
 from ytverbatim.text.segment import is_zh
 
 # Part of the normalize stage key: bump it on any rule change so stored results are redone.
-VERSION = "clean-v2"
+VERSION = "clean-v3"
 
 Script = Literal["zh-Hans", "keep"]
 Fillers = Literal["keep", "remove"]
@@ -66,6 +66,14 @@ def _ellipsis(match: re.Match[str]) -> str:
     return "……" if _is_han(left) or _is_han(right) else match[0]
 
 
+def _left_character(before: str) -> str:
+    # Read through full-width marks as well, so "你好，," converts whole but "Well…, ok", with no Chinese, stays.
+    before = before.rstrip()
+    while before and before[-1] in _FULL_WIDTH_MARKS:
+        before = before[:-1].rstrip()
+    return before[-1:]
+
+
 def _full_width(match: re.Match[str]) -> str:
     text = match.string
     before, after = text[: match.start()], text[match.end() :]
@@ -78,7 +86,7 @@ def _full_width(match: re.Match[str]) -> str:
         sentence_end = not after or bool(match["trail"]) or after[0] == "\n" or _is_han(after[0])
         convert = _is_han(left) and sentence_end
     else:
-        convert = _is_han(left) or (left != "" and left in _FULL_WIDTH_MARKS) or _is_han(right)
+        convert = _is_han(_left_character(before)) or _is_han(right)
     if not convert:
         return match[0]
     return _FULL_WIDTH[mark]
@@ -125,7 +133,7 @@ def normalize(text: str, language: str, *, script: Script, fillers: Fillers) -> 
             if match.end() == match.start() and not after:
                 position += 1
 
-    if is_zh(language) and script == "zh-Hans":
+    if script == "zh-Hans":
         step(to_simplified(current))
         apply(_ELLIPSIS, _ellipsis)
         apply(_MARK, _full_width)
