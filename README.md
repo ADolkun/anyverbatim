@@ -188,7 +188,7 @@ Mandarin transcripts write amounts as digits, following GB/T 15835-2011 (出版�
 | Clock times | `下午四点四十分` → `下午4点40分`, `三点半` → `3点半`, `两点零五分` → `2点05分` |
 | Index points | `涨了三点` → `涨了3点`, `指数两千八百点` → `指数2800点` |
 | Bare numbers | `三点五` → `3.5` |
-| Ranges, whole | `三到五个` → `3到5个`, `下午两点到四点` → `下午2点到4点`, `两到三亿` → `2到3亿` |
+| Ranges, whole | `三到五个` → `3到5个`, `下午两点到四点` → `下午2点到4点`, `两到三亿` → `2到3亿`, `两到三百万` → `200到300万` |
 
 X点 up to 10 is written in digits only as a clock time (minutes, 半 or a time of day such as 下午 before it) or after a move such as 涨, 下跌 or 收涨, so `两点最重要` and `有三点需要注意` stay.
 
