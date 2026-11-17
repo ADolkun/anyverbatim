@@ -25,6 +25,7 @@ _MIN_ANCHOR_UNITS = 4
 CJK = re.compile(r"[一-鿿]")
 _PLAIN_UNIT = re.compile(r"[A-Za-z0-9]+(?:'[A-Za-z]+)?|[一-鿿]")
 _SPACE_BY_CJK = re.compile(r"\s+(?=[一-鿿])|(?<=[一-鿿])\s+")
+_ALNUM = re.compile(r"[A-Za-z0-9]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +106,7 @@ def mostly_cjk(text: str) -> bool:
     return non_space > 0 and len(CJK.findall(text)) >= 0.5 * non_space
 
 
-def timeline(source: str, pieces: Iterable[tuple[str, float, float, float | None]]) -> Timeline:
+def timeline(source: str, pieces: Iterable[tuple[str, float, float, float | None]], *, cues: bool = False) -> Timeline:
     kept = sorted(
         ((piece, start, end, conf) for raw, start, end, conf in pieces if (piece := clean(raw)[0]).strip()),
         key=lambda item: item[1],
@@ -121,7 +122,12 @@ def timeline(source: str, pieces: Iterable[tuple[str, float, float, float | None
     # Rolling caption cues overlap; clamping keeps character times in order so windows can bisect them.
     floor = -math.inf
     for piece, start, end, conf in kept:
-        if add_spaces and text and not (text[-1][-1].isspace() or CJK.match(text[-1][-1]) or CJK.match(piece[0])):
+        if text and (
+            (add_spaces and not (text[-1][-1].isspace() or CJK.match(text[-1][-1]) or CJK.match(piece[0])))
+            # A cue ends where its text ends, so even in Chinese two cues meeting in Latin script or digits are two
+            # words (收购了Zorbix | Zorbix也), never one.
+            or (cues and _ALNUM.match(text[-1][-1]) is not None and _ALNUM.match(piece[0]) is not None)
+        ):
             text.append(" ")
             starts.append(max(start, floor))
             ends.append(starts[-1])
@@ -142,6 +148,16 @@ def timeline(source: str, pieces: Iterable[tuple[str, float, float, float | None
         starts=tuple(starts[u.start] for u in parsed),
         ends=tuple(ends[u.end - 1] for u in parsed),
         confs=tuple(min((c for c in confs[u.start : u.end] if c is not None), default=None) for u in parsed),
+    )
+
+
+def caption_timeline(track: CaptionTrack) -> Timeline:
+    """Return the track as a timeline tagged ``caption_manual`` or ``caption_auto``, from its words or else its cues."""
+    source, pieces = caption_pieces(track)
+    return timeline(
+        source,
+        ((piece.text, piece.start, piece.end, None) for piece in pieces),
+        cues=not any(cue.words for cue in track.segments),
     )
 
 

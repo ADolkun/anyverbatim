@@ -39,7 +39,7 @@ from ytverbatim.llm.jsonio import complete_json
 from ytverbatim.llm.protocol import LLMClient, LLMRequest
 from ytverbatim.llm.usage import UsageMeter
 from ytverbatim.text import offsets
-from ytverbatim.text.align import CJK, TimedText, Timeline, Unit, align, caption_pieces, clean, timeline, units
+from ytverbatim.text.align import CJK, TimedText, Timeline, Unit, align, caption_timeline, clean, timeline, units
 from ytverbatim.text.guards import check_numeric_fix
 from ytverbatim.text.numbers import QToken, quantity_tokens
 from ytverbatim.text.segment import language_line
@@ -255,10 +255,7 @@ def verify_numbers(
     when the engine's word confidence is low: a flag on every number would say nothing about any one of them.
     """
     words = timeline(evidence.primary, ((w.text, w.start, w.end, w.conf) for w in evidence.words))
-    alternates = [
-        timeline(source, ((p.text, p.start, p.end, None) for p in pieces))
-        for source, pieces in _alternate_pieces(evidence)
-    ]
+    alternates = _alternates(evidence)
     segment_units: list[list[Unit]] = []
     spans: list[dict[int, _Span]] = []
     for index, segment in enumerate(segments):
@@ -390,15 +387,12 @@ def _cut(timeline: Timeline, earliest: float, latest: float) -> tuple[float, boo
     return best[1], best[0] > 0
 
 
-def _alternate_pieces(evidence: Evidence) -> list[tuple[str, tuple[TimedText, ...]]]:
-    sources: list[tuple[str, tuple[TimedText, ...]]] = []
-    for track in evidence.captions:
-        source, pieces = caption_pieces(track)
-        if source != evidence.primary:
-            sources.append((source, pieces))
+def _alternates(evidence: Evidence) -> list[Timeline]:
+    alternates = [track for track in map(caption_timeline, evidence.captions) if track.source != evidence.primary]
     if evidence.second_opinion is not None:
-        sources.append((f"asr2:{evidence.second_opinion.engine}", evidence.second_opinion.pieces))
-    return sources
+        pieces = ((p.text, p.start, p.end, None) for p in evidence.second_opinion.pieces)
+        alternates.append(timeline(f"asr2:{evidence.second_opinion.engine}", pieces))
+    return alternates
 
 
 def _segment_spans(
