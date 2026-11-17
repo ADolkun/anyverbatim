@@ -188,7 +188,7 @@ Mandarin transcripts write amounts as digits, following GB/T 15835-2011 (出版�
 | Clock times | `下午四点四十分` → `下午4点40分`, `三点半` → `3点半`, `两点零五分` → `2点05分` |
 | Index points | `涨了三点` → `涨了3点`, `指数两千八百点` → `指数2800点` |
 | Bare numbers | `三点五` → `3.5` |
-| Ranges, whole | `三到五个` → `3到5个`, `下午两点到四点` → `下午2点到4点` |
+| Ranges, whole | `三到五个` → `3到5个`, `下午两点到四点` → `下午2点到4点`, `两到三亿` → `2到3亿` |
 
 X点 up to 10 is written in digits only as a clock time (minutes, 半 or a time of day such as 下午 before it) or after a move such as 涨, 下跌 or 收涨, so `两点最重要` and `有三点需要注意` stay.
 
@@ -202,7 +202,7 @@ These stay Chinese:
 - fractions (`三分之一`)
 - spoken two-digit years (`九七年`)
 - figures a following numeral continues (`三块五`, `一米八`)
-- ranges that share a percent or 万 between their ends (`百分之三到五`, `三到五万`) or that cannot be rewritten whole
+- ranges that share a percent between their ends (`百分之三到五`), carry a magnitude on the left (`三万到五`) or cannot be rewritten whole
 - 一到 meaning "as soon as" (`一到三月份就涨`)
 
 Only figures the [quantity tokenizer](docs/library.md#quantities) reads are rewritten, and a rewrite never changes a figure's value. The stage runs after numeric verification, so punctuation, correction and verification read the text as recognized, and a change to these rules never repeats an LLM call. Word timings, flags and edits follow the rewritten text; a figure its timed words only partly match stays as said.

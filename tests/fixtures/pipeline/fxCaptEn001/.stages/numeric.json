@@ -1,6 +1,6 @@
 {
-  "stage_version": "1+numeric-v5+stages-v1+numbers-v2+guards-v1",
-  "input_hash": "123ef0c3126e6e51609d7a593880f8b107f05ad4ad1d7552d43df66ed57741c2",
+  "stage_version": "1+numeric-v5+stages-v1+numbers-v3+guards-v1",
+  "input_hash": "e73c45de1eb1ce1738688a971ee95dc7178eca9089ecdef754c6efcf0bc3e152",
   "output": {
     "stretches": [
       {

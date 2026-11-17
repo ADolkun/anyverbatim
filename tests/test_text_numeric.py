@@ -167,6 +167,39 @@ def test_a_chinese_figure_agrees_with_its_digit_form(asr: str, caption: str, tmp
     assert client.requests == []
 
 
+@pytest.mark.parametrize(
+    ("asr", "caption"),
+    [
+        ("大概2到3亿美元的收入", "大概两到3亿美元的收入"),
+        ("大概两到3亿美元的收入", "大概2到3亿美元的收入"),
+        ("招了三到五万人左右", "招了3到5万人左右"),
+    ],
+)
+def test_a_range_start_in_the_end_magnitude_agrees_across_scripts(asr: str, caption: str, tmp_path: Path) -> None:
+    client = FakeClient()
+    result = run(
+        [TimedText(asr, 0.0, 3.0)], Evidence(PRIMARY, captions=(manual((0.0, 3.0, caption)),)), client, tmp_path
+    )
+    assert result.flags == ((),)
+    assert result.stats == NumericStats(agreed=2)
+    assert client.requests == []
+
+
+def test_a_range_start_with_another_value_still_disputes(tmp_path: Path) -> None:
+    result = verify_numbers(
+        [TimedText("大概2到3亿美元的收入", 0.0, 3.0)],
+        language="zh",
+        evidence=Evidence(PRIMARY, captions=(manual((0.0, 3.0, "大概三到五亿美元的收入")),)),
+        client=None,
+        checkpoint_dir=tmp_path / "checkpoints",
+    )
+    assert [(f.kind, span_text(result, 0, f)) for f in result.flags[0]] == [
+        ("numeric_disputed", "2"),
+        ("numeric_disputed", "3亿美元"),
+    ]
+    assert result.stats == NumericStats(disputed=2)
+
+
 def test_a_rough_figure_disputes_an_exact_one(tmp_path: Path) -> None:
     result = verify_numbers(
         [TimedText("他今年二十几岁了", 0.0, 3.0)],
