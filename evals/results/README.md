@@ -116,6 +116,13 @@ uv run python -m evals.run_recordings_asr score --hyp w-runs-lid
 uv run python -m evals.run_recordings_asr compare --a w-runs-lid --b w-prod
 ```
 
+# Two-token results
+
+`two-token-<date>.md` is the record of one pre-registered comparison, written by hand from the same `score` and
+`compare` output as the language-policy results. It holds the decision rule, error rates, paired translation-incident
+counts and the verdict, never transcript or reference text. The engine it tested, `w-runs-cs`, was rejected and is not
+in the repository, so its commands there no longer run; `score` and `compare` still pair any two hypotheses.
+
 # Diarization results
 
 Each `diarization-<date>.md` here is written by hand from what `evals.run_diarization run`, `compare` and the
