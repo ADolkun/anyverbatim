@@ -273,6 +273,8 @@ class _Span:
 class _Decision:
     replacement: str | None
     note: str
+    # The chosen reading's value_itn, which the replacement must read back as in its segment.
+    value: str | None = None
 
 
 def verify_numbers(
@@ -712,7 +714,8 @@ def _resolve(span: _Span, verdict: _Verdict | None, *, malformed: bool) -> _Deci
         return _Decision(None, f"LLM chose {chosen.surface!r}, whose kind or unit differs from the transcript's")
     if _magnitude_only(mine, chosen.token):
         return _Decision(None, f"LLM chose {chosen.surface!r}, which differs only in magnitude; re-verify")
-    return _Decision(_restyle(mine, chosen.token.value_itn) or chosen.surface, reason)
+    value = chosen.token.value_itn
+    return _Decision(_restyle(mine, value) or chosen.surface, reason, value)
 
 
 def _clip(text: str, limit: int) -> str:
@@ -813,10 +816,18 @@ def _apply(
         current = texts[index]
         if decision.replacement is not None:
             candidate = current[:start] + decision.replacement + current[end:]
-            if check_numeric_fix(current, candidate, [span.surface]):
+            new_end = start + len(decision.replacement)
+            if not check_numeric_fix(current, candidate, [span.surface]):
+                decision = _Decision(None, "the chosen reading would change more than the number; rejected")
+            elif not _reads_as(current, candidate, start, end, new_end, decision.value):
+                decision = _Decision(
+                    None,
+                    f"the chosen reading would not read as {decision.value} here or would change another figure; "
+                    "rejected",
+                )
+            else:
                 texts[index] = candidate
                 edits[index].append(Edit(stage="numeric", before=current, after=candidate, llm=client_id))
-                new_end = start + len(decision.replacement)
                 note = f"{span.surface} → {decision.replacement}" + (f": {decision.note}" if decision.note else "")
                 flags[index].append(
                     Flag(
@@ -830,7 +841,6 @@ def _apply(
                 shift[index] += new_end - end
                 fixed += 1
                 continue
-            decision = _Decision(None, "the chosen reading would change more than the number; rejected")
         flags[index].append(
             Flag(
                 kind="numeric_disputed",
@@ -846,6 +856,29 @@ def _apply(
         tuple(tuple(f) for f in flags),
         fixed,
     )
+
+
+def _reads_as(before: str, after: str, start: int, end: int, new_end: int, value: str | None) -> bool:
+    """Whether the fix reads back as one quantity of exactly ``value`` and leaves every other figure's value alone.
+
+    A surface need not carry its value: the 2 of 2到3亿 is 200000000 through its range, and written alone it is 2.
+    A fix to one end of a range can also change what the other end reads: 2到300万 → 2到350万 turns the start's
+    2000000 into a bare 2.
+    """
+    _, old_others = _values_around(before, start, end)
+    new_covering, new_others = _values_around(after, start, new_end)
+    return len(new_covering) == 1 and new_covering[0] == value and new_others == old_others
+
+
+def _values_around(text: str, start: int, end: int) -> tuple[list[str], list[str]]:
+    """Split the values of ``text``'s quantities into those covering ``text[start:end]`` and the rest, in order."""
+    cleaned, origins = _clean(text)
+    covering: list[str] = []
+    others: list[str] = []
+    for token in quantity_tokens(cleaned):
+        overlaps = origins[token.char_start] < end and origins[token.char_end - 1] + 1 > start
+        (covering if overlaps else others).append(token.value_itn)
+    return covering, others
 
 
 def _single_source_flags(span: _Span, start: int, end: int) -> list[Flag]:
