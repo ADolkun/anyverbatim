@@ -671,7 +671,8 @@ def _settings(
                 "decode the audio between the numeric spans too; choose a chunk-by-chunk engine such as w-vad"
             )
     if llm is None and options.llm.provider != "none":
-        # A missing `claude` CLI or base URL must fail now, not after an hour of ASR.
+        # A missing `claude` CLI or base URL, or a chatgpt model family that cannot be resolved, must fail now, not
+        # after an hour of ASR.
         check_ready(options.llm, interactive=interactive)
         llm = client_from_options(options.llm, interactive=interactive)
     if options.text.correct and llm is None:

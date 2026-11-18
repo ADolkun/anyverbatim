@@ -77,8 +77,9 @@ class DiarizeOptions:
 @dataclass(frozen=True)
 class LLMOptions:
     provider: Literal["none", "chatgpt", "claude-cli", "openai-compat"] = "chatgpt"
-    # None means the provider's own default (chatgpt: gpt-6.1-sol at medium), so a config that switches provider
-    # never inherits another provider's model.
+    # None means the provider's own default (chatgpt: the newest Sol model at medium), so a config that switches
+    # provider never inherits another provider's model. A chatgpt model without a version (gpt-sol, gpt-astra) means
+    # the newest of that family on the ChatGPT plan; a versioned one (gpt-6.1-sol) is a pin.
     model: str | None = None
     effort: str | None = None
     base_url: str | None = None

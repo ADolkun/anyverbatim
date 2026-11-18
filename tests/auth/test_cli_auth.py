@@ -16,6 +16,8 @@ from ytverbatim.auth.source import BrowserSource, CookieFileSource
 from ytverbatim.cli import auth as cli_auth
 from ytverbatim.cli import main
 from ytverbatim.cli import session as cli_session
+from ytverbatim.errors import ConfigError
+from ytverbatim.llm import chatgpt_models
 from ytverbatim.ytdlp.types import Signal
 
 JSON_KEYS = {
@@ -43,6 +45,18 @@ JSON_KEYS = {
 @pytest.fixture(autouse=True)
 def voice_memos_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(voicememos, "probe", lambda: voicememos.Probe("ok", memos=3))
+
+
+@pytest.fixture(autouse=True)
+def newest_sol(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    asked: list[str] = []
+
+    def resolve(model: str, **_kwargs: object) -> str:
+        asked.append(model)
+        return "gpt-6.2-sol" if chatgpt_models.is_alias(model) else model
+
+    monkeypatch.setattr(chatgpt_models, "resolve", resolve)
+    return asked
 
 
 def _use_runner(monkeypatch: pytest.MonkeyPatch, runner: object) -> None:
@@ -285,7 +299,7 @@ def test_status_signed_out_of_chatgpt(kit, monkeypatch: pytest.MonkeyPatch) -> N
     assert lines[0].startswith("YouTube      chrome:Default  ok, signed in")
     assert lines[1] == "ChatGPT      -               not signed in"
     assert lines[2] == "                             Fix: run `ytverbatim login`"
-    assert lines[3] == "LLM          chatgpt:gpt-6.1-sol (medium effort)"
+    assert lines[3] == "LLM          chatgpt:gpt-sol (newest gpt-sol, not resolved, medium effort)"
 
 
 def test_status_signed_in_to_chatgpt(kit, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -296,8 +310,61 @@ def test_status_signed_in_to_chatgpt(kit, monkeypatch: pytest.MonkeyPatch) -> No
     lines = result.output.splitlines()
     assert lines[0].startswith(f"YouTube      {'chrome:Default':<{len(EMAIL)}}  ok, signed in")
     assert lines[1] == f"ChatGPT      {EMAIL}  ok, plan permission, session ready"
-    assert lines[2] == "LLM          chatgpt:gpt-6.1-sol (medium effort)"
+    assert lines[2] == "LLM          chatgpt:gpt-6.2-sol (newest gpt-sol, medium effort)"
     assert "access-1" not in result.output and "refresh-1" not in result.output
+
+
+def test_status_resolves_the_model_only_with_a_usable_sign_in(
+    kit, monkeypatch: pytest.MonkeyPatch, newest_sol: list[str]
+) -> None:
+    _signed_in_youtube(kit, monkeypatch)
+    assert _status().exit_code == 1
+    assert newest_sol == []
+    store_account(expires_at=time.time() + 3600)
+    assert _status().exit_code == 0
+    assert newest_sol == ["gpt-sol"]
+
+
+def test_status_shows_a_pinned_model_as_is_and_a_family_by_its_newest(
+    kit, monkeypatch: pytest.MonkeyPatch, newest_sol: list[str]
+) -> None:
+    _signed_in_youtube(kit, monkeypatch)
+    store_account(expires_at=time.time() + 3600)
+    config = paths.config_file()
+    config.parent.mkdir(parents=True)
+    config.write_text('[llm]\nmodel = "gpt-6.1-sol"\neffort = "high"\n', encoding="utf-8")
+    assert _status().output.splitlines()[2] == "LLM          chatgpt:gpt-6.1-sol (high effort)"
+    config.write_text('[llm]\nmodel = "gpt-astra"\n', encoding="utf-8")
+    assert _status().output.splitlines()[2] == "LLM          chatgpt:gpt-6.2-sol (newest gpt-astra, medium effort)"
+    assert newest_sol == ["gpt-6.1-sol", "gpt-astra"]
+    llm = json.loads(_status("--json").output)["llm"]
+    assert llm == {
+        "provider": "chatgpt",
+        "label": "chatgpt:gpt-6.2-sol (newest gpt-astra, medium effort)",
+        "model": "gpt-6.2-sol",
+    }
+
+
+def test_status_says_why_the_newest_model_could_not_be_read_and_keeps_its_exit_code(
+    kit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _signed_in_youtube(kit, monkeypatch)
+    store_account(expires_at=time.time() + 3600)
+
+    def unreadable(model: str, **_kwargs: object) -> str:
+        raise ConfigError("the ChatGPT model catalog could not be read to resolve gpt-sol (HTTP 500); pin a version")
+
+    monkeypatch.setattr(chatgpt_models, "resolve", unreadable)
+    result = _status()
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[2] == "LLM          chatgpt:gpt-sol (newest gpt-sol, not resolved, medium effort)"
+    assert (
+        lines[3].strip() == "! the ChatGPT model catalog could not be read to resolve gpt-sol (HTTP 500); pin a version"
+    )
+    llm = json.loads(_status("--json").output)["llm"]
+    assert llm["error"].startswith("the ChatGPT model catalog could not be read")
+    assert "model" not in llm
 
 
 @pytest.mark.parametrize(

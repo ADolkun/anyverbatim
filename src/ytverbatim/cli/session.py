@@ -13,8 +13,8 @@ from ytverbatim.auth.source import resolve_source
 from ytverbatim.auth.state import AuthState
 from ytverbatim.cli.auth import IGNORE_COOLDOWN, fail_other
 from ytverbatim.config import LLMOptions, load_options
-from ytverbatim.errors import AuthError, YtverbatimError
-from ytverbatim.llm import chatgpt, chatgpt_auth
+from ytverbatim.errors import AuthError, ConfigError, YtverbatimError
+from ytverbatim.llm import chatgpt, chatgpt_auth, chatgpt_models
 from ytverbatim.ytdlp.runner import SubprocessRunner, redact
 
 EXIT_ATTENTION = 1
@@ -120,14 +120,19 @@ def status_command(*, as_json: bool, refresh: bool, ignore_cooldown: bool) -> No
     except chatgpt_auth.ChatGPTAuthError as exc:
         session, store_error = None, exc
     memos = voicememos.probe()
+    resolution = _resolve_model(options, session)
     if as_json:
-        click.echo(json.dumps(_json(report, youtube_error, session, store_error, options, memos), ensure_ascii=False))
+        click.echo(
+            json.dumps(
+                _json(report, youtube_error, session, store_error, options, resolution, memos), ensure_ascii=False
+            )
+        )
     else:
         _print_rows(
             [
                 _youtube_row(report, youtube_error),
                 _chatgpt_row(session, store_error),
-                _Row("LLM", llm_label(options)),
+                _llm_row(options, resolution),
                 _memos_row(memos),
             ]
         )
@@ -141,12 +146,43 @@ def _anonymous(report: AuthReport) -> bool:
     return report.state is AuthState.NO_SOURCE
 
 
-def llm_label(options: LLMOptions) -> str:
+def _resolve_model(options: LLMOptions, session: chatgpt_auth.Session | None) -> str | ConfigError | None:
+    """Resolve a chatgpt model family to its slug: the slug, the error when it cannot be read, or None if not tried.
+
+    Only a usable sign-in is tried; the ChatGPT row and the exit code already say what a missing one needs.
+    """
+    if options.provider != "chatgpt" or session is None or not session.usable:
+        return None
+    try:
+        return chatgpt_models.resolve(options.model or chatgpt.DEFAULT_MODEL)
+    except ConfigError as exc:
+        return exc
+
+
+def llm_label(options: LLMOptions, resolution: str | ConfigError | None = None) -> str:
+    """One line for the LLM; `resolution` is what `_resolve_model` returned for a chatgpt model without a version."""
     if options.provider == "none":
         return "none (the LLM stages are skipped)"
-    model = options.model or (chatgpt.DEFAULT_MODEL if options.provider == "chatgpt" else "?")
-    effort = options.effort or (chatgpt.DEFAULT_EFFORT if options.provider == "chatgpt" else None)
-    return f"{options.provider}:{model}" + (f" ({effort} effort)" if effort else "")
+    is_chatgpt = options.provider == "chatgpt"
+    model = options.model or (chatgpt.DEFAULT_MODEL if is_chatgpt else "?")
+    effort = options.effort or (chatgpt.DEFAULT_EFFORT if is_chatgpt else None)
+    details: list[str] = []
+    if is_chatgpt and chatgpt_models.is_alias(model):
+        if isinstance(resolution, str):
+            details.append(f"newest {model}")
+            model = resolution
+        else:
+            details.append(f"newest {model}, not resolved")
+    if effort:
+        details.append(f"{effort} effort")
+    return f"{options.provider}:{model}" + (f" ({', '.join(details)})" if details else "")
+
+
+def _llm_row(options: LLMOptions, resolution: str | ConfigError | None) -> _Row:
+    row = _Row("LLM", llm_label(options, resolution))
+    if isinstance(resolution, ConfigError):
+        row.notes.append(f"! {resolution}")
+    return row
 
 
 def _youtube(*, refresh: bool, ignore_cooldown: bool) -> tuple[AuthReport | None, AuthError | None]:
@@ -226,6 +262,7 @@ def _json(
     session: chatgpt_auth.Session | None,
     store_error: chatgpt_auth.ChatGPTAuthError | None,
     options: LLMOptions,
+    resolution: str | ConfigError | None,
     memos: voicememos.Probe,
 ) -> dict[str, object]:
     if report is not None:
@@ -245,7 +282,11 @@ def _json(
         if session is not None
         else {"error": str(store_error)}
     )
-    llm: dict[str, object] = {"provider": options.provider, "label": llm_label(options)}
+    llm: dict[str, object] = {"provider": options.provider, "label": llm_label(options, resolution)}
+    if isinstance(resolution, str):
+        llm["model"] = resolution
+    elif resolution is not None:
+        llm["error"] = str(resolution)
     voice_memos: dict[str, object] = {
         "state": memos.state,
         "memos": memos.memos,

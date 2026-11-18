@@ -17,6 +17,7 @@ from ytverbatim.llm import (
     ClaudeCLIClient,
     OpenAICompatClient,
     apply_spec,
+    chatgpt,
     chatgpt_auth,
     check_ready,
     claude_cli,
@@ -104,11 +105,11 @@ def test_client_from_options_rejects(options: LLMOptions, message: str) -> None:
 def test_the_default_llm_is_chatgpt_with_its_model_and_effort_left_to_the_provider() -> None:
     options = LLMOptions()
     assert (options.provider, options.model, options.effort) == ("chatgpt", None, None)
-    default = client_from_options(options)
-    assert isinstance(default, ChatGPTClient)
-    assert default.id == "chatgpt:gpt-6.1-sol@medium"
-    assert client_from_options(LLMOptions(effort="high")).id == "chatgpt:gpt-6.1-sol@high"
-    assert client_from_options(LLMOptions(model="gpt-other", effort="low")).id == "chatgpt:gpt-other@low"
+    assert chatgpt.DEFAULT_MODEL == "gpt-sol"
+    pinned = client_from_options(LLMOptions(model="gpt-6.1-sol"))
+    assert isinstance(pinned, ChatGPTClient)
+    assert pinned.id == "chatgpt:gpt-6.1-sol@medium"
+    assert client_from_options(LLMOptions(model="gpt-6.1-other", effort="low")).id == "chatgpt:gpt-6.1-other@low"
 
 
 def test_switching_provider_never_inherits_chatgpts_model(config: Path) -> None:
@@ -246,11 +247,11 @@ def test_only_an_interactive_chatgpt_client_signs_in_again(config: Path, monkeyp
     monkeypatch.setattr(chatgpt_auth, "interactive_login", sign_ins)
     request = LLMRequest(system="s", user="u")
     with pytest.raises(LLMUnavailableError, match="not signed in"):
-        client_from_options(LLMOptions()).complete(request)
+        client_from_options(LLMOptions(model="gpt-6.1-sol")).complete(request)
     assert sign_ins.reasons == []
     # Signed in again, the client goes on to send the request, which tests/conftest.py stops at the network.
     with pytest.raises(AssertionError, match=r"tried to contact https://api\.openai\.com/v1/responses"):
-        client_from_options(LLMOptions(), interactive=True).complete(request)
+        client_from_options(LLMOptions(model="gpt-6.1-sol"), interactive=True).complete(request)
     assert sign_ins.reasons == ["ChatGPT sign-in lapsed"]
 
 

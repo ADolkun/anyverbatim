@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from chatgpt_fakes import store_account
 from click.testing import CliRunner
 
 from ytverbatim import config, pipeline, stages, store
@@ -20,7 +21,7 @@ from ytverbatim.asr.worker import _claim_output as claim_output
 from ytverbatim.cli import main
 from ytverbatim.contract import ContextDocument, Word, YouTubeSource, load_document
 from ytverbatim.errors import ConfigError, DependencyError, EngineError, LLMUnavailableError
-from ytverbatim.llm import claude_cli
+from ytverbatim.llm import chatgpt_models, claude_cli
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from ytverbatim.pipeline import ProgressEvent, VideoResult, process_many
 from ytverbatim.text import clean, guards, numbers, numerals, numeric
@@ -1025,6 +1026,23 @@ def test_the_default_llm_without_a_chatgpt_sign_in_fails_before_any_request(sess
     yt = zh_yt(session_kit)
     with pytest.raises(ConfigError, match=r"not signed in.*`ytverbatim login`.*`--llm none`"):
         run(session_kit, yt)
+    assert yt.calls == [] and worker.calls == []
+
+
+def test_an_unresolvable_model_family_fails_once_before_any_request(session_kit, worker, monkeypatch) -> None:
+    (session_kit.home / ".config" / "ytverbatim" / "config.toml").unlink()
+    store_account()
+    asked: list[str] = []
+
+    def resolve(model: str, **_kwargs: object) -> str:
+        asked.append(model)
+        raise ConfigError("the ChatGPT plan lists no 'sol' model")
+
+    monkeypatch.setattr(chatgpt_models, "resolve", resolve)
+    yt = zh_yt(session_kit)
+    with pytest.raises(ConfigError, match="lists no 'sol' model"):
+        run(session_kit, yt, (ZH, EN))
+    assert asked == ["gpt-sol"]
     assert yt.calls == [] and worker.calls == []
 
 
