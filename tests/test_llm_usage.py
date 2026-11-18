@@ -2,10 +2,10 @@ from dataclasses import dataclass
 
 import pytest
 
-from ytverbatim.contract.models import LLMUsage
-from ytverbatim.errors import LLMOutputError, LLMUnavailableError
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
-from ytverbatim.llm.usage import UsageMeter
+from anyverbatim.contract.models import LLMUsage
+from anyverbatim.errors import LLMOutputError, LLMUnavailableError
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.llm.usage import UsageMeter
 
 
 @dataclass

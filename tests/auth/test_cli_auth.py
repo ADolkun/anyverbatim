@@ -7,18 +7,18 @@ import pytest
 from chatgpt_fakes import EMAIL, store_account
 from click.testing import CliRunner
 
-from ytverbatim import paths
-from ytverbatim.acquire import voicememos
-from ytverbatim.auth import cookiefile, source
-from ytverbatim.auth.cookiefile import CookieEntry
-from ytverbatim.auth.cooldown import read_cooldown, start_cooldown
-from ytverbatim.auth.source import BrowserSource, CookieFileSource
-from ytverbatim.cli import auth as cli_auth
-from ytverbatim.cli import main
-from ytverbatim.cli import session as cli_session
-from ytverbatim.errors import ConfigError
-from ytverbatim.llm import chatgpt_models
-from ytverbatim.ytdlp.types import Signal
+from anyverbatim import paths
+from anyverbatim.acquire import voicememos
+from anyverbatim.auth import cookiefile, source
+from anyverbatim.auth.cookiefile import CookieEntry
+from anyverbatim.auth.cooldown import read_cooldown, start_cooldown
+from anyverbatim.auth.source import BrowserSource, CookieFileSource
+from anyverbatim.cli import auth as cli_auth
+from anyverbatim.cli import main
+from anyverbatim.cli import session as cli_session
+from anyverbatim.errors import ConfigError
+from anyverbatim.llm import chatgpt_models
+from anyverbatim.ytdlp.types import Signal
 
 JSON_KEYS = {
     "state",
@@ -80,7 +80,7 @@ def test_auth_is_registered() -> None:
     assert "auth" in CliRunner().invoke(main, ["--help"]).output
     commands = set(_invoke("--help").output.split())
     assert {"doctor", "profiles", "use"} <= commands
-    assert "status" not in commands, "the YouTube check moved to `ytverbatim status`"
+    assert "status" not in commands, "the YouTube check moved to `anyverbatim status`"
 
 
 def test_status_json_shape_and_cache(kit, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,7 +147,7 @@ def test_profiles_masks_emails_by_default() -> None:
     assert "a***@example.com" in result.output and "b***@example.com" in result.output
     assert "alice@" not in result.output and "bob@" not in result.output
     assert "Default" in result.output and "Work" in result.output
-    assert "ytverbatim auth use chrome:<DIR>" in result.output
+    assert "anyverbatim auth use chrome:<DIR>" in result.output
 
 
 def test_profiles_show_emails() -> None:
@@ -298,7 +298,7 @@ def test_status_signed_out_of_chatgpt(kit, monkeypatch: pytest.MonkeyPatch) -> N
     lines = result.output.splitlines()
     assert lines[0].startswith("YouTube      chrome:Default  ok, signed in")
     assert lines[1] == "ChatGPT      -               not signed in"
-    assert lines[2] == "                             Fix: run `ytverbatim login`"
+    assert lines[2] == "                             Fix: run `anyverbatim login`"
     assert lines[3] == "LLM          chatgpt:gpt-sol (newest gpt-sol, not resolved, medium effort)"
 
 
@@ -388,7 +388,7 @@ def test_status_shows_when_chatgpt_renews_on_its_own_or_needs_a_sign_in(
     result = _status()
     assert result.exit_code == code, result.output
     assert result.output.splitlines()[1] == f"ChatGPT      {EMAIL}  {said}"
-    assert ("Fix: run `ytverbatim login`" in result.output) is (code == 1)
+    assert ("Fix: run `anyverbatim login`" in result.output) is (code == 1)
 
 
 def test_status_with_no_llm_does_not_fail_on_chatgpt(kit, monkeypatch: pytest.MonkeyPatch) -> None:

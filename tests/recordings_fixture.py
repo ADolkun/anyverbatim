@@ -7,6 +7,18 @@ from pathlib import Path
 
 import numpy as np
 
+from anyverbatim import atomic
+from anyverbatim.asr.models import (
+    FINGERPRINT_FILE,
+    HYPOTHESES_FILE,
+    METRICS_FILE,
+    REQUEST_FILE,
+    ChunkHypothesis,
+    RunMetrics,
+    WorkerRequest,
+)
+from anyverbatim.asr.runner import WorkerResult
+from anyverbatim.contract.models import Word
 from evals.recordings_data import (
     INDEX,
     OWNER,
@@ -16,18 +28,6 @@ from evals.recordings_data import (
     write_index,
     write_recording,
 )
-from ytverbatim import atomic
-from ytverbatim.asr.models import (
-    FINGERPRINT_FILE,
-    HYPOTHESES_FILE,
-    METRICS_FILE,
-    REQUEST_FILE,
-    ChunkHypothesis,
-    RunMetrics,
-    WorkerRequest,
-)
-from ytverbatim.asr.runner import WorkerResult
-from ytverbatim.contract.models import Word
 
 SECONDS = 80
 

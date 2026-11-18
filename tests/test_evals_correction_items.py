@@ -5,6 +5,11 @@ import pytest
 from click.testing import CliRunner
 from evals_fixture import CHUNKS, EN, ZH, FakeJudge, chunk_rows, make_eval, whole_file_rows
 
+from anyverbatim.asr.models import ChunkHypothesis
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import ConfigError
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse
+from anyverbatim.text.correct import Rejection
 from evals import correction, listen, run_correction
 from evals.correction import (
     BASE,
@@ -25,11 +30,6 @@ from evals.manifest import Manifest
 from evals.screen import Span, judge_items
 from evals.session import KEY_FILE, SPANS_FILE, load_key, load_shown, write_session
 from evals.store import Layout, write_json, write_rows
-from ytverbatim.asr.models import ChunkHypothesis
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import ConfigError
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse
-from ytverbatim.text.correct import Rejection
 
 HYPOTHESIS = "w-prod"
 ZH_TEXTS = ("我们看这个公司的适应率。", "然后卖出了一百股。", "看NVDA的财报。", "大家好。")
@@ -53,7 +53,7 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_STATE_HOME", str(home / "state"))
-    monkeypatch.setenv("YTVERBATIM_HOME", str(home / "share"))
+    monkeypatch.setenv("ANYVERBATIM_HOME", str(home / "share"))
 
 
 class NoLLM:

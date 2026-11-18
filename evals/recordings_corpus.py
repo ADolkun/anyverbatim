@@ -10,10 +10,17 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
+from anyverbatim import atomic, legacy
+from anyverbatim.asr import registry
+from anyverbatim.asr.models import HYPOTHESES_FILE, METRICS_FILE, REQUEST_FILE, ChunkHypothesis, FileJob, WorkerRequest
+from anyverbatim.asr.protocol import EngineDef
+from anyverbatim.asr.runner import stored_fingerprint
+from anyverbatim.errors import ConfigError
+from anyverbatim.mlx_worker import without_wav
 from evals.normalize import Language
 from evals.recordings_data import (
     OWNER,
@@ -26,13 +33,6 @@ from evals.recordings_data import (
 )
 from evals.run_asr import ALLOWED_LANGUAGES
 from evals.store import Layout, read_rows
-from ytverbatim import atomic
-from ytverbatim.asr import registry
-from ytverbatim.asr.models import HYPOTHESES_FILE, METRICS_FILE, REQUEST_FILE, ChunkHypothesis, FileJob, WorkerRequest
-from ytverbatim.asr.protocol import EngineDef
-from ytverbatim.asr.runner import stored_fingerprint
-from ytverbatim.errors import ConfigError
-from ytverbatim.mlx_worker import without_wav
 
 Metric = Literal["wer", "cer", "mer"]
 
@@ -126,6 +126,11 @@ def check_stamp(folder: Path, items: Sequence[Item], digests: dict[str, str] | N
             )
 
 
+def _as_keyed(definition: EngineDef) -> EngineDef:
+    """Folders made before the rename name the adapter under the old package; that is the same engine."""
+    return replace(definition, factory=legacy.fingerprint_factory(definition.factory))
+
+
 def finished_folders(layout: Layout, hypothesis: str, items: Sequence[Item]) -> dict[str, Path]:
     """Map each selected item to the one finished worker folder that decoded it (a worker writes its metrics last).
 
@@ -139,7 +144,11 @@ def finished_folders(layout: Layout, hypothesis: str, items: Sequence[Item]) -> 
         folder = metrics.parent
         request = WorkerRequest.model_validate_json((folder / REQUEST_FILE).read_text(encoding="utf-8"))
         stored = stored_fingerprint(folder)
-        if request.engine != definition or stored is None or without_wav(stored) != without_wav(request.fingerprint()):
+        if (
+            _as_keyed(request.engine) != _as_keyed(definition)
+            or stored is None
+            or without_wav(stored) != without_wav(request.fingerprint())
+        ):
             raise ConfigError(f"worker folder {folder.name} was not made by the current {hypothesis} definition")
         mine = [job for job in request.files if job.id in wanted]
         for job in mine:

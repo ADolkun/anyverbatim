@@ -1,8 +1,8 @@
 import pytest
 
-from ytverbatim.contract.models import Flag
-from ytverbatim.text.clean import Fillers, Script, normalize, to_simplified
-from ytverbatim.text.offsets import remap_flags
+from anyverbatim.contract.models import Flag
+from anyverbatim.text.clean import Fillers, Script, normalize, to_simplified
+from anyverbatim.text.offsets import remap_flags
 
 
 def clean_en(text: str) -> str:

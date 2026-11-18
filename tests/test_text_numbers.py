@@ -4,7 +4,7 @@ from itertools import product
 
 import pytest
 
-from ytverbatim.text.numbers import _quantities, itn, quantity_tokens
+from anyverbatim.text.numbers import _quantities, itn, quantity_tokens
 
 
 def surfaces(text: str) -> list[str]:

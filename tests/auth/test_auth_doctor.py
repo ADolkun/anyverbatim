@@ -4,15 +4,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from ytverbatim import paths
-from ytverbatim.auth import doctor, source
-from ytverbatim.auth.cooldown import read_cooldown, start_cooldown
-from ytverbatim.auth.doctor import Status
-from ytverbatim.auth.source import BrowserSource
-from ytverbatim.auth.state import AuthState
-from ytverbatim.errors import AuthError
-from ytverbatim.ytdlp import jsruntime, version
-from ytverbatim.ytdlp.types import Signal
+from anyverbatim import paths
+from anyverbatim.auth import doctor, source
+from anyverbatim.auth.cooldown import read_cooldown, start_cooldown
+from anyverbatim.auth.doctor import Status
+from anyverbatim.auth.source import BrowserSource
+from anyverbatim.auth.state import AuthState
+from anyverbatim.errors import AuthError
+from anyverbatim.ytdlp import jsruntime, version
+from anyverbatim.ytdlp.types import Signal
 
 NOW = datetime(2026, 1, 1, 12, tzinfo=UTC)
 

@@ -6,8 +6,8 @@ from pathlib import Path
 
 from pydantic import JsonValue
 
-from ytverbatim.asr.protocol import AsrContext, EngineDef, EngineSpec, RawChunk
-from ytverbatim.contract.models import Word
+from anyverbatim.asr.protocol import AsrContext, EngineDef, EngineSpec, RawChunk
+from anyverbatim.contract.models import Word
 
 RATE = 16_000
 

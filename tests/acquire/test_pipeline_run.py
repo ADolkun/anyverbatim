@@ -15,20 +15,20 @@ from click.testing import CliRunner
 from pipeline_fixture import FakeLLM
 from pydantic import JsonValue
 
-from ytverbatim import config, pipeline, proc
-from ytverbatim.acquire import audio, session
-from ytverbatim.acquire.metadata import Chapter, VideoMetadata, info_path
-from ytverbatim.asr import registry
-from ytverbatim.asr import runner as asr_runner
-from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, RunMetrics, WorkerRequest
-from ytverbatim.asr.runner import WorkerResult
-from ytverbatim.auth.cooldown import stop_fix
-from ytverbatim.auth.fixes import fix_for
-from ytverbatim.auth.source import CookieFileSource
-from ytverbatim.auth.state import AuthState
-from ytverbatim.cli import main
-from ytverbatim.contract import ContextDocument, Word, YouTubeSource, load_document
-from ytverbatim.errors import (
+from anyverbatim import config, pipeline, proc
+from anyverbatim.acquire import audio, session
+from anyverbatim.acquire.metadata import Chapter, VideoMetadata, info_path
+from anyverbatim.asr import registry
+from anyverbatim.asr import runner as asr_runner
+from anyverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, RunMetrics, WorkerRequest
+from anyverbatim.asr.runner import WorkerResult
+from anyverbatim.auth.cooldown import stop_fix
+from anyverbatim.auth.fixes import fix_for
+from anyverbatim.auth.source import CookieFileSource
+from anyverbatim.auth.state import AuthState
+from anyverbatim.cli import main
+from anyverbatim.contract import ContextDocument, Word, YouTubeSource, load_document
+from anyverbatim.errors import (
     AuthError,
     BatchStopError,
     BusyError,
@@ -43,9 +43,9 @@ from ytverbatim.errors import (
     UnavailableError,
     YtDlpError,
 )
-from ytverbatim.pipeline import ProgressEvent, Result, VideoResult, process_many, video_lock
-from ytverbatim.store import input_hash
-from ytverbatim.ytdlp.types import Signal, YtDlpRunner
+from anyverbatim.pipeline import ProgressEvent, Result, VideoResult, process_many, video_lock
+from anyverbatim.store import input_hash
+from anyverbatim.ytdlp.types import Signal, YtDlpRunner
 
 PUBLIC = "pubVideo001"
 MEMBERS = "memVideo001"
@@ -857,7 +857,7 @@ def test_process_returns_a_finished_document_despite_a_stop_on_a_successful_call
 ) -> None:
     yt = session_kit.yt()
     yt.secondary[("metadata", False)] = (Signal.BOT_CHECK,)
-    with caplog.at_level(logging.WARNING, logger="ytverbatim.pipeline"):
+    with caplog.at_level(logging.WARNING, logger="anyverbatim.pipeline"):
         doc = process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt).document
     assert isinstance(doc, ContextDocument) and len(doc.segments) == 2
     assert "back off" in caplog.text
@@ -870,11 +870,11 @@ def test_a_missing_engine_extra_fails_before_any_request(
 ) -> None:
     monkeypatch.setattr(registry, "find_spec", lambda name: None)
     yt = session_kit.yt()
-    with pytest.raises(DependencyError, match=r"ytverbatim\[whisper\]"):
+    with pytest.raises(DependencyError, match=r"anyverbatim\[whisper\]"):
         run(session_kit, yt)
-    with pytest.raises(DependencyError, match=r"ytverbatim\[asr\]"):
+    with pytest.raises(DependencyError, match=r"anyverbatim\[asr\]"):
         run(session_kit, yt, options=engine_options("q-base"))
-    with pytest.raises(DependencyError, match=r"ytverbatim\[whisper,asr\]"):
+    with pytest.raises(DependencyError, match=r"anyverbatim\[whisper,asr\]"):
         run(session_kit, yt, options=engine_options("w-vad"))
     assert yt.calls == [] and worker.calls == []
 
@@ -1079,10 +1079,10 @@ def test_a_failure_after_the_fetch_names_the_stage_that_was_running(session_kit,
 
 
 def test_a_caller_needs_only_the_public_names(session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Everything an application such as knowledge-flow does with this package, through `ytverbatim` and
-    `ytverbatim.errors` alone; only the yt-dlp runner is swapped, as the test cannot reach YouTube."""
-    import ytverbatim as yv
-    from ytverbatim.errors import AuthError, AuthState, BatchStopError, Signal, YtverbatimError
+    """Everything an application such as knowledge-flow does with this package, through `anyverbatim` and
+    `anyverbatim.errors` alone; only the yt-dlp runner is swapped, as the test cannot reach YouTube."""
+    import anyverbatim as yv
+    from anyverbatim.errors import AnyverbatimError, AuthError, AuthState, BatchStopError, Signal
 
     yt = session_kit.yt()
     yt.playlist = [PUBLIC, "pubVideo002"]
@@ -1127,7 +1127,7 @@ def test_a_caller_needs_only_the_public_names(session_kit, worker: FakeWorker, m
     assert result.video_path == yv.video_file(PUBLIC, out) and result.video_path is not None
 
     yt.failures[("video", False)] = [session_kit.fail(Signal.NO_FORMATS)]
-    with pytest.raises(YtverbatimError) as failed:
+    with pytest.raises(AnyverbatimError) as failed:
         yv.process(yv.video_url("pubVideo002"), options, llm=FakeLLM(), out=out, auth="none")
     assert failed.value.stage == "video" and failed.value.fix
 

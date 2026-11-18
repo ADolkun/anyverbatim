@@ -7,10 +7,10 @@ from unittest import mock
 import pytest
 from pipeline_fixture import CAPTIONED, MIXED, FakeLLM, FakeWorker, FakeYtDlp, _fake_proc, isolated, run
 
-from ytverbatim import LLM_STAGES, STAGES, proc
-from ytverbatim.asr import runner as asr_runner
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse
-from ytverbatim.pipeline import ProgressEvent
+from anyverbatim import LLM_STAGES, STAGES, proc
+from anyverbatim.asr import runner as asr_runner
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse
+from anyverbatim.pipeline import ProgressEvent
 
 
 @dataclass

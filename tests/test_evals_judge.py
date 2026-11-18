@@ -5,13 +5,13 @@ from pathlib import Path
 import pytest
 from evals_fixture import ZH, chunk_rows, make_eval
 
+from anyverbatim.asr import registry
+from anyverbatim.errors import LLMOutputError
+from anyverbatim.llm import LLMRequest, LLMResponse
 from evals import judge
 from evals.consensus import UNCERTAIN
 from evals.screen import collect_spans, judge_items, judge_shares
 from evals.store import write_rows
-from ytverbatim.asr import registry
-from ytverbatim.errors import LLMOutputError
-from ytverbatim.llm import LLMRequest, LLMResponse
 
 HYPOTHESES = ("w-vad", "q-base", "f-aed")
 TEXTS = {

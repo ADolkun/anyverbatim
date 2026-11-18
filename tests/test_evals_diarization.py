@@ -2,6 +2,8 @@ import math
 
 import pytest
 
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import ConfigError
 from evals.diarization import (
     COLLARS_S,
     DerScore,
@@ -19,8 +21,6 @@ from evals.diarization import (
     wder,
     write_rttm,
 )
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import ConfigError
 
 RTTM = """\
 ;; a comment

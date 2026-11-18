@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import atomic
+from anyverbatim import atomic
 
 
 def _mode(path: Path) -> int:

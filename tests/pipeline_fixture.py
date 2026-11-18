@@ -17,10 +17,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
-from ytverbatim import config, proc, stages
-from ytverbatim.asr import registry
-from ytverbatim.asr import runner as asr_runner
-from ytverbatim.asr.models import (
+from anyverbatim import config, proc, stages
+from anyverbatim.asr import registry
+from anyverbatim.asr import runner as asr_runner
+from anyverbatim.asr.models import (
     FINGERPRINT_FILE,
     HYPOTHESES_FILE,
     METRICS_FILE,
@@ -28,14 +28,14 @@ from ytverbatim.asr.models import (
     RunMetrics,
     WorkerRequest,
 )
-from ytverbatim.asr.runner import WorkerResult
-from ytverbatim.asr.worker import _claim_output as claim_output
-from ytverbatim.contract import Word
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
-from ytverbatim.pipeline import ProgressEvent, VideoResult, process_many
-from ytverbatim.store import LOCK_NAME
-from ytverbatim.ytdlp import jsruntime, version
-from ytverbatim.ytdlp.types import YtDlpResult, YtDlpRunner
+from anyverbatim.asr.runner import WorkerResult
+from anyverbatim.asr.worker import _claim_output as claim_output
+from anyverbatim.contract import Word
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.pipeline import ProgressEvent, VideoResult, process_many
+from anyverbatim.store import LOCK_NAME
+from anyverbatim.ytdlp import jsruntime, version
+from anyverbatim.ytdlp.types import YtDlpResult, YtDlpRunner
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "pipeline"
 NOW = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
@@ -262,7 +262,7 @@ def _punctuated(text: str) -> str:
 @contextlib.contextmanager
 def isolated(home: Path) -> Generator[None]:
     """Point every config, state and auth location at `home`, so no real setting or cooldown leaks in."""
-    names = ("HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "YTVERBATIM_HOME", "YTVERBATIM_AUTH")
+    names = ("HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "ANYVERBATIM_HOME", "ANYVERBATIM_AUTH")
     saved = {name: os.environ.get(name) for name in names}
     for name in names:
         os.environ.pop(name, None)
@@ -284,7 +284,7 @@ def isolated(home: Path) -> Generator[None]:
 
 
 def run(
-    video_id: str, out: Path, llm: FakeLLM, yt: YtDlpRunner, progress: list[ProgressEvent] | None = None
+    video_id: str, out: Path | None, llm: FakeLLM, yt: YtDlpRunner, progress: list[ProgressEvent] | None = None
 ) -> VideoResult:
     results: list[VideoResult] = []
     events: list[ProgressEvent] = [] if progress is None else progress

@@ -1,22 +1,22 @@
 from datetime import UTC, datetime
 
-from ytverbatim.auth.state import AuthState
-from ytverbatim.errors import (
+from anyverbatim.auth.state import AuthState
+from anyverbatim.errors import (
+    AnyverbatimError,
     AuthError,
     BatchStopError,
     ConfigError,
     UnavailableError,
     YtDlpError,
-    YtverbatimError,
     stderr_preview,
 )
-from ytverbatim.ytdlp.types import Signal
+from anyverbatim.ytdlp.types import Signal
 
 
 def test_hierarchy_and_attributes() -> None:
     until = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
     stop = BatchStopError(Signal.BOT_CHECK, until)
-    assert isinstance(stop, YtverbatimError)
+    assert isinstance(stop, AnyverbatimError)
     assert (stop.signal, stop.until) == (Signal.BOT_CHECK, until)
     assert "bot_check" in str(stop)
     assert "2026-01-02T03:04:05" in str(stop)
@@ -38,20 +38,20 @@ def test_hierarchy_and_attributes() -> None:
     assert "unclassified" in str(YtDlpError(None, (), "x", 2))
 
     assert UnavailableError("geo").kind == "geo"
-    assert issubclass(ConfigError, YtverbatimError)
+    assert issubclass(ConfigError, AnyverbatimError)
 
 
 def test_every_error_has_a_fix_that_is_empty_until_one_is_set() -> None:
     errors = [
-        YtverbatimError("x"),
+        AnyverbatimError("x"),
         AuthError(AuthState.NO_SOURCE),
         YtDlpError(None, (), "x", 1),
         UnavailableError("geo"),
         BatchStopError(Signal.BOT_CHECK, None),
     ]
     assert [e.fix for e in errors] == [""] * len(errors)
-    errors[1].fix = "Run: ytverbatim auth profiles"
-    assert errors[1].fix == "Run: ytverbatim auth profiles" and errors[0].fix == ""
+    errors[1].fix = "Run: anyverbatim auth profiles"
+    assert errors[1].fix == "Run: anyverbatim auth profiles" and errors[0].fix == ""
 
 
 def test_stderr_preview_keeps_both_ends() -> None:

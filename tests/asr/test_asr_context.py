@@ -1,5 +1,5 @@
-from ytverbatim.acquire.metadata import Chapter, VideoMetadata
-from ytverbatim.asr.context import MAX_CONTEXT_CHARS, build_context, context_from_metadata
+from anyverbatim.acquire.metadata import Chapter, VideoMetadata
+from anyverbatim.asr.context import MAX_CONTEXT_CHARS, build_context, context_from_metadata
 
 
 def joined_length(prompt: str, hotwords: tuple[str, ...]) -> int:

@@ -1,6 +1,6 @@
 # Recordings
 
-`ytverbatim run` also transcribes your own recordings: audio or video files, folders of them, and iPhone Voice Memos synced to your Mac. A recording gets the same `context.json` and `context.md` as a YouTube video, plus speaker labels when more than one person talks.
+`anyverbatim run` also transcribes your own recordings: audio or video files, folders of them, and iPhone Voice Memos synced to your Mac. A recording gets the same `context.json` and `context.md` as a YouTube video, plus speaker labels when more than one person talks.
 
 This page is the full reference. The [README](../README.md) has the short version.
 
@@ -21,18 +21,18 @@ This page is the full reference. The [README](../README.md) has the short versio
 
 ## Before you record people
 
-Get everyone's consent before you record a conversation. In many places recording without it is illegal, and some require every participant's consent. ytverbatim does not check. See [Privacy and consent](#privacy-and-consent) for what leaves your Mac.
+Get everyone's consent before you record a conversation. In many places recording without it is illegal, and some require every participant's consent. anyverbatim does not check. See [Privacy and consent](#privacy-and-consent) for what leaves your Mac.
 
 ## Files and folders
 
 ```
-ytverbatim run meeting.m4a standup.mp4
-ytverbatim run ~/Recordings/2026-11/
+anyverbatim run meeting.m4a standup.mp4
+anyverbatim run ~/Recordings/2026-11/
 ```
 
 A target is a file, a folder, or a [Voice Memos selector](#voice-memos). Files, folders and `memos:` selectors can be mixed in one run. YouTube targets cannot: run them separately. A bare name that is both a file and an 11-character video id is refused; write `./NAME` for the file or the watch URL for the video.
 
-- **Folders** are searched recursively and sorted by path. Hidden files and folders are skipped, and so are ytverbatim's own `rec-…` folders and the output folder.
+- **Folders** are searched recursively and sorted by path. Hidden files and folders are skipped, and so are anyverbatim's own `rec-…` folders and the output folder.
 - **Extensions** read from a folder: `m4a`, `mp3`, `wav`, `aac`, `flac`, `ogg`, `opus`, `mp4`, `m4v`, `mov`, `mkv`, `webm`, `qta`, `caf`, `aif`, `aiff`, `amr` and `3gp`. A file you name yourself is read whatever its extension is, as long as ffmpeg can read it.
 - **No audio stream** is an error for that file, never a silent skip. The other files still run.
 - **Several audio tracks:** one is transcribed, the first AAC track, or else the first track ffmpeg can decode. The others are ignored. This is what makes Voice Memos' spatial `.qta` files work.
@@ -57,7 +57,7 @@ An id is never 11 characters, so it cannot be mistaken for a YouTube video id.
 
 ## Output
 
-Recordings go to `~/.local/share/ytverbatim/recordings/`, or to `recordings/` under `$YTVERBATIM_HOME`, or to `--out DIR`.
+Recordings go to `~/.local/share/anyverbatim/recordings/`, or to `recordings/` under `$ANYVERBATIM_HOME`, or to `--out DIR`.
 
 ```
 recordings/
@@ -75,7 +75,7 @@ recordings/
 `run` prints one line per recording:
 
 ```
-✓ weekly-sync.m4a  ~/.local/share/ytverbatim/recordings/rec-0123456789abcdef/context.md  (412 segments · 96 paragraphs · 3 speakers · 2 flags · punctuation: llm · 214s)
+✓ weekly-sync.m4a  ~/.local/share/anyverbatim/recordings/rec-0123456789abcdef/context.md  (412 segments · 96 paragraphs · 3 speakers · 2 flags · punctuation: llm · 214s)
 ```
 
 Exit codes: 0 when every source finished, 1 when some failed. The codes 2 and 3 are YouTube's, for an auth error and a cooldown.
@@ -122,26 +122,26 @@ Every stage is stored under the recording's `.stages/` folder, keyed by what it 
 
 A plain file keeps the title and date from its first run. A Voice Memo is different. If you rename it in Voice Memos, or if you first transcribed its shared file as a plain file, the next `memos:` run that selects it updates its record to the Voice Memos title and date from the stored stages, with no ASR and no LLM call.
 
-`ytverbatim render CONTEXT.json` rewrites `context.md` beside a `context.json`, from the stored document alone, and touches nothing else. `--stdout` prints the markdown instead of writing it.
+`anyverbatim render CONTEXT.json` rewrites `context.md` beside a `context.json`, from the stored document alone, and touches nothing else. `--stdout` prints the markdown instead of writing it.
 
 ## Voice Memos
 
-Memos you record on the iPhone sync to the Mac's Voice Memos app through iCloud. ytverbatim reads them from there.
+Memos you record on the iPhone sync to the Mac's Voice Memos app through iCloud. anyverbatim reads them from there.
 
 ### Set up
 
 1. Turn on Voice Memos in iCloud settings on the iPhone and on the Mac.
 2. Open Voice Memos on the Mac once, so it creates the library.
-3. Give the app you run ytverbatim from Full Disk Access: System Settings → Privacy & Security → Full Disk Access, then restart that app. For a scheduled job, see [Automation](#automation).
+3. Give the app you run anyverbatim from Full Disk Access: System Settings → Privacy & Security → Full Disk Access, then restart that app. For a scheduled job, see [Automation](#automation).
 
-`ytverbatim status` has a `Voice Memos` line that tells you where you stand: `ok · N memos`, `no access (Full Disk Access)`, `not syncing`, or `unreadable` with the reason. It is only information and never changes the exit code.
+`anyverbatim status` has a `Voice Memos` line that tells you where you stand: `ok · N memos`, `no access (Full Disk Access)`, `not syncing`, or `unreadable` with the reason. It is only information and never changes the exit code.
 
-ytverbatim reads only the library location macOS uses since Sonoma, `~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings`. Apple does not document that layout, so a future macOS may change it. Without Full Disk Access, share or export the memo from the Voice Memos app as a file and pass the file.
+anyverbatim reads only the library location macOS uses since Sonoma, `~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings`. Apple does not document that layout, so a future macOS may change it. Without Full Disk Access, share or export the memo from the Voice Memos app as a file and pass the file.
 
 ### List memos
 
 ```
-ytverbatim memos [--all] [--json] [--out DIR]
+anyverbatim memos [--all] [--json] [--out DIR]
 ```
 
 Lists the newest 20 memos, or every memo with `--all`, one line each: date, duration, title, status and a short id (the first 8 characters). `--json` prints every memo as one JSON array with `unique_id`, `title`, `recorded_at`, `duration_s`, `status` and `recording_id`. `--out` is the recordings folder to look in for finished transcripts.
@@ -151,17 +151,17 @@ Lists the newest 20 memos, or every memo with `--all`, one line each: date, dura
 | `transcribed` | A document for this memo exists in the output folder. |
 | `new` | The memo is on this Mac and has no document yet. |
 | `not downloaded` | iCloud has not downloaded the audio. Open the memo once in Voice Memos. |
-| `unsupported` | ytverbatim cannot read it: a `.composition` folder, or a file outside the library. |
+| `unsupported` | anyverbatim cannot read it: a `.composition` folder, or a file outside the library. |
 
-Listing never hashes audio. It reads a short-lived private copy of the Voice Memos database, so nothing is written into Apple's folder, and it remembers each memo's id in `voicememos.json` in ytverbatim's state folder. A memo ytverbatim has never hashed shows as `new`.
+Listing never hashes audio. It reads a short-lived private copy of the Voice Memos database, so nothing is written into Apple's folder, and it remembers each memo's id in `voicememos.json` in anyverbatim's state folder. A memo anyverbatim has never hashed shows as `new`.
 
 ### Transcribe memos
 
 ```
-ytverbatim run memos:new
-ytverbatim run memos:latest
-ytverbatim run memos:all
-ytverbatim run memos:3f9a2c1d
+anyverbatim run memos:new
+anyverbatim run memos:latest
+anyverbatim run memos:all
+anyverbatim run memos:3f9a2c1d
 ```
 
 | Selector | Transcribes |
@@ -178,19 +178,19 @@ Selectors are case-insensitive. Give several and each memo runs once, newest fir
 - `new`, `all` and `latest` skip memos that are not downloaded or unsupported, with a notice, and never hash them. Open a memo once in Voice Memos, then run again. `latest` skips newer memos that are not downloaded and takes the newest downloaded one.
 - `memos:ID` on a memo that is not downloaded or unsupported is an error. So are `all` and `latest` when no memo is downloaded.
 - The memo's title and recording date from Voice Memos become the document's `title` and `recorded_at`, ahead of the file's own tags, and `source.origin` is `voice_memos`.
-- If Voice Memos is not syncing, or ytverbatim cannot read its library, the error says how to fix it.
+- If Voice Memos is not syncing, or anyverbatim cannot read its library, the error says how to fix it.
 - `--quiet` prints nothing when there was nothing to do. See [Automation](#automation).
 
 ## Meeting sources
 
-ytverbatim reads files. Any audio or video file that ffmpeg can read works, so the task is to get your meeting into a file.
+anyverbatim reads files. Any audio or video file that ffmpeg can read works, so the task is to get your meeting into a file.
 
 - **A recording your meeting app saves on your Mac:** pass the file or its folder. If a meeting's folder holds a video file and an audio-only file of the same meeting, pass the audio file. When both carry the same audio, a folder run transcribes it once, because the id follows the audio. When they do not, it is transcribed twice.
 - **A recording kept in your meeting app's cloud:** download it from the app and pass the file. Whether you can download one depends on the app and your plan.
 - **Your phone:** record in Voice Memos and use the [Voice Memos](#voice-memos) selectors, or export or share the recording from whatever app made it and pass the file.
 - **A call you record on your Mac yourself:** a recording made with a microphone only captures what the microphone hears, so the other people may be faint or missing. Use a tool that records the call's audio too.
 
-Not supported yet: separate tracks for each participant, and importing the transcripts that meeting apps produce, with their speaker names. Rename speakers yourself with [`ytverbatim speakers`](#speakers).
+Not supported yet: separate tracks for each participant, and importing the transcripts that meeting apps produce, with their speaker names. Rename speakers yourself with [`anyverbatim speakers`](#speakers).
 
 ## Speakers
 
@@ -211,15 +211,15 @@ Recordings are diarized by default: a local model finds who speaks when. The mod
 | `"on"` | Every source transcribed with ASR, YouTube videos too. |
 | `"off"` | Nothing. |
 
-`--diarize` and `--no-diarize` set it for one run. A diarized run needs `ytverbatim[asr]`; recordings need `ytverbatim[whisper,asr]` with either default engine.
+`--diarize` and `--no-diarize` set it for one run. A diarized run needs `anyverbatim[asr]`; recordings need `anyverbatim[whisper,asr]` with either default engine.
 
 ### Naming speakers
 
 ```
-ytverbatim speakers rec-0123456789abcdef
-ytverbatim speakers rec-0123456789abcdef S1=Alice S2=Bob
-ytverbatim speakers rec-0123456789abcdef S2=
-ytverbatim speakers rec-0123456789abcdef S1=Alice S3=Alice
+anyverbatim speakers rec-0123456789abcdef
+anyverbatim speakers rec-0123456789abcdef S1=Alice S2=Bob
+anyverbatim speakers rec-0123456789abcdef S2=
+anyverbatim speakers rec-0123456789abcdef S1=Alice S3=Alice
 ```
 
 `TARGET` is the recording's folder, its `context.json`, or its `rec-…` id. `--out DIR` says where to look an id up.
@@ -275,7 +275,7 @@ That selects `w-runs-lid`. Use your own languages if they are others. Without `l
 - `w-runs-lid` detects the language of each chunk, merges neighbouring chunks of the same language into runs, and decodes each run whole with its own language.
 - `w-vad-lid` decodes each chunk with its own detected language.
 
-Both need `ytverbatim[whisper,asr]`.
+Both need `anyverbatim[whisper,asr]`.
 
 When a recording has stretches in more than one language, each stretch is treated by its own language:
 
@@ -331,7 +331,7 @@ provider = "none"
 
 Without an LLM, punctuation is left as the engine wrote it, correction is skipped, and numbers that disagree stay flagged with every reading. A notice and `quality.warnings` say so. `--no-correct` alone is not an opt-out, because punctuation still uses the LLM. A local `openai-compat` endpoint also keeps everything on your Mac.
 
-With the default ChatGPT provider, check your ChatGPT plan's data controls, the setting about whether conversations may be used to improve models, before you transcribe business meetings. Whether that setting applies to the sign-in ytverbatim uses is unverified.
+With the default ChatGPT provider, check your ChatGPT plan's data controls, the setting about whether conversations may be used to improve models, before you transcribe business meetings. Whether that setting applies to the sign-in anyverbatim uses is unverified.
 
 ## Automation
 
@@ -339,10 +339,10 @@ With the default ChatGPT provider, check your ChatGPT plan's data controls, the 
 
 What the job needs:
 
-- **`ytverbatim login` once,** by hand in a terminal. A job has no terminal, so it never opens a browser. If the ChatGPT sign-in is missing or has lapsed, the run stops before it does any work, prints the fix and exits 1. Check with `ytverbatim status`.
+- **`anyverbatim login` once,** by hand in a terminal. A job has no terminal, so it never opens a browser. If the ChatGPT sign-in is missing or has lapsed, the run stops before it does any work, prints the fix and exits 1. Check with `anyverbatim status`.
 - **Full Disk Access for the program the job runs,** not for your terminal. For cron that is `cron` itself. For a launchd agent it is the executable in `ProgramArguments`. This attribution is unverified: if the job reports that it cannot read the Voice Memos library, add the program the error names or the one you scheduled, then try again.
 - **A `PATH` that finds `ffmpeg`.** Scheduled jobs start with a short `PATH`. The example uses the Homebrew folder of an Apple Silicon Mac; use the folder `command -v ffmpeg` prints.
-- **The full path to `ytverbatim`.** `command -v ytverbatim` prints it from your shell. After `uv tool install` it is `~/.local/bin/ytverbatim` by default, and `uv tool dir --bin` shows the folder. Use that folder in `PATH` too, if the job needs it.
+- **The full path to `anyverbatim`.** `command -v anyverbatim` prints it from your shell. After `uv tool install` it is `~/.local/bin/anyverbatim` by default, and `uv tool dir --bin` shows the folder. Use that folder in `PATH` too, if the job needs it.
 - **A backlog cleared by hand.** The first `memos:new` transcribes every memo you have, which can take hours. Run it once yourself first.
 - **iCloud downloads.** Memos that are not downloaded yet are skipped and picked up by a later run once Voice Memos has downloaded them.
 
@@ -356,12 +356,12 @@ Runs may overlap. A memo that another run is transcribing is skipped as busy, an
 
 ```
 PATH=/opt/homebrew/bin:/usr/bin:/bin
-*/30 * * * * /full/path/to/ytverbatim run memos:new --quiet
+*/30 * * * * /full/path/to/anyverbatim run memos:new --quiet
 ```
 
 ### launchd
 
-Save as `~/Library/LaunchAgents/com.example.ytverbatim-memos.plist`:
+Save as `~/Library/LaunchAgents/com.example.anyverbatim-memos.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -369,10 +369,10 @@ Save as `~/Library/LaunchAgents/com.example.ytverbatim-memos.plist`:
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.example.ytverbatim-memos</string>
+  <string>com.example.anyverbatim-memos</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/full/path/to/ytverbatim</string>
+    <string>/full/path/to/anyverbatim</string>
     <string>run</string>
     <string>memos:new</string>
     <string>--quiet</string>
@@ -385,7 +385,7 @@ Save as `~/Library/LaunchAgents/com.example.ytverbatim-memos.plist`:
   <key>StartInterval</key>
   <integer>1800</integer>
   <key>StandardErrorPath</key>
-  <string>/tmp/ytverbatim-memos.log</string>
+  <string>/tmp/anyverbatim-memos.log</string>
 </dict>
 </plist>
 ```
@@ -393,14 +393,14 @@ Save as `~/Library/LaunchAgents/com.example.ytverbatim-memos.plist`:
 Then load it:
 
 ```
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.ytverbatim-memos.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.example.anyverbatim-memos.plist
 ```
 
-To stop it, run `launchctl bootout gui/$(id -u)/com.example.ytverbatim-memos`.
+To stop it, run `launchctl bootout gui/$(id -u)/com.example.anyverbatim-memos`.
 
 ## Settings
 
-Set these in `~/.config/ytverbatim/config.toml`. A command-line option wins for one run.
+Set these in `~/.config/anyverbatim/config.toml`. A command-line option wins for one run.
 
 | Key | Default | What it does |
 |---|---|---|
@@ -417,19 +417,19 @@ Set these in `~/.config/ytverbatim/config.toml`. A command-line option wins for 
 | `[text] numerals` | `"digits"` | `"keep"` leaves Chinese numerals as recognised. |
 | `[llm] provider`, `model`, `effort` | `chatgpt` | `--llm PROVIDER:MODEL`, or `--llm none`. |
 
-`YTVERBATIM_HOME` moves the output root (default `~/.local/share/ytverbatim`; recordings live in its `recordings/` folder and videos in `videos/`).
+`ANYVERBATIM_HOME` moves the output root (default `~/.local/share/anyverbatim`; recordings live in its `recordings/` folder and videos in `videos/`).
 
 ## Common problems
 
 | You see | What to do |
 |---|---|
 | `Voice Memos is not syncing to this Mac` | Turn on Voice Memos in iCloud settings on the iPhone and the Mac, then open Voice Memos once. |
-| `cannot read the Voice Memos library` | Give the app you run ytverbatim from Full Disk Access, then restart it. |
+| `cannot read the Voice Memos library` | Give the app you run anyverbatim from Full Disk Access, then restart it. |
 | Memos listed as `not downloaded` | Open the memo once in Voice Memos. |
 | `has no audio stream` | The file has no sound track. Nothing to transcribe. |
 | `ffmpeg cannot decode any audio stream` | Convert the file to `m4a` or `wav` with ffmpeg and pass that. |
-| `install ytverbatim[…]` | Install the extra it names. Recordings need `whisper` and `asr`. |
+| `install anyverbatim[…]` | Install the extra it names. Recordings need `whisper` and `asr`. |
 | `numbers not cross-checked: recordings have no captions` | Expected for recordings. Check the flagged numbers in the footnotes yourself. |
 | `gave up after 5 attempts` with `server_is_overloaded` | The LLM's server stayed overloaded through every retry. Run the same command again later; batches already done are reused. |
-| Speaker names disappeared | You re-diarized, or something changed how words were attributed. Set them again with `ytverbatim speakers`. |
+| Speaker names disappeared | You re-diarized, or something changed how words were attributed. Set them again with `anyverbatim speakers`. |
 | `is no longer at the path it was read from` | The audio is needed again. Pass the file again. |

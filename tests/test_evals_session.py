@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from evals_fixture import EN, ZH, make_eval, write_pair
 
+from anyverbatim.errors import ConfigError
 from evals.normalize import Language
 from evals.screen import Span, SpanReading, collect_spans
 from evals.session import (
@@ -19,7 +20,6 @@ from evals.session import (
     write_session,
 )
 from evals.store import Layout
-from ytverbatim.errors import ConfigError
 
 
 def span(index: int, file: str, language: Language, numeric: bool) -> Span:

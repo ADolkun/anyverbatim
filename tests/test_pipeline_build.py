@@ -7,17 +7,17 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ytverbatim.acquire.creator_note import CreatorNote
-from ytverbatim.acquire.metadata import Chapter, VideoMetadata
-from ytverbatim.asr import registry
-from ytverbatim.asr.models import AnomalySpan, ChunkHypothesis
-from ytverbatim.asr.protocol import ChunkFlag
-from ytverbatim.contract import Access, ContextDocument, Word, YouTubeSource, dump_document, load_document
-from ytverbatim.diarize import registry as diarize_registry
-from ytverbatim.diarize.protocol import Diarization
-from ytverbatim.errors import ContractError
-from ytverbatim.render import render_markdown
-from ytverbatim.stages import Diarized, SourceInfo, Stretch, Transcribed, build_document, from_asr_rows, youtube_source
+from anyverbatim.acquire.creator_note import CreatorNote
+from anyverbatim.acquire.metadata import Chapter, VideoMetadata
+from anyverbatim.asr import registry
+from anyverbatim.asr.models import AnomalySpan, ChunkHypothesis
+from anyverbatim.asr.protocol import ChunkFlag
+from anyverbatim.contract import Access, ContextDocument, Word, YouTubeSource, dump_document, load_document
+from anyverbatim.diarize import registry as diarize_registry
+from anyverbatim.diarize.protocol import Diarization
+from anyverbatim.errors import ContractError
+from anyverbatim.render import render_markdown
+from anyverbatim.stages import Diarized, SourceInfo, Stretch, Transcribed, build_document, from_asr_rows, youtube_source
 
 ACCESS = Access(
     auth_source="none",
@@ -552,7 +552,7 @@ def test_video_and_quality_fields() -> None:
     assert video.tags == ("synthetic",) and video.duration_s == 100.0
     assert doc.quality.transcribed_seconds == pytest.approx(1.0)
     assert doc.quality.speech_seconds == doc.quality.transcribed_seconds
-    assert doc.generator.name == "ytverbatim" and doc.created_at == NOW
+    assert doc.generator.name == "anyverbatim" and doc.created_at == NOW
 
 
 def test_an_unparseable_upload_date_becomes_none() -> None:
@@ -564,26 +564,26 @@ def test_an_unparseable_upload_date_becomes_none() -> None:
 
 
 def test_the_library_surface_is_exported_lazily() -> None:
-    import ytverbatim
+    import anyverbatim
 
-    assert ytverbatim.process.__module__ == "ytverbatim.pipeline"
-    assert ytverbatim.ContextDocument is ContextDocument
-    assert ytverbatim.Options.__module__ == "ytverbatim.config"
-    assert ytverbatim.LLMClient.__module__ == "ytverbatim.llm.protocol"
+    assert anyverbatim.process.__module__ == "anyverbatim.pipeline"
+    assert anyverbatim.ContextDocument is ContextDocument
+    assert anyverbatim.Options.__module__ == "anyverbatim.config"
+    assert anyverbatim.LLMClient.__module__ == "anyverbatim.llm.protocol"
     with pytest.raises(AttributeError):
-        _ = ytverbatim.nonexistent  # type: ignore[attr-defined]
-    assert {"process", "Options", "ContextDocument", "LLMClient", "__version__"} <= set(dir(ytverbatim))
-    assert "process" in vars(ytverbatim), "a resolved name is cached in the module"
+        _ = anyverbatim.nonexistent  # type: ignore[attr-defined]
+    assert {"process", "Options", "ContextDocument", "LLMClient", "__version__"} <= set(dir(anyverbatim))
+    assert "process" in vars(anyverbatim), "a resolved name is cached in the module"
 
 
 def test_importing_the_package_loads_neither_the_pipeline_nor_its_heavy_dependencies() -> None:
-    probe = "import sys, ytverbatim; print(sorted({'ytverbatim.pipeline', 'yt_dlp', 'pydantic'} & set(sys.modules)))"
+    probe = "import sys, anyverbatim; print(sorted({'anyverbatim.pipeline', 'yt_dlp', 'pydantic'} & set(sys.modules)))"
     result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True)
     assert result.stdout.strip() == "[]"
 
 
 def test_correction_context_caps_the_glossary_at_twenty_terms_and_carries_the_creator_note() -> None:
-    from ytverbatim.pipeline import correction_context
+    from anyverbatim.pipeline import correction_context
 
     note = CreatorNote(text="市盈率 not 适应率", author="Example Channel", like_count=3, published="20300101")
     tags = tuple(f"term{i}" for i in range(25))
@@ -595,7 +595,7 @@ def test_correction_context_caps_the_glossary_at_twenty_terms_and_carries_the_cr
 
 
 def test_configured_glossary_terms_come_before_the_tags_within_the_cap() -> None:
-    from ytverbatim.pipeline import correction_context
+    from anyverbatim.pipeline import correction_context
 
     tags = tuple(f"tag{n}" for n in range(25))
     context = correction_context(metadata(), ("tag3", *tags), ("Acme", "tag3"))
@@ -604,7 +604,7 @@ def test_configured_glossary_terms_come_before_the_tags_within_the_cap() -> None
 
 
 def test_info_tags_keeps_only_string_tags_of_a_raw_extraction() -> None:
-    from ytverbatim.pipeline import info_tags
+    from anyverbatim.pipeline import info_tags
 
     assert info_tags({"tags": ["GAAP", 3, "市盈率", None]}) == ("GAAP", "市盈率")
     assert info_tags({"tags": "GAAP"}) == ()

@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import proc
-from ytverbatim.auth import snapshot
-from ytverbatim.auth.source import BrowserSource
-from ytverbatim.ytdlp.runner import SubprocessRunner
+from anyverbatim import proc
+from anyverbatim.auth import snapshot
+from anyverbatim.auth.source import BrowserSource
+from anyverbatim.ytdlp.runner import SubprocessRunner
 
 PLANTED = "import sys; sys.stderr.write('PLANTED'); sys.exit(97)\n"
 

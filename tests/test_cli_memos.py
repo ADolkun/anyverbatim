@@ -6,9 +6,9 @@ import pytest
 from click.testing import CliRunner
 from voicememos_fakes import Row, make_library
 
-from ytverbatim import paths
-from ytverbatim.acquire import voicememos
-from ytverbatim.cli import main
+from anyverbatim import paths
+from anyverbatim.acquire import voicememos
+from anyverbatim.cli import main
 
 
 @pytest.fixture(autouse=True)
@@ -16,7 +16,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    monkeypatch.setenv("YTVERBATIM_HOME", str(tmp_path / "ytv"))
+    monkeypatch.setenv("ANYVERBATIM_HOME", str(tmp_path / "ytv"))
     return tmp_path
 
 

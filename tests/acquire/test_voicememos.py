@@ -11,9 +11,9 @@ import pytest
 import voicememos_fakes
 from voicememos_fakes import Row, make_library
 
-from ytverbatim.acquire import voicememos
-from ytverbatim.acquire.voicememos import MemoCache, MemosAccessError, MemosNotSyncingError
-from ytverbatim.errors import ConfigError
+from anyverbatim.acquire import voicememos
+from anyverbatim.acquire.voicememos import MemoCache, MemosAccessError, MemosNotSyncingError
+from anyverbatim.errors import ConfigError
 
 
 @pytest.fixture(autouse=True)
@@ -154,13 +154,13 @@ def test_permission_denied_gives_the_full_disk_access_fix(
     with pytest.raises(MemosAccessError) as caught:
         voicememos.list_memos(folder)
     fix = caught.value.fix
-    assert "Full Disk Access" in fix and "add iTerm (the app running ytverbatim)" in fix
+    assert "Full Disk Access" in fix and "add iTerm (the app running anyverbatim)" in fix
     assert "cron itself" in fix and "ProgramArguments" in fix
 
 
 def test_the_fix_for_an_unknown_host_app_is_generic(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TERM_PROGRAM", raising=False)
-    assert "add the app you run ytverbatim from (Terminal, iTerm, your editor)" in MemosAccessError("x").fix
+    assert "add the app you run anyverbatim from (Terminal, iTerm, your editor)" in MemosAccessError("x").fix
 
 
 def test_probe_reports_each_state_without_raising(tmp_path: Path) -> None:

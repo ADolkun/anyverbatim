@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from ytverbatim.errors import BusyError
-from ytverbatim.store import Record, StageStore, digest, input_hash, lock
+from anyverbatim.errors import BusyError
+from anyverbatim.store import Record, StageStore, digest, input_hash, lock
 
 
 class Output(BaseModel):

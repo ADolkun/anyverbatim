@@ -14,8 +14,8 @@ import time
 from collections.abc import Sequence
 from typing import Protocol, cast
 
-from ytverbatim.errors import DependencyError
-from ytverbatim.mlx_worker import MlxAllocator, bound_allocator
+from anyverbatim.errors import DependencyError
+from anyverbatim.mlx_worker import MlxAllocator, bound_allocator
 
 # Unlike the ASR worker's zero, a server reuses buffers of the same shapes on every request; 1 GiB keeps that reuse
 # while adding at most its own size to the footprint.

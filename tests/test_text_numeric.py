@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack, parse_json3
-from ytverbatim.asr.chunks import Chunk
-from ytverbatim.asr.models import ChunkHypothesis
-from ytverbatim.asr.protocol import EngineDef, EngineSpec
-from ytverbatim.contract.models import Edit, Flag, LLMUsage, Reading, Word
-from ytverbatim.errors import LLMUnavailableError
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
-from ytverbatim.text.numeric import (
+from anyverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack, parse_json3
+from anyverbatim.asr.chunks import Chunk
+from anyverbatim.asr.models import ChunkHypothesis
+from anyverbatim.asr.protocol import EngineDef, EngineSpec
+from anyverbatim.contract.models import Edit, Flag, LLMUsage, Reading, Word
+from anyverbatim.errors import LLMUnavailableError
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.text.numeric import (
     Evidence,
     NumericResult,
     NumericStats,

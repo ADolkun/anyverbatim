@@ -4,9 +4,9 @@ from typing import Literal
 import pytest
 from pydantic import BaseModel
 
-from ytverbatim.errors import LLMOutputError
-from ytverbatim.llm.jsonio import complete_json, extract_json_object
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse
+from anyverbatim.errors import LLMOutputError
+from anyverbatim.llm.jsonio import complete_json, extract_json_object
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse
 
 
 class Verdict(BaseModel):

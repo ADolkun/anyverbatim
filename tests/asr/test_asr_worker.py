@@ -7,10 +7,10 @@ import pytest
 from fake_engine import RATE, definition, write_silence
 from pydantic import JsonValue, ValidationError
 
-from ytverbatim import mlx_worker
-from ytverbatim.asr import worker
-from ytverbatim.asr.chunks import Chunk, Region
-from ytverbatim.asr.models import (
+from anyverbatim import mlx_worker
+from anyverbatim.asr import worker
+from anyverbatim.asr.chunks import Chunk, Region
+from anyverbatim.asr.models import (
     ERROR_FILE,
     FINGERPRINT_FILE,
     HYPOTHESES_FILE,
@@ -20,7 +20,7 @@ from ytverbatim.asr.models import (
     RunMetrics,
     WorkerRequest,
 )
-from ytverbatim.asr.protocol import (
+from anyverbatim.asr.protocol import (
     AsrContext,
     ChunkInput,
     Engine,
@@ -29,8 +29,8 @@ from ytverbatim.asr.protocol import (
     GuardedChunk,
     RawChunk,
 )
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import EngineError
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import EngineError
 
 
 def request(tmp_path: Path, *jobs: FileJob, engine: EngineDef | None = None) -> WorkerRequest:

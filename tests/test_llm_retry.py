@@ -8,18 +8,18 @@ from pathlib import Path
 import pytest
 from pipeline_fixture import CAPTIONED, FIXTURE_ROOT, FakeLLM, isolated, run
 
-from ytverbatim import proc
-from ytverbatim.asr import runner as asr_runner
-from ytverbatim.cli import run as cli_run
-from ytverbatim.contract.models import LLMUsage
-from ytverbatim.errors import LLMError, LLMOutputError, LLMUnavailableError
-from ytverbatim.llm import retry
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
-from ytverbatim.llm.retry import FIRST_DELAY_S, JITTER, MAX_DELAY_S, RETRIES, RetryingClient
-from ytverbatim.llm.usage import UsageMeter
-from ytverbatim.pipeline import ProgressEvent
-from ytverbatim.store import STAGES_DIR
-from ytverbatim.ytdlp.types import YtDlpResult
+from anyverbatim import proc
+from anyverbatim.asr import runner as asr_runner
+from anyverbatim.cli import run as cli_run
+from anyverbatim.contract.models import LLMUsage
+from anyverbatim.errors import LLMError, LLMOutputError, LLMUnavailableError
+from anyverbatim.llm import retry
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.llm.retry import FIRST_DELAY_S, JITTER, MAX_DELAY_S, RETRIES, RetryingClient
+from anyverbatim.llm.usage import UsageMeter
+from anyverbatim.pipeline import ProgressEvent
+from anyverbatim.store import STAGES_DIR
+from anyverbatim.ytdlp.types import YtDlpResult
 
 REQUEST = LLMRequest(system="", user="Hi")
 OVERLOADED = "server_is_overloaded"

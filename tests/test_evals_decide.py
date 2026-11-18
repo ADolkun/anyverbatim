@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from evals_fixture import EN, EN_CHALLENGER, EN_CONTROL, ZH, ZH_CHALLENGER, ZH_CONTROL, make_eval, write_pair
 
+from anyverbatim.errors import ConfigError
 from evals import run_asr
 from evals.decide import decide
 from evals.listen import Choice, LoggedDecision
@@ -21,7 +22,6 @@ from evals.screen import (
     collect_spans,
 )
 from evals.session import DECISIONS_FILE, build_session, load_key, write_session
-from ytverbatim.errors import ConfigError
 
 HOUR = 3600.0
 

@@ -10,8 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from email.message import Message
 
-from ytverbatim.llm import chatgpt_auth
-from ytverbatim.llm.chatgpt_auth import ISSUER, PLAN_SCOPE, Account, State
+from anyverbatim.llm import chatgpt_auth
+from anyverbatim.llm.chatgpt_auth import ISSUER, PLAN_SCOPE, Account, State
 
 NOW = 2_000_000_000.0
 CLIENT_ID = "app_registered_client"

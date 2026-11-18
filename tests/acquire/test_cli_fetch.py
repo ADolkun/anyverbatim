@@ -4,11 +4,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from click.testing import CliRunner
 
-from ytverbatim import paths
-from ytverbatim.acquire import session
-from ytverbatim.cli import fetch as cli_fetch
-from ytverbatim.cli import main
-from ytverbatim.ytdlp.types import Signal
+from anyverbatim import paths
+from anyverbatim.acquire import session
+from anyverbatim.cli import fetch as cli_fetch
+from anyverbatim.cli import main
+from anyverbatim.ytdlp.types import Signal
 
 
 def _invoke(kit, yt, monkeypatch: pytest.MonkeyPatch, *args: str):

@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 from evals_fixture import CHUNKS, ZH, chunk_rows, make_eval, write_pair
 
+from anyverbatim.asr.models import ChunkHypothesis, RunMetrics
+from anyverbatim.contract.models import Word
 from evals.consensus import Segment, TimedUnit, find_disputes, timed_units, window_units
 from evals.metrics import weighted_wilson, wilson_interval
 from evals.screen import (
@@ -24,8 +26,6 @@ from evals.screen import (
     window_spans,
 )
 from evals.store import RunRecord, append_history, hypothesis_units, load_plan, row_units, write_rows
-from ytverbatim.asr.models import ChunkHypothesis, RunMetrics
-from ytverbatim.contract.models import Word
 
 
 def dispute_of(a: str, b: str, language: str = "zh"):

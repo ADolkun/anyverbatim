@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from anyverbatim.errors import ConfigError
 from evals import recordings_data
 from evals.diarization import Turn, read_rttm
 from evals.recordings_data import (
@@ -26,7 +27,6 @@ from evals.recordings_data import (
     write_index,
     write_recording,
 )
-from ytverbatim.errors import ConfigError
 
 
 def ascend(session, speaker, line, start, duration, text="x", id=None):

@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 from recordings_fixture import pieces, spoken
 
+from anyverbatim.asr.models import ChunkHypothesis
+from anyverbatim.errors import ConfigError
 from evals.diarization import Turn, wder
 from evals.metrics import ErrorCounts, cer, mer, wer
 from evals.normalize import to_units
@@ -29,8 +31,6 @@ from evals.recordings_scoring import (
     write_words_for,
 )
 from evals.run_diarization import load_words
-from ytverbatim.asr.models import ChunkHypothesis
-from ytverbatim.errors import ConfigError
 
 
 def item(reference: Reference, language="en", corpus="ami", wav="audio.wav") -> Item:

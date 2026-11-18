@@ -1,4 +1,4 @@
-"""Where every eval artifact lives under ``$YTVERBATIM_EVAL_DIR``, and how hypotheses are read back as timed units.
+"""Where every eval artifact lives under ``$ANYVERBATIM_EVAL_DIR``, and how hypotheses are read back as timed units.
 
 Nothing here writes into the repository: plans, runs, screening, judge verdicts, A/B sessions and reports all stay
 in the private eval directory.
@@ -15,14 +15,14 @@ from typing import Annotated
 from pydantic import BaseModel, ConfigDict, Field
 from rapidfuzz.distance import Levenshtein
 
+from anyverbatim import atomic
+from anyverbatim.asr.chunks import Chunk
+from anyverbatim.asr.models import HYPOTHESES_FILE, METRICS_FILE, ChunkHypothesis, RunMetrics
+from anyverbatim.asr.protocol import EngineDef
+from anyverbatim.errors import ConfigError
 from evals.consensus import Segment, TimedUnit, timed_units
 from evals.manifest import Manifest, Video
 from evals.normalize import Language, View, to_units
-from ytverbatim import atomic
-from ytverbatim.asr.chunks import Chunk
-from ytverbatim.asr.models import HYPOTHESES_FILE, METRICS_FILE, ChunkHypothesis, RunMetrics
-from ytverbatim.asr.protocol import EngineDef
-from ytverbatim.errors import ConfigError
 
 CAPTION_HYPOTHESIS = "yt-auto"
 REFERENCE = "ref-manual"

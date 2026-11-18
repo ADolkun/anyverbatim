@@ -3,12 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import paths
+from anyverbatim import paths
 
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "YTVERBATIM_HOME"):
+    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "ANYVERBATIM_HOME"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     return tmp_path
@@ -19,35 +19,35 @@ def _mode(path: Path) -> int:
 
 
 def test_defaults_under_home(home: Path) -> None:
-    assert paths.config_file() == home / ".config" / "ytverbatim" / "config.toml"
-    assert paths.state_dir() == home / ".local" / "state" / "ytverbatim"
-    assert paths.auth_dir() == home / ".local" / "state" / "ytverbatim" / "auth"
-    assert paths.locks_dir() == home / ".local" / "state" / "ytverbatim" / "locks"
-    assert paths.cache_dir() == home / "Library" / "Caches" / "ytverbatim"
+    assert paths.config_file() == home / ".config" / "anyverbatim" / "config.toml"
+    assert paths.state_dir() == home / ".local" / "state" / "anyverbatim"
+    assert paths.auth_dir() == home / ".local" / "state" / "anyverbatim" / "auth"
+    assert paths.locks_dir() == home / ".local" / "state" / "anyverbatim" / "locks"
+    assert paths.cache_dir() == home / "Library" / "Caches" / "anyverbatim"
     assert paths.pins_dir() == paths.cache_dir() / "pins"
     assert paths.llm_dir("claude") == paths.cache_dir() / "llm" / "claude"
     assert paths.chatgpt_auth_dir() == paths.state_dir() / "llm" / "chatgpt"
     assert paths.chatgpt_credentials_file() == paths.chatgpt_auth_dir() / "credentials.json"
-    assert paths.home_dir() == home / ".local" / "share" / "ytverbatim"
+    assert paths.home_dir() == home / ".local" / "share" / "anyverbatim"
     assert paths.default_output_root() == paths.home_dir() / "videos"
 
 
 def test_xdg_and_home_overrides(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "cfg"))
     monkeypatch.setenv("XDG_STATE_HOME", str(home / "state"))
-    monkeypatch.setenv("YTVERBATIM_HOME", str(home / "data"))
-    assert paths.config_file() == home / "cfg" / "ytverbatim" / "config.toml"
-    assert paths.auth_dir() == home / "state" / "ytverbatim" / "auth"
+    monkeypatch.setenv("ANYVERBATIM_HOME", str(home / "data"))
+    assert paths.config_file() == home / "cfg" / "anyverbatim" / "config.toml"
+    assert paths.auth_dir() == home / "state" / "anyverbatim" / "auth"
     assert paths.default_output_root() == home / "data" / "videos"
 
 
 def test_relative_xdg_value_is_ignored(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", "relative/state")
-    assert paths.state_dir() == home / ".local" / "state" / "ytverbatim"
+    assert paths.state_dir() == home / ".local" / "state" / "anyverbatim"
 
 
-def test_ytverbatim_home_expands_user(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("YTVERBATIM_HOME", "~/data")
+def test_anyverbatim_home_expands_user(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANYVERBATIM_HOME", "~/data")
     assert paths.home_dir() == home / "data"
 
 
@@ -65,7 +65,7 @@ def test_private_dirs_are_0700(home: Path) -> None:
 
 
 def test_existing_loose_dir_is_tightened(home: Path) -> None:
-    loose = home / ".local" / "state" / "ytverbatim"
+    loose = home / ".local" / "state" / "anyverbatim"
     loose.mkdir(parents=True, mode=0o755)
     loose.chmod(0o755)
     assert paths.state_dir() == loose
@@ -92,7 +92,7 @@ def test_video_dir_rejects_non_ids(bad: str) -> None:
 
 def test_the_chatgpt_store_location_is_computed_without_creating_it(home: Path) -> None:
     location = paths.chatgpt_auth_dir()
-    assert location == home / ".local" / "state" / "ytverbatim" / "llm" / "chatgpt"
+    assert location == home / ".local" / "state" / "anyverbatim" / "llm" / "chatgpt"
     assert not (home / ".local").exists()
     assert paths.chatgpt_auth_dir(create_parents=True) == location
     assert _mode(location.parent) == 0o700 and not location.exists()

@@ -1,5 +1,5 @@
-from ytverbatim.contract import Flag
-from ytverbatim.text.offsets import ChangedRun, changed_runs, remap_flags, replace_under_flags
+from anyverbatim.contract import Flag
+from anyverbatim.text.offsets import ChangedRun, changed_runs, remap_flags, replace_under_flags
 
 
 def flag_on(text: str, part: str, kind: str = "decoder_anomaly") -> Flag:

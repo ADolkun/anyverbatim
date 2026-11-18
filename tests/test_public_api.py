@@ -14,11 +14,11 @@ from typing import Any
 
 import pytest
 
-import ytverbatim
-from ytverbatim import config, contract, errors, ids
-from ytverbatim.asr import registry
-from ytverbatim.diarize import registry as diarize_registry
-from ytverbatim.errors import DependencyError
+import anyverbatim
+from anyverbatim import config, contract, errors, ids
+from anyverbatim.asr import registry
+from anyverbatim.diarize import registry as diarize_registry
+from anyverbatim.errors import DependencyError
 
 EXPECTED_ALL = [
     "AsrOptions",
@@ -76,23 +76,23 @@ def shown(signature: inspect.Signature) -> str:
 
 
 def test_the_top_level_names_are_pinned() -> None:
-    assert sorted(ytverbatim.__all__) == sorted(EXPECTED_ALL)
-    for name in ytverbatim.__all__:
-        assert getattr(ytverbatim, name) is not None, name
+    assert sorted(anyverbatim.__all__) == sorted(EXPECTED_ALL)
+    for name in anyverbatim.__all__:
+        assert getattr(anyverbatim, name) is not None, name
 
 
 def test_the_progress_stages_are_pinned() -> None:
-    assert ytverbatim.STAGES == EXPECTED_STAGES
-    assert typing.get_args(ytverbatim.ProgressStage) == EXPECTED_STAGES
-    assert set(ytverbatim.LLM_STAGES) == {"punctuate", "correct", "numeric"}
-    assert set(ytverbatim.STAGES).issuperset(ytverbatim.LLM_STAGES)
+    assert anyverbatim.STAGES == EXPECTED_STAGES
+    assert typing.get_args(anyverbatim.ProgressStage) == EXPECTED_STAGES
+    assert set(anyverbatim.LLM_STAGES) == {"punctuate", "correct", "numeric"}
+    assert set(anyverbatim.STAGES).issuperset(anyverbatim.LLM_STAGES)
 
 
 def test_importing_the_package_loads_none_of_the_library() -> None:
     import subprocess
     import sys
 
-    code = "import sys, ytverbatim; sys.exit(any(m.startswith('ytverbatim.pipeline') for m in sys.modules))"
+    code = "import sys, anyverbatim; sys.exit(any(m.startswith('anyverbatim.pipeline') for m in sys.modules))"
     assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
 
 
@@ -117,7 +117,7 @@ FUNCTIONS: dict[str, str] = {
 
 @pytest.mark.parametrize("name", sorted(FUNCTIONS))
 def test_function_signatures_are_pinned(name: str) -> None:
-    function: Callable[..., Any] = getattr(ytverbatim, name)
+    function: Callable[..., Any] = getattr(anyverbatim, name)
     assert shown(inspect.signature(function)) == FUNCTIONS[name]
 
 
@@ -212,7 +212,7 @@ def type_text(annotation: object) -> str:
 
 @pytest.mark.parametrize("name", sorted(DATACLASSES))
 def test_dataclass_fields_are_pinned_and_frozen(name: str) -> None:
-    cls = getattr(ytverbatim, name)
+    cls = getattr(anyverbatim, name)
     fields = [f"{f.name}: {type_text(f.type)}{default_text(f)}" for f in dataclasses.fields(cls)]
     assert fields == DATACLASSES[name]
     assert cls.__dataclass_params__.frozen
@@ -220,16 +220,16 @@ def test_dataclass_fields_are_pinned_and_frozen(name: str) -> None:
 
 def test_the_stable_option_classes_are_the_config_ones() -> None:
     for name in ("Options", "AuthOptions", "YtdlpOptions", "AsrOptions", "TextOptions", "DiarizeOptions", "LLMOptions"):
-        assert getattr(ytverbatim, name) is getattr(config, name)
-    assert ytverbatim.ContextDocument is contract.ContextDocument
-    assert ytverbatim.RefKind is ids.RefKind
+        assert getattr(anyverbatim, name) is getattr(config, name)
+    assert anyverbatim.ContextDocument is contract.ContextDocument
+    assert anyverbatim.RefKind is ids.RefKind
 
 
 def test_errors_export_every_error_class_with_the_auth_vocabulary() -> None:
     classes = {
         name
         for name, value in vars(errors).items()
-        if isinstance(value, type) and issubclass(value, errors.YtverbatimError)
+        if isinstance(value, type) and issubclass(value, errors.AnyverbatimError)
     }
     assert set(errors.__all__) == classes | {"AuthState", "Signal"}
     for name in classes:
@@ -273,14 +273,14 @@ def test_load_options_and_the_config_module_are_pinned() -> None:
 
 
 def test_a_members_playlist_is_told_from_other_references() -> None:
-    members = ytverbatim.parse_youtube("https://www.youtube.com/playlist?list=UUMOabcdefgh")
-    ordinary = ytverbatim.parse_youtube("https://www.youtube.com/playlist?list=PLabcdefgh")
-    video = ytverbatim.parse_youtube("https://youtu.be/abcDEF_1234")
-    assert members is not None and members.kind is ytverbatim.RefKind.PLAYLIST and members.members_only
+    members = anyverbatim.parse_youtube("https://www.youtube.com/playlist?list=UUMOabcdefgh")
+    ordinary = anyverbatim.parse_youtube("https://www.youtube.com/playlist?list=PLabcdefgh")
+    video = anyverbatim.parse_youtube("https://youtu.be/abcDEF_1234")
+    assert members is not None and members.kind is anyverbatim.RefKind.PLAYLIST and members.members_only
     assert ordinary is not None and not ordinary.members_only
-    assert video is not None and video.kind is ytverbatim.RefKind.VIDEO and not video.members_only
-    assert video.url == ytverbatim.video_url("abcDEF_1234")
-    assert ytverbatim.parse_youtube("https://example.com/watch?v=abcDEF_1234") is None
+    assert video is not None and video.kind is anyverbatim.RefKind.VIDEO and not video.members_only
+    assert video.url == anyverbatim.video_url("abcDEF_1234")
+    assert anyverbatim.parse_youtube("https://example.com/watch?v=abcDEF_1234") is None
 
 
 @pytest.fixture
@@ -289,7 +289,7 @@ def libraries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> set[str]:
 
     Also points HOME at an empty folder, so `check_dependencies()` reads no real config file.
     """
-    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "YTVERBATIM_HOME"):
+    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "ANYVERBATIM_HOME"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     present = {"mlx_whisper", "mlx_audio"}
@@ -299,56 +299,56 @@ def libraries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> set[str]:
 
 
 def test_check_dependencies_passes_when_the_engine_is_installed(libraries: set[str]) -> None:
-    ytverbatim.check_dependencies()
-    ytverbatim.check_dependencies(source="recording")
+    anyverbatim.check_dependencies()
+    anyverbatim.check_dependencies(source="recording")
 
 
 @pytest.mark.parametrize("source", ["youtube", "recording"])
 def test_check_dependencies_names_the_extra_the_default_engine_needs(libraries: set[str], source: str) -> None:
     libraries.discard("mlx_whisper")
-    with pytest.raises(DependencyError, match=r"install ytverbatim\[whisper\]"):
-        ytverbatim.check_dependencies(source=source)  # type: ignore[arg-type]
+    with pytest.raises(DependencyError, match=r"install anyverbatim\[whisper\]"):
+        anyverbatim.check_dependencies(source=source)  # type: ignore[arg-type]
 
 
 def test_a_recording_needs_the_asr_extra_for_its_diarizer_or_its_engine(libraries: set[str]) -> None:
     libraries.discard("mlx_audio")
-    with pytest.raises(DependencyError, match=r"d-nemotron-8bit diarizer .* install ytverbatim\[asr\]"):
-        ytverbatim.check_dependencies(source="recording")
+    with pytest.raises(DependencyError, match=r"d-nemotron-8bit diarizer .* install anyverbatim\[asr\]"):
+        anyverbatim.check_dependencies(source="recording")
     undiarized = config.load_options(overrides={"diarize": {"mode": "off"}})
-    ytverbatim.check_dependencies(undiarized, source="recording")
+    anyverbatim.check_dependencies(undiarized, source="recording")
     chosen = config.load_options(overrides={"asr": {"engine": "w-vad"}, "diarize": {"mode": "off"}})
-    with pytest.raises(DependencyError, match=r"install ytverbatim\[asr\]"):
-        ytverbatim.check_dependencies(chosen, source="recording")
+    with pytest.raises(DependencyError, match=r"install anyverbatim\[asr\]"):
+        anyverbatim.check_dependencies(chosen, source="recording")
 
 
 def test_a_recording_with_languages_defaults_to_an_engine_that_needs_the_asr_extra(libraries: set[str]) -> None:
     libraries.discard("mlx_audio")
     named = config.load_options(overrides={"asr": {"languages": ("zh", "en")}, "diarize": {"mode": "off"}})
-    with pytest.raises(DependencyError, match=r"w-runs-lid .* install ytverbatim\[asr\]"):
-        ytverbatim.check_dependencies(named, source="recording")
-    ytverbatim.check_dependencies(named, source="youtube")
-    ytverbatim.check_dependencies(config.load_options(overrides={"diarize": {"mode": "off"}}), source="recording")
+    with pytest.raises(DependencyError, match=r"w-runs-lid .* install anyverbatim\[asr\]"):
+        anyverbatim.check_dependencies(named, source="recording")
+    anyverbatim.check_dependencies(named, source="youtube")
+    anyverbatim.check_dependencies(config.load_options(overrides={"diarize": {"mode": "off"}}), source="recording")
     explicit = config.load_options(
         overrides={"asr": {"languages": ("zh", "en"), "engine": "w-prod"}, "diarize": {"mode": "off"}}
     )
-    ytverbatim.check_dependencies(explicit, source="recording")
+    anyverbatim.check_dependencies(explicit, source="recording")
 
 
 def test_youtube_needs_the_asr_extra_only_when_diarized_on_request(libraries: set[str]) -> None:
     libraries.discard("mlx_audio")
-    ytverbatim.check_dependencies(source="youtube")
+    anyverbatim.check_dependencies(source="youtube")
     forced = config.load_options(overrides={"diarize": {"mode": "on"}})
-    with pytest.raises(DependencyError, match=r"install ytverbatim\[asr\]"):
-        ytverbatim.check_dependencies(forced, source="youtube")
+    with pytest.raises(DependencyError, match=r"install anyverbatim\[asr\]"):
+        anyverbatim.check_dependencies(forced, source="youtube")
 
 
 def test_check_dependencies_checks_the_second_opinion_engine(libraries: set[str]) -> None:
     libraries.discard("mlx_audio")
     second = config.load_options(overrides={"text": {"numeric_second_opinion": "w-vad"}})
-    with pytest.raises(DependencyError, match=r"ytverbatim\[asr\]"):
-        ytverbatim.check_dependencies(second)
+    with pytest.raises(DependencyError, match=r"anyverbatim\[asr\]"):
+        anyverbatim.check_dependencies(second)
 
 
 def test_an_unknown_source_is_a_value_error(libraries: set[str]) -> None:
     with pytest.raises(ValueError, match="source must be one of"):
-        ytverbatim.check_dependencies(source="bogus")  # type: ignore[arg-type]
+        anyverbatim.check_dependencies(source="bogus")  # type: ignore[arg-type]

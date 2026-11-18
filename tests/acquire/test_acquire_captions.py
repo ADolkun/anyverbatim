@@ -3,11 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim.acquire import captions
-from ytverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack
-from ytverbatim.acquire.metadata import VideoMetadata
-from ytverbatim.errors import YtDlpError
-from ytverbatim.ytdlp.types import Signal, YtDlpResult
+from anyverbatim.acquire import captions
+from anyverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack
+from anyverbatim.acquire.metadata import VideoMetadata
+from anyverbatim.errors import YtDlpError
+from anyverbatim.ytdlp.types import Signal, YtDlpResult
 
 FIXTURES = Path(__file__).parent / "fixtures"
 AUTO, MANUAL = CaptionKind.AUTO, CaptionKind.MANUAL

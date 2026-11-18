@@ -21,6 +21,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from anyverbatim.contract.models import Flag
+from anyverbatim.errors import ConfigError
+from anyverbatim.text.numbers import QToken, quantity_tokens
 from evals.correction import BASE, BaseFile, CandidateFile, audible_edits
 from evals.decide import Check
 from evals.judge import Verdict
@@ -29,9 +32,6 @@ from evals.metrics import DEFAULT_CONFIDENCE, DEFAULT_RESAMPLES, percentile_inde
 from evals.normalize import Language, canonical
 from evals.screen import Span
 from evals.session import SessionKey, Stratum
-from ytverbatim.contract.models import Flag
-from ytverbatim.errors import ConfigError
-from ytverbatim.text.numbers import QToken, quantity_tokens
 
 _UPPERCASE_RUN = re.compile(r"[A-Z]{2,}")
 OVER_CORRECTION_MAX = 0.15

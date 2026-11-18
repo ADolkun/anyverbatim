@@ -18,10 +18,10 @@ from typing import Any, cast
 from pyannote.core import Annotation, Segment, Timeline
 from pyannote.metrics.diarization import DiarizationErrorRate
 
+from anyverbatim import atomic
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import ConfigError
 from evals.metrics import percentile_index
-from ytverbatim import atomic
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import ConfigError
 
 # One-sided forgiveness around each reference boundary, the NIST/dscore reading of "collar 0.25". pyannote.metrics
 # counts the full width (half before, half after a boundary), so it is handed twice this.

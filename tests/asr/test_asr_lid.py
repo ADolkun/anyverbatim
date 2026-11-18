@@ -5,16 +5,16 @@ from fake_engine import definition, write_silence
 from pydantic import ValidationError
 from scripted_engine import LOOP_TEXT, said, spaced, windowed
 
-from ytverbatim import store
-from ytverbatim.asr import registry, worker
-from ytverbatim.asr.chunks import Chunk
-from ytverbatim.asr.guard import QualityGuard
-from ytverbatim.asr.models import HYPOTHESES_FILE, AnomalySpan, ChunkHypothesis, FileJob, WorkerRequest
-from ytverbatim.asr.protocol import AsrContext, EngineDef, RawChunk
-from ytverbatim.asr.worker import DecodeUnit, pick_language, plan_runs
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import EngineError
-from ytverbatim.mlx_worker import without_wav
+from anyverbatim import store
+from anyverbatim.asr import registry, worker
+from anyverbatim.asr.chunks import Chunk
+from anyverbatim.asr.guard import QualityGuard
+from anyverbatim.asr.models import HYPOTHESES_FILE, AnomalySpan, ChunkHypothesis, FileJob, WorkerRequest
+from anyverbatim.asr.protocol import AsrContext, EngineDef, RawChunk
+from anyverbatim.asr.worker import DecodeUnit, pick_language, plan_runs
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import EngineError
+from anyverbatim.mlx_worker import without_wav
 
 ZH = {"zh": 0.6, "en": 0.3, "ja": 0.1}
 EN = {"zh": 0.2, "en": 0.7, "ja": 0.1}
@@ -241,7 +241,7 @@ def test_detection_needs_a_chunked_spec() -> None:
         WorkerRequest(engine=whole, out_dir="/out", files=())
 
 
-# Digests of these requests at ytverbatim a3b4b2a, before `languages` existed; a change re-decodes every video. w-vad's
+# Digests of these requests at anyverbatim a3b4b2a, before `languages` existed; a change re-decodes every video. w-vad's
 # moved once, deliberately, when the chunked Whisper engines stopped sending the Mandarin prompt.
 PINNED = {
     ("w-prod", True): "1221a3727a6ecbac4f22b80d412a787aca952b696b07c90e0b4937cf970ab635",
@@ -323,7 +323,7 @@ def test_runs_need_the_detect_policy() -> None:
             WorkerRequest(engine=definition(mode="runs", language=policy), out_dir="/out", files=())
 
 
-# A w-prod row as ytverbatim a3b4b2a serialized it, before `language_prob` existed.
+# A w-prod row as anyverbatim a3b4b2a serialized it, before `language_prob` existed.
 MAIN_ROW = (
     '{"hypothesis":"w-prod","file":"abcdefghijk","chunk":0,"start":0.0,"end":12.0,"text":"示例","language":"zh",'
     '"words":[{"text":"示例","start":0.5,"end":1.0,"conf":0.75}],"generated_tokens":null,"max_tokens":null,'

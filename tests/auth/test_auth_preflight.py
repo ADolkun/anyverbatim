@@ -6,16 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import paths
-from ytverbatim.auth import cookiefile, preflight
-from ytverbatim.auth.cookiefile import CookieEntry
-from ytverbatim.auth.cooldown import read_cooldown, start_cooldown
-from ytverbatim.auth.fixes import FIXES, fix_for
-from ytverbatim.auth.source import BrowserSource, CookieFileSource
-from ytverbatim.auth.state import AuthState
-from ytverbatim.errors import AuthError, YtverbatimError
-from ytverbatim.ytdlp import jsruntime, version
-from ytverbatim.ytdlp.types import Signal
+from anyverbatim import paths
+from anyverbatim.auth import cookiefile, preflight
+from anyverbatim.auth.cookiefile import CookieEntry
+from anyverbatim.auth.cooldown import read_cooldown, start_cooldown
+from anyverbatim.auth.fixes import FIXES, fix_for
+from anyverbatim.auth.source import BrowserSource, CookieFileSource
+from anyverbatim.auth.state import AuthState
+from anyverbatim.errors import AnyverbatimError, AuthError
+from anyverbatim.ytdlp import jsruntime, version
+from anyverbatim.ytdlp.types import Signal
 
 DOCS = Path(__file__).resolve().parents[2] / "docs" / "auth.md"
 DEFAULT = BrowserSource("chrome", "Default")
@@ -187,7 +187,7 @@ def test_a_stop_during_an_ignored_cooldown_extends_it(kit) -> None:
 def test_unreadable_cooldown_refuses_the_probe(kit) -> None:
     paths.cooldown_file().write_text("{", encoding="utf-8")
     runner = kit.ok()
-    with pytest.raises(YtverbatimError, match=r"cooldown\.json is unreadable"):
+    with pytest.raises(AnyverbatimError, match=r"cooldown\.json is unreadable"):
         preflight.preflight(DEFAULT, runner, refresh=True, now=NOW)
     assert runner.calls == []
     assert preflight.preflight(DEFAULT, runner, refresh=True, now=NOW, ignore_cooldown=True).ok

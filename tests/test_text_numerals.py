@@ -3,8 +3,8 @@ import random
 
 import pytest
 
-from ytverbatim.text.numbers import _NUMERALS, itn, quantity_tokens
-from ytverbatim.text.numerals import apply, conversions, display
+from anyverbatim.text.numbers import _NUMERALS, itn, quantity_tokens
+from anyverbatim.text.numerals import apply, conversions, display
 
 # Plan section 5.3: input after correction, the display form, and the rule it shows.
 CONVERTED = [

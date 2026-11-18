@@ -8,12 +8,12 @@ Each `asr-<date>.md` here is written by `uv run python -m evals.run_asr decide`.
   memory, the quality-gate inputs, and the decision with every check that led to it.
 
 Everything else (audio, plans, hypotheses, judge verdicts, A/B sessions and decisions, the full report) stays in
-the private eval directory, `$YTVERBATIM_EVAL_DIR`.
+the private eval directory, `$ANYVERBATIM_EVAL_DIR`.
 
 ## How a result is produced
 
 ```bash
-export YTVERBATIM_EVAL_DIR=~/.local/share/ytverbatim/eval
+export ANYVERBATIM_EVAL_DIR=~/.local/share/anyverbatim/eval
 uv run python -m evals.run_asr vad                        # shared speech regions, ≤30 s chunk plan, windows
 uv run python -m evals.run_asr asr --hyp w-prod           # one hypothesis at a time; resumable per chunk
 uv run python -m evals.run_asr cleanup --hyp q-base       # after its outputs are complete
@@ -46,7 +46,7 @@ agreement, the change in error against the one manual reference, cost, and the d
 ## How a result is produced
 
 ```bash
-export YTVERBATIM_EVAL_DIR=~/.local/share/ytverbatim/eval
+export ANYVERBATIM_EVAL_DIR=~/.local/share/anyverbatim/eval
 uv run python -m evals.run_correction base --hyp w-prod             # normalize and punctuate once: the shared base
 uv run python -m evals.run_correction correct --candidate c-sonnet  # the production correction, per candidate
 uv run python -m evals.run_correction correct --candidate c-haiku
@@ -63,10 +63,10 @@ uv run python -m evals.run_correction cleanup --candidate l-qwen35-9b   # last: 
 `cleanup` comes last and is skipped when the local model wins and the owner keeps its weights.
 
 An external candidate (`x-gpt61-medium`, `x-gpt61-high`: model `gpt-6.1-sol` at reasoning effort `medium` or `high`)
-uses a model the repo cannot call itself. Set `YTVERBATIM_EVAL_CLIENT_FACTORY=package.module:function`; `correct`
+uses a model the repo cannot call itself. Set `ANYVERBATIM_EVAL_CLIENT_FACTORY=package.module:function`; `correct`
 imports it and calls `function(model="<model>", effort="<effort>")`, keyword arguments only. The result must be a
-`ytverbatim.LLMClient`: a string `id` property and `complete(request) -> LLMResponse`. The harness makes no readiness
-call for it, so the factory must raise (preferably `ytverbatim.errors.ConfigError`) when its model is unreachable.
+`anyverbatim.LLMClient`: a string `id` property and `complete(request) -> LLMResponse`. The harness makes no readiness
+call for it, so the factory must raise (preferably `anyverbatim.errors.ConfigError`) when its model is unreachable.
 An unset variable, an import failure, or an object without `id` and `complete` stops the run with a `ConfigError`;
 nothing falls back to another client. The run is keyed `external:<model>@<effort>`, so each effort is its own run
 and an effort change never resumes the other's checkpoints. External candidates have no weights, so `cleanup` does not

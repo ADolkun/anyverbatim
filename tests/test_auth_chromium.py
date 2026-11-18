@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import paths
-from ytverbatim.auth import chromium
-from ytverbatim.auth.state import AuthState
-from ytverbatim.errors import AuthError
+from anyverbatim import paths
+from anyverbatim.auth import chromium
+from anyverbatim.auth.state import AuthState
+from anyverbatim.errors import AuthError
 
 
 @pytest.fixture
 def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "YTVERBATIM_HOME"):
+    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "ANYVERBATIM_HOME"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     path = chromium.browser_root("chrome")
@@ -124,7 +124,7 @@ def test_unnamed_profile_never_guesses_between_several(root: Path) -> None:
     detail = caught.value.detail
     assert "'Default' (Person 1), 'Work'" in detail
     assert "'Work' (" not in detail
-    assert "ytverbatim auth use chrome:<DIR>" in detail
+    assert "anyverbatim auth use chrome:<DIR>" in detail
     assert "@" not in detail
 
 
@@ -152,7 +152,7 @@ def test_missing_profile_lists_available_dirs(root: Path) -> None:
     assert caught.value.state is AuthState.PROFILE_NOT_FOUND
     assert "'Default', 'Side'" in caught.value.detail
     assert "Empty" not in caught.value.detail
-    assert "ytverbatim auth use chrome:<DIR>" in caught.value.detail
+    assert "anyverbatim auth use chrome:<DIR>" in caught.value.detail
 
 
 def test_pin_holds_only_a_symlink_and_is_idempotent(root: Path) -> None:

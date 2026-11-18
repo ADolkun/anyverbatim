@@ -2,8 +2,8 @@ import json
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
-from ytverbatim.contract import ContextDocument, dump_document
-from ytverbatim.index import INDEX_MD, write_index
+from anyverbatim.contract import ContextDocument, dump_document
+from anyverbatim.index import INDEX_MD, write_index
 
 
 def recording(root: Path, digit: str, title: str, recorded_at: datetime | None, duration_s: float) -> None:
@@ -11,7 +11,7 @@ def recording(root: Path, digit: str, title: str, recorded_at: datetime | None, 
     document = ContextDocument.model_validate(
         {
             "schema_version": "2.0",
-            "generator": {"name": "ytverbatim", "version": "0.0.1"},
+            "generator": {"name": "anyverbatim", "version": "0.0.1"},
             "created_at": "2026-01-02T03:04:05+00:00",
             "source": {
                 "kind": "recording",

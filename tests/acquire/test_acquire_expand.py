@@ -1,6 +1,6 @@
 import pytest
 
-from ytverbatim.acquire import expand
+from anyverbatim.acquire import expand
 
 LIST_URL = "https://www.youtube.com/playlist?list=PLexample"
 

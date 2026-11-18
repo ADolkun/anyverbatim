@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
-from ytverbatim.asr.protocol import EngineDef
-from ytverbatim.errors import ConfigError, DependencyError
+from anyverbatim.asr.protocol import EngineDef
+from anyverbatim.errors import ConfigError, DependencyError
 
 GATE_HEADROOM_BYTES = 1_500_000_000
 
@@ -124,7 +124,7 @@ def delete_repo(cache: Path, repo: str) -> int:
     try:
         manager = importlib.import_module("huggingface_hub")
     except ImportError as exc:
-        raise DependencyError("install ytverbatim[asr] to manage the candidate weight cache") from exc
+        raise DependencyError("install anyverbatim[asr] to manage the candidate weight cache") from exc
     info = cast(_CacheInfo, manager.scan_cache_dir(cache))
     revisions = [r.commit_hash for entry in info.repos if entry.repo_id == repo for r in entry.revisions]
     if not revisions:

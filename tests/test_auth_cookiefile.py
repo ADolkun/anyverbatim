@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim.auth import cookiefile
-from ytverbatim.auth.cookiefile import CookieEntry
-from ytverbatim.auth.state import AuthState
-from ytverbatim.errors import AuthError
+from anyverbatim.auth import cookiefile
+from anyverbatim.auth.cookiefile import CookieEntry
+from anyverbatim.auth.state import AuthState
+from anyverbatim.errors import AuthError
 
 # Built from parts so the repository privacy scanner does not mistake fixtures for a leaked export.
 LONG_HEADER = "# Netscape " + "HTTP Cookie File"

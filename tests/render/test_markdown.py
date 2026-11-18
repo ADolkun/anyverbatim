@@ -5,9 +5,9 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from ytverbatim.cli import main
-from ytverbatim.contract import ContextDocument, Edit, Flag, Segment, TranscriptRun
-from ytverbatim.render import render_markdown
+from anyverbatim.cli import main
+from anyverbatim.contract import ContextDocument, Edit, Flag, Segment, TranscriptRun
+from anyverbatim.render import render_markdown
 
 MakeDoc = Callable[..., ContextDocument]
 MakeSeg = Callable[..., Segment]

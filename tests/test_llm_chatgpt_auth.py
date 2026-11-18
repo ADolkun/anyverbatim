@@ -32,9 +32,9 @@ from chatgpt_fakes import (
     token_payload,
 )
 
-from ytverbatim import paths
-from ytverbatim.llm import chatgpt_auth
-from ytverbatim.llm.chatgpt_auth import (
+from anyverbatim import paths
+from anyverbatim.llm import chatgpt_auth
+from anyverbatim.llm.chatgpt_auth import (
     DISCOVERY_URL,
     TOKEN_URL,
     ChatGPTAuthError,
@@ -49,7 +49,7 @@ DISCOVERY = {"issuer": "https://auth.openai.com", "revocation_endpoint": REVOKE_
 def state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    return tmp_path / "state" / "ytverbatim" / "llm" / "chatgpt"
+    return tmp_path / "state" / "anyverbatim" / "llm" / "chatgpt"
 
 
 Callbacks = Callable[[dict[str, str]], list[dict[str, str]]]
@@ -107,7 +107,7 @@ def test_login_registers_this_host_exchanges_the_code_and_stores_the_account(sta
     assert (redirect.scheme, redirect.hostname, redirect.path) == ("http", "127.0.0.1", "/auth/callback")
     assert redirect.port is not None and redirect.port > 0
     assert query["client_id"] == "dynamic_agent_client"
-    assert query["agent_name_hint"] == "ytverbatim"
+    assert query["agent_name_hint"] == "anyverbatim"
     assert query["ext_agent_host_id"].startswith("urn:uuid:")
     assert query["response_type"] == "code"
     assert query["resource"] == "https://api.openai.com/v1"
@@ -286,7 +286,7 @@ def test_an_invalid_store_fails_loud(content: str) -> None:
     with pytest.raises(ChatGPTAuthError) as raised:
         chatgpt_auth.status()
     assert raised.value.code == "invalid_store"
-    assert "ytverbatim login" in str(raised.value)
+    assert "anyverbatim login" in str(raised.value)
 
 
 def test_status_reports_every_state_without_a_request() -> None:
@@ -338,7 +338,7 @@ def test_a_refresh_without_a_new_refresh_token_is_refused_and_keeps_the_old_one(
 def test_a_terminal_refresh_error_keeps_the_stored_sign_in(code: str) -> None:
     stored = store_account(expires_at=NOW)
     opener = FakeOpener({f"POST {TOKEN_URL}": http_error(400, {"error": code, "error_description": "secret detail"})})
-    with pytest.raises(ChatGPTAuthError, match="ytverbatim login") as raised:
+    with pytest.raises(ChatGPTAuthError, match="anyverbatim login") as raised:
         chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
     assert raised.value.code == code and raised.value.needs_sign_in
     assert "secret detail" not in str(raised.value)
@@ -370,7 +370,7 @@ def test_earliest_refresh_at_holds_off_a_refresh_while_the_token_still_works() -
 
 
 def test_no_account_or_no_plan_refuses_a_token() -> None:
-    with pytest.raises(ChatGPTAuthError, match="ytverbatim login") as raised:
+    with pytest.raises(ChatGPTAuthError, match="anyverbatim login") as raised:
         chatgpt_auth.access_token(opener=FakeOpener())
     assert raised.value.code == "not_signed_in"
     store_account(scopes=("openid",))
@@ -603,7 +603,7 @@ def test_an_exchange_refused_for_its_client_registers_afresh_within_one_login() 
     login(browsers, scripted_token_endpoint(browsers, "invalid_client", None))  # type: ignore[arg-type]
     first, second = (b.query for b in browsers.rounds)
     assert first["client_id"] == CLIENT_ID
-    assert second["client_id"] == chatgpt_auth.DYNAMIC_CLIENT and second["agent_name_hint"] == "ytverbatim"
+    assert second["client_id"] == chatgpt_auth.DYNAMIC_CLIENT and second["agent_name_hint"] == "anyverbatim"
     assert stored_state().client_id == NEW_CLIENT
     assert chatgpt_auth.status(clock=lambda: NOW) == "ready"
 

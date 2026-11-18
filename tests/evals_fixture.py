@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
+from anyverbatim.asr.chunks import Chunk
+from anyverbatim.asr.models import ChunkHypothesis
+from anyverbatim.contract.models import Word
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from evals.manifest import EVAL_DIR_ENV, Manifest, load_manifest
 from evals.store import Layout, Plan, save_plan, widened_windows, write_rows
-from ytverbatim.asr.chunks import Chunk
-from ytverbatim.asr.models import ChunkHypothesis
-from ytverbatim.contract.models import Word
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 
 ZH = "zhfile00001"
 EN = "enfile00001"

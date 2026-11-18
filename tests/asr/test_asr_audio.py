@@ -8,8 +8,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ytverbatim.asr.audio import SAMPLE_RATE, Audio, frame_energy, load_wav
-from ytverbatim.errors import DependencyError, MediaValidationError
+from anyverbatim.asr.audio import SAMPLE_RATE, Audio, frame_energy, load_wav
+from anyverbatim.errors import DependencyError, MediaValidationError
 
 
 def write_wav(path: Path, samples: list[int], *, channels: int = 1, rate: int = SAMPLE_RATE, width: int = 2) -> None:
@@ -83,14 +83,14 @@ def test_not_a_wav_is_rejected(tmp_path: Path) -> None:
 
 def test_importing_without_numpy_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "numpy", None)
-    monkeypatch.delitem(sys.modules, "ytverbatim.asr.audio")
-    with pytest.raises(DependencyError, match=r"ytverbatim\[asr\]"):
-        __import__("ytverbatim.asr.audio")
+    monkeypatch.delitem(sys.modules, "anyverbatim.asr.audio")
+    with pytest.raises(DependencyError, match=r"anyverbatim\[asr\]"):
+        __import__("anyverbatim.asr.audio")
 
 
 def test_core_modules_do_not_import_mlx() -> None:
     code = (
-        "import sys, ytverbatim.asr.chunks, ytverbatim.asr.audio\n"
+        "import sys, anyverbatim.asr.chunks, anyverbatim.asr.audio\n"
         "sys.exit(any(name.split('.')[0] == 'mlx' for name in sys.modules))"
     )
     assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0

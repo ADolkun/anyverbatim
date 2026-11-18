@@ -12,9 +12,9 @@ from types import ModuleType
 import pytest
 from test_proc import _gone
 
+from anyverbatim.errors import DependencyError
+from anyverbatim.mlx_worker import MLX_LIMIT_FRACTION
 from evals import mlx_server
-from ytverbatim.errors import DependencyError
-from ytverbatim.mlx_worker import MLX_LIMIT_FRACTION
 
 CAP = 12 << 30
 
@@ -145,7 +145,7 @@ mlx_server.main(["--memory-cap-bytes", str(1 << 40), "--"])
 PARENT = """
 import fcntl, os, sys, time
 from pathlib import Path
-from ytverbatim import proc
+from anyverbatim import proc
 server, root, pid_file, lock, log = sys.argv[1:]
 fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
 fcntl.flock(fd, fcntl.LOCK_EX)

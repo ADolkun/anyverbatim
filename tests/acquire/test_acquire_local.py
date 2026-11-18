@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import proc
-from ytverbatim.acquire import local
-from ytverbatim.acquire.voicememos import Memo, MemoCache
-from ytverbatim.errors import MediaValidationError
+from anyverbatim import proc
+from anyverbatim.acquire import local
+from anyverbatim.acquire.voicememos import Memo, MemoCache
+from anyverbatim.errors import MediaValidationError
 
 AAC = {"codec_name": "aac", "duration": "12.5"}
 APAC = {"codec_name": "apac", "duration": "12.5"}

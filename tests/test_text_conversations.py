@@ -9,11 +9,11 @@ from typing import Any
 
 import pytest
 
-from ytverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
-from ytverbatim.text.correct import CorrectionContext, correct_segments
-from ytverbatim.text.numeric import Evidence, TimedText, verify_numbers
-from ytverbatim.text.punctuate import punctuate
+from anyverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.text.correct import CorrectionContext, correct_segments
+from anyverbatim.text.numeric import Evidence, TimedText, verify_numbers
+from anyverbatim.text.punctuate import punctuate
 
 CLIENT_ID = "fake:conversation"
 ZH_BARE = "大家好欢迎回来今天我们聊聊个股的估值问题"

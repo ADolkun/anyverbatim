@@ -1,0 +1,173 @@
+import tomllib
+import types
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
+
+from anyverbatim import paths
+from anyverbatim.errors import ConfigError
+from anyverbatim.ytdlp.runner import redact
+
+__all__ = [
+    "AsrOptions",
+    "AuthOptions",
+    "DiarizeOptions",
+    "LLMOptions",
+    "Options",
+    "Overrides",
+    "TextOptions",
+    "YtdlpOptions",
+    "load_options",
+]
+
+
+@dataclass(frozen=True)
+class AuthOptions:
+    policy: Literal["auto", "always", "never"] = "auto"
+    cookie_channels: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class YtdlpOptions:
+    max_videos_per_run: int = 50
+    premium_probe_id: str = "BaW_jenozKc"
+    creator_note: bool = False
+    video: bool = False
+
+
+@dataclass(frozen=True)
+class AsrOptions:
+    # None is the source's default: w-runs-lid for a recording with `languages` set, w-prod otherwise (YouTube always).
+    # Set, it wins for every source.
+    engine: str | None = None
+    source: Literal["asr", "captions"] = "asr"
+    # Forces one language for every source; None lets YouTube's declared language or the engine decide.
+    language: str | None = None
+    # The languages a detecting engine may choose from, for recordings only; empty allows any.
+    languages: tuple[str, ...] = ()
+    # The ASR worker is killed above this physical footprint, so a runaway model cannot take down the Mac.
+    # None means half of physical memory.
+    memory_cap_gib: float | None = None
+
+
+@dataclass(frozen=True)
+class TextOptions:
+    # None corrects whenever the text stages have an LLM; True without one is an error, False turns it off.
+    correct: bool | None = None
+    # "auto" is YouTube's chapters today; an LLM fallback for videos without them comes later.
+    chapters: Literal["auto", "none"] = "auto"
+    # An ASR hypothesis id that re-decodes the numeric spans as independent evidence, or "off".
+    numeric_second_opinion: str = "off"
+    script: Literal["zh-Hans", "keep"] = "zh-Hans"
+    # Verbatim by default: fillers are what was said, and removing them edits the quotable text.
+    fillers: Literal["keep", "remove"] = "keep"
+    # Mandarin amounts as digits per GB/T 15835-2011 (3.5万, 80%, 2026年), or "keep" for the form as recognized.
+    numerals: Literal["digits", "keep"] = "digits"
+    # Terms the correction pass should prefer (names, jargon), for every source; YouTube adds its tags after them.
+    glossary: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DiarizeOptions:
+    # "auto" labels speakers in recordings and leaves YouTube videos undiarized; "on" and "off" force it either way.
+    mode: Literal["auto", "on", "off"] = "auto"
+
+
+@dataclass(frozen=True)
+class LLMOptions:
+    provider: Literal["none", "chatgpt", "claude-cli", "openai-compat"] = "chatgpt"
+    # None means the provider's own default (chatgpt: the newest Sol model at medium), so a config that switches
+    # provider never inherits another provider's model. A chatgpt model without a version (gpt-sol, gpt-astra) means
+    # the newest of that family on the ChatGPT plan; a versioned one (gpt-6.1-sol) is a pin.
+    model: str | None = None
+    effort: str | None = None
+    base_url: str | None = None
+    api_key_env: str | None = None
+    timeout_s: float = 900.0
+
+
+@dataclass(frozen=True)
+class Options:
+    auth: AuthOptions = field(default_factory=AuthOptions)
+    ytdlp: YtdlpOptions = field(default_factory=YtdlpOptions)
+    asr: AsrOptions = field(default_factory=AsrOptions)
+    text: TextOptions = field(default_factory=TextOptions)
+    llm: LLMOptions = field(default_factory=LLMOptions)
+    diarize: DiarizeOptions = field(default_factory=DiarizeOptions)
+
+
+Overrides = Mapping[str, Mapping[str, object]]
+
+
+def load_options(path: Path | None = None, overrides: Overrides | None = None) -> Options:
+    """Read the config file (absent means defaults); `overrides` win, and None values mean "not given"."""
+    raw = _read(path if path is not None else paths.config_file())
+    given = overrides or {}
+    sections = {
+        "auth": AuthOptions,
+        "ytdlp": YtdlpOptions,
+        "asr": AsrOptions,
+        "text": TextOptions,
+        "llm": LLMOptions,
+        "diarize": DiarizeOptions,
+    }
+    unknown = (set(raw) | set(given)) - set(sections)
+    if unknown:
+        raise ConfigError(f"unknown config section(s): {', '.join(sorted(unknown))}")
+
+    def merged(name: str) -> dict[str, object]:
+        section = raw.get(name, {})
+        if not isinstance(section, dict):
+            raise ConfigError(f"config section [{name}] must be a table")
+        values: dict[str, object] = dict(section)
+        values.update({k: v for k, v in given.get(name, {}).items() if v is not None})
+        return values
+
+    return Options(
+        auth=AuthOptions(**_checked(AuthOptions, "auth", merged("auth"))),
+        ytdlp=YtdlpOptions(**_checked(YtdlpOptions, "ytdlp", merged("ytdlp"))),
+        asr=AsrOptions(**_checked(AsrOptions, "asr", merged("asr"))),
+        text=TextOptions(**_checked(TextOptions, "text", merged("text"))),
+        llm=LLMOptions(**_checked(LLMOptions, "llm", merged("llm"))),
+        diarize=DiarizeOptions(**_checked(DiarizeOptions, "diarize", merged("diarize"))),
+    )
+
+
+def _read(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("rb") as handle:
+            return tomllib.load(handle)
+    except FileNotFoundError:
+        return {}
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(redact(f"cannot read config file {path}: {exc}")) from exc
+
+
+def _checked(cls: type, section: str, values: Mapping[str, object]) -> dict[str, Any]:
+    hints = get_type_hints(cls)
+    unknown = set(values) - set(hints)
+    if unknown:
+        raise ConfigError(f"unknown option(s) in [{section}]: {', '.join(sorted(unknown))}")
+    return {key: _coerce(f"{section}.{key}", value, hints[key]) for key, value in values.items()}
+
+
+def _coerce(name: str, value: object, hint: object) -> Any:
+    origin = get_origin(hint)
+    if origin is Union or origin is types.UnionType:
+        (inner,) = (arg for arg in get_args(hint) if arg is not type(None))
+        return _coerce(name, value, inner)
+    if origin is Literal:
+        if value in get_args(hint):
+            return value
+        raise ConfigError(f"{name} must be one of: {', '.join(map(str, get_args(hint)))}")
+    if origin is tuple:
+        if isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value):
+            return tuple(value)
+        raise ConfigError(f"{name} must be a list of strings")
+    if hint is float and isinstance(value, int) and not isinstance(value, bool):
+        return float(value)
+    if isinstance(hint, type) and type(value) is hint:
+        return value
+    expected = hint.__name__ if isinstance(hint, type) else str(hint)
+    raise ConfigError(f"{name} must be of type {expected}")

@@ -2,10 +2,10 @@ import struct
 
 import pytest
 
-from ytverbatim.contract.models import Word
-from ytverbatim.diarize import attribution
-from ytverbatim.diarize.attribution import Span, assign, speech_seconds
-from ytverbatim.diarize.protocol import Diarization
+from anyverbatim.contract.models import Word
+from anyverbatim.diarize import attribution
+from anyverbatim.diarize.attribution import Span, assign, speech_seconds
+from anyverbatim.diarize.protocol import Diarization
 
 FRAME_S = 0.01
 CHANNELS = 8

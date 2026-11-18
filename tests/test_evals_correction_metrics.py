@@ -1,5 +1,8 @@
 import pytest
 
+from anyverbatim.contract.models import Flag
+from anyverbatim.errors import ConfigError
+from anyverbatim.stages import Stretch
 from evals.correction import BaseFile, CandidateFile, audible_edits
 from evals.correction_metrics import (
     DELTA_UPPER_BOUND,
@@ -26,9 +29,6 @@ from evals.listen import Choice, LoggedDecision
 from evals.normalize import Language
 from evals.screen import Span, SpanReading
 from evals.session import KeyEntry, SessionKey, Stratum
-from ytverbatim.contract.models import Flag
-from ytverbatim.errors import ConfigError
-from ytverbatim.stages import Stretch
 
 HOURS = 2.0
 RESAMPLES = 400

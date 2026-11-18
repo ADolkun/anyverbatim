@@ -9,14 +9,14 @@ import pytest
 from fake_engine import write_silence
 from pydantic import JsonValue
 
-from ytverbatim import pipeline, store
-from ytverbatim.asr import registry, worker
-from ytverbatim.asr.chunks import Chunk
-from ytverbatim.asr.engines import whisper_mlx
-from ytverbatim.asr.engines.whisper_mlx import WhisperEngine
-from ytverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, FileJob, WorkerRequest
-from ytverbatim.asr.protocol import Window
-from ytverbatim.errors import ConfigError, DependencyError
+from anyverbatim import pipeline, store
+from anyverbatim.asr import registry, worker
+from anyverbatim.asr.chunks import Chunk
+from anyverbatim.asr.engines import whisper_mlx
+from anyverbatim.asr.engines.whisper_mlx import WhisperEngine
+from anyverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, FileJob, WorkerRequest
+from anyverbatim.asr.protocol import Window
+from anyverbatim.errors import ConfigError, DependencyError
 
 REPO_DIR = "models--mlx-community--whisper-large-v3-mlx"
 RESULT: dict[str, Any] = {
@@ -476,7 +476,7 @@ def test_a_snapshot_without_weights_is_missing(fake: FakeWhisper, snapshot: Path
 
 def test_a_missing_whisper_extra_names_the_install(fake: FakeWhisper, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "mlx_whisper", None)
-    with pytest.raises(DependencyError, match=r"install ytverbatim\[whisper\]"):
+    with pytest.raises(DependencyError, match=r"install anyverbatim\[whisper\]"):
         registry.build_engine(registry.get("w-prod")).load()
 
 

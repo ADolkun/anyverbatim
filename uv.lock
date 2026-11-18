@@ -1245,7 +1245,7 @@ wheels = [
 ]
 
 [[package]]
-name = "ytverbatim"
+name = "anyverbatim"
 version = "0.1.1"
 source = { editable = "." }
 default-groups = ["dev", "eval"]

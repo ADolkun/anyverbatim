@@ -5,11 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim.contract.models import Edit, Flag, LLMUsage
-from ytverbatim.errors import LLMOutputError
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
-from ytverbatim.text import correct
-from ytverbatim.text.correct import CorrectionContext, CorrectionResult, Rejection, correct_segments
+from anyverbatim.contract.models import Edit, Flag, LLMUsage
+from anyverbatim.errors import LLMOutputError
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.text import correct
+from anyverbatim.text.correct import CorrectionContext, CorrectionResult, Rejection, correct_segments
 
 CLIENT_ID = "fake:proofreader"
 

@@ -2,9 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import ids
-from ytverbatim.errors import ConfigError
-from ytverbatim.targets import MemoSelector, classify, expand
+from anyverbatim import ids
+from anyverbatim.errors import ConfigError
+from anyverbatim.targets import MemoSelector, classify, expand
 
 VIDEO = "pubVideo001"
 
@@ -85,7 +85,7 @@ def test_folders_expand_recursively_to_sorted_media_files(tmp_path: Path) -> Non
 def test_expansion_skips_its_own_output_even_when_run_over_the_output_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("YTVERBATIM_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ANYVERBATIM_HOME", str(tmp_path / "home"))
     (tmp_path / "meeting.m4a").write_bytes(b"x")
     for leftover in ("rec-0123456789abcdef/audio.wav", "home/videos/pubVideo001/audio.webm"):
         path = tmp_path / leftover

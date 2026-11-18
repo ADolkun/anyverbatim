@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim.config import AuthOptions, LLMOptions, Options, load_options
-from ytverbatim.errors import ConfigError
+from anyverbatim.config import AuthOptions, LLMOptions, Options, load_options
+from anyverbatim.errors import ConfigError
 
 
 def _write(tmp_path: Path, text: str) -> Path:
@@ -18,8 +18,8 @@ def test_missing_file_gives_defaults(tmp_path: Path) -> None:
 
 def test_default_path_comes_from_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    (tmp_path / "ytverbatim").mkdir()
-    (tmp_path / "ytverbatim" / "config.toml").write_text('[auth]\npolicy = "never"\n', encoding="utf-8")
+    (tmp_path / "anyverbatim").mkdir()
+    (tmp_path / "anyverbatim" / "config.toml").write_text('[auth]\npolicy = "never"\n', encoding="utf-8")
     assert load_options().auth.policy == "never"
 
 

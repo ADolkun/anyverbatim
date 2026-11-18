@@ -1,8 +1,8 @@
 import pytest
 
+from anyverbatim.text.numerals import display
 from evals.metrics import cer
 from evals.normalize import canonical, join_units, normalize, split_units, to_units
-from ytverbatim.text.numerals import display
 
 
 def test_traditional_characters_become_simplified() -> None:

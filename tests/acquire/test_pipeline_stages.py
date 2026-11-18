@@ -11,22 +11,22 @@ import pytest
 from chatgpt_fakes import store_account
 from click.testing import CliRunner
 
-from ytverbatim import config, pipeline, stages, store
-from ytverbatim.acquire import session
-from ytverbatim.asr import registry
-from ytverbatim.asr import runner as asr_runner
-from ytverbatim.asr.models import HYPOTHESES_FILE, METRICS_FILE, ChunkHypothesis, RunMetrics, WorkerRequest
-from ytverbatim.asr.runner import WorkerResult
-from ytverbatim.asr.worker import _claim_output as claim_output
-from ytverbatim.cli import main
-from ytverbatim.contract import ContextDocument, Word, YouTubeSource, load_document
-from ytverbatim.errors import ConfigError, DependencyError, EngineError, LLMUnavailableError
-from ytverbatim.llm import chatgpt_models, claude_cli
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
-from ytverbatim.pipeline import ProgressEvent, VideoResult, process_many
-from ytverbatim.text import clean, guards, numbers, numerals, numeric
-from ytverbatim.text import punctuate as punctuate_module
-from ytverbatim.ytdlp.types import Signal
+from anyverbatim import config, pipeline, stages, store
+from anyverbatim.acquire import session
+from anyverbatim.asr import registry
+from anyverbatim.asr import runner as asr_runner
+from anyverbatim.asr.models import HYPOTHESES_FILE, METRICS_FILE, ChunkHypothesis, RunMetrics, WorkerRequest
+from anyverbatim.asr.runner import WorkerResult
+from anyverbatim.asr.worker import _claim_output as claim_output
+from anyverbatim.cli import main
+from anyverbatim.contract import ContextDocument, Word, YouTubeSource, load_document
+from anyverbatim.errors import ConfigError, DependencyError, EngineError, LLMUnavailableError
+from anyverbatim.llm import chatgpt_models, claude_cli
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.pipeline import ProgressEvent, VideoResult, process_many
+from anyverbatim.text import clean, guards, numbers, numerals, numeric
+from anyverbatim.text import punctuate as punctuate_module
+from anyverbatim.ytdlp.types import Signal
 
 ZH = "zhVideo0001"
 EN = "enVideo0001"
@@ -1022,15 +1022,15 @@ def test_a_missing_claude_cli_fails_before_any_request(session_kit, worker, monk
 
 
 def test_the_default_llm_without_a_chatgpt_sign_in_fails_before_any_request(session_kit, worker) -> None:
-    (session_kit.home / ".config" / "ytverbatim" / "config.toml").unlink()
+    (session_kit.home / ".config" / "anyverbatim" / "config.toml").unlink()
     yt = zh_yt(session_kit)
-    with pytest.raises(ConfigError, match=r"not signed in.*`ytverbatim login`.*`--llm none`"):
+    with pytest.raises(ConfigError, match=r"not signed in.*`anyverbatim login`.*`--llm none`"):
         run(session_kit, yt)
     assert yt.calls == [] and worker.calls == []
 
 
 def test_an_unresolvable_model_family_fails_once_before_any_request(session_kit, worker, monkeypatch) -> None:
-    (session_kit.home / ".config" / "ytverbatim" / "config.toml").unlink()
+    (session_kit.home / ".config" / "anyverbatim" / "config.toml").unlink()
     store_account()
     asked: list[str] = []
 
@@ -1048,7 +1048,7 @@ def test_an_unresolvable_model_family_fails_once_before_any_request(session_kit,
 
 @pytest.mark.parametrize("interactive", [True, False])
 def test_interactivity_reaches_the_llm_checks(session_kit, worker, monkeypatch, interactive: bool) -> None:
-    (session_kit.home / ".config" / "ytverbatim" / "config.toml").unlink()
+    (session_kit.home / ".config" / "anyverbatim" / "config.toml").unlink()
     seen: list[tuple[str, object]] = []
 
     def check_ready(_options: config.LLMOptions, **kwargs: object) -> None:
@@ -1065,17 +1065,17 @@ def test_interactivity_reaches_the_llm_checks(session_kit, worker, monkeypatch, 
 
 
 def test_cli_default_llm_without_a_sign_in_names_login_and_llm_none(session_kit, worker, monkeypatch) -> None:
-    (session_kit.home / ".config" / "ytverbatim" / "config.toml").unlink()
+    (session_kit.home / ".config" / "anyverbatim" / "config.toml").unlink()
     refused = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH)
     assert refused.exit_code == 1
-    assert "ytverbatim login" in refused.output and "--llm none" in refused.output
+    assert "anyverbatim login" in refused.output and "--llm none" in refused.output
     without = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH, "--llm", "none")
     assert without.exit_code == 0, without.output
     assert worker.calls != []
 
 
 def test_cli_llm_spec_switches_provider_over_the_configured_one(session_kit, worker, monkeypatch) -> None:
-    config_file = session_kit.home / ".config" / "ytverbatim" / "config.toml"
+    config_file = session_kit.home / ".config" / "anyverbatim" / "config.toml"
     config_file.write_text('[llm]\nprovider = "openai-compat"\nmodel = "m"\nbase_url = "http://127.0.0.1:8080/v1"\n')
     built: list[config.LLMOptions] = []
 

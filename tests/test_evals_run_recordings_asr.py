@@ -8,6 +8,9 @@ import pytest
 from click.testing import CliRunner
 from recordings_fixture import FakeWorker, make_clips, make_meeting, make_owner, pieces, silent, spoken
 
+from anyverbatim.asr import registry
+from anyverbatim.asr.models import AnomalySpan, ChunkHypothesis, FileJob, WorkerRequest
+from anyverbatim.errors import ConfigError
 from evals import run_diarization, run_recordings_asr
 from evals.manifest import EVAL_DIR_ENV
 from evals.recordings_corpus import (
@@ -27,9 +30,6 @@ from evals.recordings_scoring import ASCEND_POOLED, MEETINGS
 from evals.run_diarization import load_words
 from evals.run_recordings_asr import E2_HYPOTHESES, _load_all, run_corpus, scored
 from evals.store import Layout
-from ytverbatim.asr import registry
-from ytverbatim.asr.models import AnomalySpan, ChunkHypothesis, FileJob, WorkerRequest
-from ytverbatim.errors import ConfigError
 
 EN_LINES = (RefUtterance(0, 3, "A", "hello there everyone"), RefUtterance(70, 73, "B", "now we begin"))
 ZH_LINES = (RefUtterance(0, 4, "A", "今天开会讨论预算"), RefUtterance(70, 73, "B", "明天继续"))

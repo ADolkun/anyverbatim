@@ -6,9 +6,9 @@ from typing import Any
 import numpy as np
 import pytest
 
-from ytverbatim.asr import registry
-from ytverbatim.asr.engines import mimo
-from ytverbatim.errors import ConfigError, EngineError
+from anyverbatim.asr import registry
+from anyverbatim.asr.engines import mimo
+from anyverbatim.errors import ConfigError, EngineError
 
 DEFINITION = registry.get("m-4bit")
 SPEC = DEFINITION.spec

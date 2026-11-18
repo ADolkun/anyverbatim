@@ -4,13 +4,13 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ytverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack
-from ytverbatim.acquire.metadata import VideoMetadata
-from ytverbatim.asr import registry
-from ytverbatim.asr.models import ChunkHypothesis
-from ytverbatim.contract import Access, ContextDocument, Edit, Flag, Word, dump_document, load_document
-from ytverbatim.render import render_markdown
-from ytverbatim.stages import (
+from anyverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack
+from anyverbatim.acquire.metadata import VideoMetadata
+from anyverbatim.asr import registry
+from anyverbatim.asr.models import ChunkHypothesis
+from anyverbatim.contract import Access, ContextDocument, Edit, Flag, Word, dump_document, load_document
+from anyverbatim.render import render_markdown
+from anyverbatim.stages import (
     SourceInfo,
     Stretch,
     Transcribed,
@@ -23,8 +23,8 @@ from ytverbatim.stages import (
     word_confidence,
     youtube_source,
 )
-from ytverbatim.text.numbers import quantity_tokens
-from ytverbatim.text.numerals import apply, conversions, readings
+from anyverbatim.text.numbers import quantity_tokens
+from anyverbatim.text.numerals import apply, conversions, readings
 
 ACCESS = Access(
     auth_source="none",

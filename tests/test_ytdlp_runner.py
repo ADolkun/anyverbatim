@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import paths
-from ytverbatim.errors import ProcTimeout, YtDlpError
-from ytverbatim.proc import ProcResult
-from ytverbatim.ytdlp import runner as runner_mod
-from ytverbatim.ytdlp.runner import SLEEP_PRESET, SubprocessRunner, redact
-from ytverbatim.ytdlp.types import Signal, YtDlpRunner
+from anyverbatim import paths
+from anyverbatim.errors import ProcTimeout, YtDlpError
+from anyverbatim.proc import ProcResult
+from anyverbatim.ytdlp import runner as runner_mod
+from anyverbatim.ytdlp.runner import SLEEP_PRESET, SubprocessRunner, redact
+from anyverbatim.ytdlp.types import Signal, YtDlpRunner
 
 VID = "BaW_jenozKc"
 TRANSIENT = f"ERROR: [youtube] {VID}: Unable to download webpage: HTTP Error 503: Service Unavailable"
@@ -111,7 +111,7 @@ def test_js_args_detected_once_when_not_given(monkeypatch: pytest.MonkeyPatch) -
 
 def test_success_returns_and_logs_warnings(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     _install(monkeypatch, (0, ROTATED))
-    with caplog.at_level(logging.WARNING, logger="ytverbatim.ytdlp.runner"):
+    with caplog.at_level(logging.WARNING, logger="anyverbatim.ytdlp.runner"):
         result = _runner([]).run(["-J", VID], cookies=None, timeout_s=30, label="meta")
     assert (result.returncode, result.stdout, result.primary) == (0, "{}", None)
     assert result.secondary == (Signal.ROTATED,)

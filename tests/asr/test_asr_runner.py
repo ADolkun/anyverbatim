@@ -12,10 +12,10 @@ from pathlib import Path
 import pytest
 from fake_engine import definition, write_silence
 
-from ytverbatim import config, mlx_worker, paths, proc
-from ytverbatim.asr import runner
-from ytverbatim.asr.chunks import Chunk
-from ytverbatim.asr.models import (
+from anyverbatim import config, mlx_worker, paths, proc
+from anyverbatim.asr import runner
+from anyverbatim.asr.chunks import Chunk
+from anyverbatim.asr.models import (
     ERROR_FILE,
     FINGERPRINT_FILE,
     HYPOTHESES_FILE,
@@ -25,7 +25,7 @@ from ytverbatim.asr.models import (
     FileJob,
     WorkerRequest,
 )
-from ytverbatim.errors import ConfigError, EngineError, EngineMemoryError, MediaValidationError, ProcMemoryExceeded
+from anyverbatim.errors import ConfigError, EngineError, EngineMemoryError, MediaValidationError, ProcMemoryExceeded
 
 HERE = Path(__file__).parent
 
@@ -48,7 +48,7 @@ def make_request(tmp_path: Path, *, seconds: float = 6.0, **variant: object) -> 
 
 def test_worker_argv_isolates_the_working_directory() -> None:
     argv = mlx_worker.worker_argv(runner.WORKER_MODULE, Path("/tmp/req.json"))
-    assert argv == [sys.executable, "-P", "-m", "ytverbatim.asr.worker", "/tmp/req.json"]
+    assert argv == [sys.executable, "-P", "-m", "anyverbatim.asr.worker", "/tmp/req.json"]
 
 
 def test_a_real_worker_subprocess_produces_hypotheses_and_resumes(tmp_path: Path) -> None:
@@ -320,10 +320,10 @@ def test_a_waiting_worker_says_so_and_proceeds_when_the_lock_frees(caplog: pytes
 
 def test_the_parent_imports_neither_mlx_nor_numpy_nor_an_engine_adapter() -> None:
     code = (
-        "import sys, ytverbatim.asr.runner, ytverbatim.asr.registry\n"
+        "import sys, anyverbatim.asr.runner, anyverbatim.asr.registry\n"
         "heavy = {'mlx', 'mlx_audio', 'mlx_whisper', 'numpy'}\n"
         "loaded = {name.split('.')[0] for name in sys.modules} & heavy\n"
-        "loaded |= {name for name in sys.modules if name.startswith('ytverbatim.asr.engines')}\n"
+        "loaded |= {name for name in sys.modules if name.startswith('anyverbatim.asr.engines')}\n"
         "print(sorted(loaded))\n"
         "sys.exit(bool(loaded))"
     )
