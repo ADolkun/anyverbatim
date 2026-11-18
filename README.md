@@ -7,7 +7,7 @@ Language models need transcripts they can cite. `ytverbatim` aims to produce tex
 - **YouTube** videos, playlists and channels. It works with your own logged-in browser session, so Premium and members-only videos you can already watch are covered.
 - **Local recordings:** audio or video files, folders of them, and iPhone Voice Memos synced to your Mac. Conversations get speaker labels.
 
-**Status: pre-alpha.** `ytverbatim run` turns a source into a transcript with local Whisper and checks numbers against independent readings where there are any (a video's own captions, or an optional second engine). With an LLM (ChatGPT's gpt-6.1-sol by default, or one you choose), it also restores missing punctuation and corrects misheard words. An engine evaluation kept mlx-whisper large-v3 as the default ([result](evals/results/asr-2026-11-13.md)). Recordings support is new and is still being checked on real meetings and memos.
+**Status: pre-alpha.** `ytverbatim run` turns a source into a transcript with local Whisper and checks numbers against independent readings where there are any (a video's own captions, or an optional second engine). With an LLM (ChatGPT's newest Sol model by default, or one you choose), it also restores missing punctuation and corrects misheard words. An engine evaluation kept mlx-whisper large-v3 as the default ([result](evals/results/asr-2026-11-13.md)). Recordings support is new and is still being checked on real meetings and memos.
 
 ## Install
 
@@ -209,7 +209,7 @@ Only figures the [quantity tokenizer](docs/library.md#quantities) reads are rewr
 
 ## LLM
 
-Punctuation, correction and numeric verdicts use an LLM. The default is ChatGPT's gpt-6.1-sol at medium reasoning effort, which needs a ChatGPT plan and one sign-in:
+Punctuation, correction and numeric verdicts use an LLM. The default is the newest Sol model your ChatGPT plan lists, at medium reasoning effort. It needs a ChatGPT plan and one sign-in:
 
 ```
 ytverbatim login           # opens OpenAI's sign-in page and waits for it; --no-browser only prints the URL
@@ -218,6 +218,15 @@ ytverbatim status          # the YouTube login, the ChatGPT sign-in, the LLM in 
 ytverbatim llm test        # one tiny live call to the configured LLM (--provider/--model/--effort override it)
 ytverbatim logout          # revokes the sign-in and removes its tokens from this machine
 ```
+
+**Which model.** The model name is `gpt-sol` by default, an alias for the newest model of the Sol family.
+
+- At the start of each run ytverbatim reads your plan's model catalog (one request, no quota) and uses the highest listed version, such as gpt-6.2-sol, for every LLM call of that run. Hidden models, models the API does not offer, and other families (`gpt-6.2-sol-mini` is not in `sol`) are never picked.
+- A name without a version, `gpt-<family>`, does the same for that family: `--llm chatgpt:gpt-astra`, or `model = "gpt-astra"` under `[llm]`.
+- A name with a version (`--llm chatgpt:gpt-6.1-sol`) pins that model and skips the catalog.
+- If the catalog cannot be read or lists no model of the family, the run stops before any download and says how to pin a version. It never falls back to a fixed one.
+- The resolved model is part of each stored result's identity. When a newer model ships, a rerun redoes the LLM stages, and `context.json` records which model corrected the text.
+- `ytverbatim status` shows the model in use.
 
 In the [correction evaluation](evals/results/correction-2026-11-13.md) gpt-6.1-sol led the screen, removing about 57.6 net errors per hour against 42.7 for Claude Sonnet, at a fix precision of 0.929. Medium effort matched high (57.6 against 57.8 net errors removed per hour, with overlapping intervals) in about 0.6 times the time, so medium is the default.
 

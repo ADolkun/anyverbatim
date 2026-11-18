@@ -73,8 +73,9 @@ from ytverbatim.ytdlp.runner import redact
     metavar="SPEC",
     help=(
         "LLM for punctuation, correction and numeric verdicts: PROVIDER:MODEL, or none for no LLM. "
-        "Default: chatgpt:gpt-6.1-sol at medium effort (needs `ytverbatim login`); "
-        "alternatives: claude-cli:claude-sonnet-5-5, openai-compat:MODEL."
+        "Default: chatgpt:gpt-sol, the newest Sol model on your ChatGPT plan, at medium effort (needs "
+        "`ytverbatim login`); a versioned model such as chatgpt:gpt-6.1-sol pins it, and chatgpt:gpt-astra picks the "
+        "newest Astra. Alternatives: claude-cli:claude-sonnet-5-5, openai-compat:MODEL."
     ),
 )
 @click.option("--captions/--no-captions", default=None, help="YouTube: download caption tracks (default on).")

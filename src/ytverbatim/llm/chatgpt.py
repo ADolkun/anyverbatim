@@ -19,7 +19,7 @@ from ytverbatim.llm.jsonio import as_object
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 
 PROVIDER = "chatgpt"
-DEFAULT_MODEL = "gpt-6.1-sol"
+DEFAULT_MODEL = "gpt-sol"
 DEFAULT_EFFORT = "medium"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 RESPONSES_URL = "https://api.openai.com/v1/responses"

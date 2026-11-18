@@ -127,11 +127,18 @@ def test_logout_reports_what_happened_to_the_revocation(
 @pytest.mark.parametrize(
     ("options", "label"),
     [
-        (LLMOptions(), "chatgpt:gpt-6.1-sol (medium effort)"),
-        (LLMOptions(effort="high"), "chatgpt:gpt-6.1-sol (high effort)"),
+        (LLMOptions(), "chatgpt:gpt-sol (newest gpt-sol, not resolved, medium effort)"),
+        (LLMOptions(effort="high"), "chatgpt:gpt-sol (newest gpt-sol, not resolved, high effort)"),
+        (LLMOptions(model="gpt-6.1-sol"), "chatgpt:gpt-6.1-sol (medium effort)"),
         (LLMOptions(provider="claude-cli", model="claude-sonnet-5-5"), "claude-cli:claude-sonnet-5-5"),
         (LLMOptions(provider="none"), "none (the LLM stages are skipped)"),
     ],
 )
 def test_the_llm_label(options: LLMOptions, label: str) -> None:
     assert cli_session.llm_label(options) == label
+
+
+def test_the_llm_label_names_the_resolved_model() -> None:
+    assert cli_session.llm_label(LLMOptions(), "gpt-6.2-sol") == "chatgpt:gpt-6.2-sol (newest gpt-sol, medium effort)"
+    pinned = LLMOptions(model="gpt-6.1-sol")
+    assert cli_session.llm_label(pinned, "gpt-6.2-sol") == "chatgpt:gpt-6.1-sol (medium effort)"

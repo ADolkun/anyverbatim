@@ -3,8 +3,9 @@ from typing import Literal, cast
 
 from ytverbatim.config import LLMOptions
 from ytverbatim.errors import ConfigError
-from ytverbatim.llm import chatgpt, chatgpt_auth, claude_cli, openai_compat
+from ytverbatim.llm import chatgpt, chatgpt_auth, chatgpt_models, claude_cli, openai_compat
 from ytverbatim.llm.chatgpt import ChatGPTClient
+from ytverbatim.llm.chatgpt_http import Opener, https_open
 from ytverbatim.llm.claude_cli import ClaudeCLIClient
 from ytverbatim.llm.jsonio import complete_json, extract_json_object
 from ytverbatim.llm.openai_compat import OpenAICompatClient
@@ -36,13 +37,15 @@ EFFORTS: dict[str, tuple[str, ...]] = {"chatgpt": chatgpt.EFFORTS, "claude-cli":
 
 
 def client_from_options(
-    options: LLMOptions, *, interactive: bool = False
+    options: LLMOptions, *, interactive: bool = False, opener: Opener = https_open
 ) -> ChatGPTClient | ClaudeCLIClient | OpenAICompatClient:
     """Build the configured transport; options the provider would ignore are rejected rather than dropped.
 
-    An unset chatgpt model or effort means the provider's defaults, gpt-6.1-sol at medium effort. With `interactive`,
-    a chatgpt sign-in that lapses mid-run reopens the browser to sign in again; pass it only when a person is at the
-    terminal.
+    An unset chatgpt model or effort means the provider's defaults, the newest Sol model at medium effort. A chatgpt
+    model without a version (`gpt-sol`, `gpt-astra`) is resolved here, with one request to the plan's model catalog,
+    and the client carries the resolved slug, so call this once per run and before any other work. With
+    `interactive`, a chatgpt sign-in that lapses mid-run reopens the browser to sign in again; pass it only when a
+    person is at the terminal.
     """
     if options.provider == "none":
         raise ConfigError("no LLM provider configured; set [llm] provider to chatgpt, claude-cli or openai-compat")
@@ -58,11 +61,13 @@ def client_from_options(
     if stray:
         raise ConfigError(f"[llm] {', '.join(stray)} do not apply to {options.provider}")
     if options.provider == "chatgpt":
+        reauth = _sign_in_again if interactive else None
         return ChatGPTClient(
-            model=options.model or chatgpt.DEFAULT_MODEL,
+            model=chatgpt_models.resolve(options.model or chatgpt.DEFAULT_MODEL, opener=opener, reauth=reauth),
             effort=options.effort or chatgpt.DEFAULT_EFFORT,
             timeout_s=options.timeout_s,
-            reauth=_sign_in_again if interactive else None,
+            opener=opener,
+            reauth=reauth,
         )
     return ClaudeCLIClient(model=options.model or "", effort=options.effort, timeout_s=options.timeout_s)
 
@@ -79,7 +84,7 @@ def check_effort(options: LLMOptions) -> None:
 
 
 def apply_spec(options: LLMOptions, spec: str) -> LLMOptions:
-    """Apply a `--llm` spec: `none`, or `PROVIDER:MODEL` with a full model id (`chatgpt:gpt-6.1-sol`).
+    """Apply a `--llm` spec: `none`, or `PROVIDER:MODEL` such as `chatgpt:gpt-6.1-sol` (pinned) or `chatgpt:gpt-sol`.
 
     The same provider keeps its configured settings (effort, base URL, key). Another provider starts from its
     defaults: a configured `base_url` must not block `claude-cli`, nor a configured `effort` block `openai-compat`.

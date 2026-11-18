@@ -347,7 +347,7 @@ def test_redirects_are_refused_rather_than_followed() -> None:
 
 
 def test_the_provider_defaults() -> None:
-    assert (chatgpt.DEFAULT_MODEL, chatgpt.DEFAULT_EFFORT) == ("gpt-6.1-sol", "medium")
+    assert (chatgpt.DEFAULT_MODEL, chatgpt.DEFAULT_EFFORT) == ("gpt-sol", "medium")
     assert chatgpt.EFFORTS == ("low", "medium", "high", "xhigh", "max")
 
 

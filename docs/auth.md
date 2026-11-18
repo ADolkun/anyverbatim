@@ -37,7 +37,7 @@ Brave, Chromium, Edge and Vivaldi work the same way: replace `chrome` with the b
    $ ytverbatim status --refresh
    YouTube  chrome:Default   ok, signed in · Premium: unknown · verified 2026-01-01 12:00
    ChatGPT  you@example.com  ok, plan permission, session ready
-   LLM      chatgpt:gpt-6.1-sol (medium effort)
+   LLM      chatgpt:gpt-6.2-sol (newest gpt-sol, medium effort)
    ```
 
    The YouTube line takes a snapshot and makes one request (`:ytfav`, your Liked videos list, of which nothing is shown or kept). A good result is cached for an hour; `--refresh` skips the cache and `--json` prints a machine-readable report. Premium shows as `unknown` until a fetch has seen it.

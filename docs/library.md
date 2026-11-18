@@ -33,7 +33,7 @@ A recording gets the id `rec-` plus 16 hex digits of the hash of its audio, and 
 
 `auth`, `captions` and `cookies_first` apply to YouTube only, and `None` means the default (`captions=True`, `cookies_first=False`, the configured auth source). Giving any of them for a file raises `ValueError`.
 
-`llm` is any `LLMClient`. Without one, the configured `[llm]` provider applies, ChatGPT by default, and `process` raises `ConfigError` before any work until `ytverbatim login` has run once. `interactive=True` lets the ChatGPT provider open a browser to sign in again, for an application with a person at the screen; the library never does so otherwise.
+`llm` is any `LLMClient`. Without one, the configured `[llm]` provider applies, ChatGPT by default, and `process` raises `ConfigError` before any work until `ytverbatim login` has run once. The default model, `gpt-sol`, is resolved at that point to the newest Sol model the ChatGPT plan lists (one catalog request); `LLMOptions(model="gpt-astra")` picks the newest of another family, and a versioned model such as `"gpt-6.1-sol"` pins it with no catalog request. If the catalog cannot be read or lists no model of the family, `ConfigError` is raised with a `fix` that says how to pin a version. `interactive=True` lets the ChatGPT provider open a browser to sign in again, for an application with a person at the screen; the library never does so otherwise.
 
 To run without an LLM, pass `Options(llm=LLMOptions(provider="none"))` (both from `ytverbatim.config`). The LLM stages are then skipped and `Result.notices` says which. `ytverbatim.process(url, options, llm=client)` takes any object that satisfies `LLMClient`.
 
