@@ -127,6 +127,26 @@ def test_http_error_includes_status_and_body() -> None:
         client(StubOpener(raises=error)).complete(LLMRequest(system="", user="Hi"))
 
 
+@pytest.mark.parametrize(
+    ("status", "transient"),
+    [(500, True), (502, True), (503, True), (504, True), (501, False), (429, False), (401, False), (400, False)],
+)
+def test_only_overload_and_gateway_statuses_are_transient(status: int, transient: bool) -> None:
+    error = urllib.error.HTTPError(f"{BASE}/chat/completions", status, "x", Message(), io.BytesIO(b"busy"))
+    with pytest.raises(LLMUnavailableError) as raised:
+        client(StubOpener(raises=error)).complete(LLMRequest(system="", user="Hi"))
+    assert raised.value.transient is transient
+
+
+@pytest.mark.parametrize(
+    "error", [TimeoutError("timed out"), urllib.error.URLError("refused"), ConnectionResetError("reset")]
+)
+def test_timeouts_and_network_errors_are_not_transient(error: Exception) -> None:
+    with pytest.raises(LLMUnavailableError) as raised:
+        client(StubOpener(raises=error)).complete(LLMRequest(system="", user="Hi"))
+    assert raised.value.transient is False
+
+
 @pytest.mark.parametrize("body", [b"<html>", b'{"choices": []}', b"{}"])
 def test_unusable_response_is_unavailable(body: bytes) -> None:
     with pytest.raises(LLMUnavailableError):

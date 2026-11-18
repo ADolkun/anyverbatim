@@ -1,7 +1,8 @@
 """OpenAI models on the user's ChatGPT plan: one streamed `/v1/responses` call per completion, under one deadline.
 
-The access token comes from `chatgpt_auth` (`ytverbatim login`) and is refreshed before each request. There are
-no automatic retries: a failure raises, and retry policy belongs to the caller.
+The access token comes from `chatgpt_auth` (`ytverbatim login`) and is refreshed before each request. The client
+itself never retries: a failure raises, and retry policy belongs to the caller. It marks the server-side overloads
+and errors that pass by themselves as `transient`, which is what `llm.retry` acts on.
 """
 
 import json
@@ -17,6 +18,7 @@ from ytverbatim.llm.chatgpt_auth import LOGIN_COMMAND, ChatGPTAuthError
 from ytverbatim.llm.chatgpt_http import Opener, Response, error_code, https_open, safe_code
 from ytverbatim.llm.jsonio import as_object
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from ytverbatim.llm.retry import TRANSIENT_HTTP_STATUS
 
 PROVIDER = "chatgpt"
 DEFAULT_MODEL = "gpt-sol"
@@ -26,6 +28,7 @@ RESPONSES_URL = "https://api.openai.com/v1/responses"
 _UNAUTHORIZED = 401
 _RATE_LIMITED = 429
 _SERVER_ERROR = 500
+_TRANSIENT_CODES = frozenset({"server_is_overloaded", "server_error"})
 
 
 class ChatGPTClient:
@@ -174,7 +177,7 @@ class ChatGPTClient:
             message = f"OpenAI is unavailable ({status})"
         else:
             message = f"the request was refused ({status})"
-        return LLMUnavailableError(f"{self.id}: {message}. No retry was attempted.", code=code)
+        return LLMUnavailableError(f"{self.id}: {message}", code=code, transient=exc.code in TRANSIENT_HTTP_STATUS)
 
     def _read(self, response: Response, deadline: float) -> tuple[str, Usage]:
         done_items: dict[int, dict[str, object]] = {}
@@ -197,7 +200,9 @@ class ChatGPTClient:
                 details = as_object(event.get("error"))
                 code = safe_code(event.get("code")) or safe_code(details.get("code")) or safe_code(details.get("type"))
                 raise LLMUnavailableError(
-                    f"{self.id}: the stream reported an error ({code or 'no code'}); usage unknown", code=code
+                    f"{self.id}: the stream reported an error ({code or 'no code'}); usage unknown",
+                    code=code,
+                    transient=code in _TRANSIENT_CODES,
                 )
         raise LLMUnavailableError(f"{self.id}: the stream ended without response.completed; usage unknown")
 
@@ -285,10 +290,11 @@ class ChatGPTClient:
         code = safe_code(as_object(body.get("error")).get("code"))
         usage = _usage(body)
         return LLMUnavailableError(
-            f"{self.id}: the response failed ({code or 'no code'}). No retry was attempted.",
+            f"{self.id}: the response failed ({code or 'no code'})",
             responded=usage is not None,
             usage=usage,
             code=code,
+            transient=code in _TRANSIENT_CODES,
         )
 
     def _incomplete(self, body: Mapping[str, object]) -> LLMOutputError:

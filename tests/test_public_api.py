@@ -133,7 +133,12 @@ DATACLASSES: dict[str, list[str]] = {
         "reused: tuple[str, ...]",
         "notices: tuple[str, ...]",
     ],
-    "ProgressEvent": ["id: str", f"stage: Literal[{', '.join(map(repr, EXPECTED_STAGES))}]", "detail: str = ''"],
+    "ProgressEvent": [
+        "id: str",
+        f"stage: Literal[{', '.join(map(repr, EXPECTED_STAGES))}]",
+        "detail: str = ''",
+        "retry: bool = False",
+    ],
     "YouTubeRef": ["kind: RefKind", "id: str", "url: str"],
     "Usage": ["input_tokens: int", "output_tokens: int"],
     "LLMRequest": [
@@ -246,6 +251,8 @@ def test_the_error_attributes_an_application_reads_are_pinned() -> None:
         1,
     )
     assert errors.UnavailableError("live").kind == "live"
+    assert errors.LLMUnavailableError("busy").transient is False
+    assert errors.LLMUnavailableError("busy", transient=True).transient is True
 
 
 def test_load_options_and_the_config_module_are_pinned() -> None:

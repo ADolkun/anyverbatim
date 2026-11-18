@@ -208,8 +208,23 @@ def test_a_failed_response_carries_its_code_and_is_not_retried(signed_in: list[s
         client(opener).complete(REQUEST)
     assert raised.value.code == "server_is_overloaded"
     assert raised.value.responded is True and raised.value.usage == Usage(120, 45)
+    assert raised.value.transient is True
     assert "secret server detail" not in str(raised.value)
     assert len(opener.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("code", "transient"),
+    [("server_is_overloaded", True), ("server_error", True), ("model_not_found", False), (None, False)],
+)
+def test_a_failed_response_is_transient_only_for_a_server_side_code(
+    signed_in: list[str], code: str | None, transient: bool
+) -> None:
+    error = {"code": code} if code else {}
+    failed = {"type": "response.failed", "response": {"status": "failed", "error": error, "usage": USAGE}}
+    with pytest.raises(LLMUnavailableError) as raised:
+        client(stream(sse(failed))).complete(REQUEST)
+    assert raised.value.transient is transient
 
 
 def test_an_incomplete_response_is_an_output_error_with_its_reason(signed_in: list[str]) -> None:
@@ -235,6 +250,22 @@ def test_an_error_event_raises_with_its_code(signed_in: list[str], event: dict[s
         client(stream(sse(event))).complete(REQUEST)
     assert raised.value.code == "rate_limit_exceeded"
     assert raised.value.responded is False and raised.value.usage is None
+    assert raised.value.transient is False
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "error", "code": "server_is_overloaded", "message": "busy"},
+        {"type": "error", "error": {"type": "server_error", "code": "server_is_overloaded", "message": "x"}},
+        {"type": "error", "error": {"type": "server_error", "message": "x"}},
+    ],
+)
+def test_a_server_overload_error_event_is_transient(signed_in: list[str], event: dict[str, object]) -> None:
+    with pytest.raises(LLMUnavailableError) as raised:
+        client(stream(sse(event))).complete(REQUEST)
+    assert raised.value.transient is True
+    assert raised.value.responded is False and raised.value.usage is None
 
 
 def test_a_stream_that_ends_without_completing_raises(signed_in: list[str]) -> None:
@@ -242,6 +273,7 @@ def test_a_stream_that_ends_without_completing_raises(signed_in: list[str]) -> N
     with pytest.raises(LLMUnavailableError, match=r"ended without response\.completed") as raised:
         client(stream(lines)).complete(REQUEST)
     assert raised.value.responded is False
+    assert raised.value.transient is False
 
 
 def test_a_malformed_event_raises(signed_in: list[str]) -> None:
@@ -270,8 +302,9 @@ def test_a_read_that_times_out_is_the_deadline(signed_in: list[str]) -> None:
     def stall() -> None:
         raise TimeoutError
 
-    with pytest.raises(LLMUnavailableError, match="no complete response within"):
+    with pytest.raises(LLMUnavailableError, match="no complete response within") as raised:
         client(stream([], on_readline=stall)).complete(REQUEST)
+    assert raised.value.transient is False
 
 
 @pytest.mark.parametrize(
@@ -280,6 +313,7 @@ def test_a_read_that_times_out_is_the_deadline(signed_in: list[str]) -> None:
         (401, {"error": {"code": "invalid_token", "message": "secret"}}, "ytverbatim login", "invalid_token"),
         (429, {"error": {"code": "usage_limit_reached"}}, "rate limit", "usage_limit_reached"),
         (503, None, "OpenAI is unavailable", None),
+        (501, None, "OpenAI is unavailable", None),
         (400, {"error": {"type": "invalid_request_error", "message": "secret"}}, "refused", "invalid_request_error"),
     ],
 )
@@ -293,6 +327,27 @@ def test_http_errors_raise_without_a_retry(
     assert f"HTTP {status}" in str(raised.value)
     assert "secret" not in str(raised.value)
     assert len(opener.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "transient"),
+    [
+        (500, True),
+        (502, True),
+        (503, True),
+        (504, True),
+        (501, False),
+        (505, False),
+        (429, False),
+        (401, False),
+        (404, False),
+    ],
+)
+def test_only_overload_and_gateway_statuses_are_transient(signed_in: list[str], status: int, transient: bool) -> None:
+    opener = FakeOpener({f"POST {RESPONSES_URL}": http_error(status, None)})
+    with pytest.raises(LLMUnavailableError) as raised:
+        client(opener).complete(REQUEST)
+    assert raised.value.transient is transient
 
 
 def test_a_missing_sign_in_fails_before_any_request() -> None:

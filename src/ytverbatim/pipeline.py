@@ -85,6 +85,7 @@ from ytverbatim.errors import (
 )
 from ytverbatim.llm import check_ready, client_from_options
 from ytverbatim.llm.protocol import LLMClient
+from ytverbatim.llm.retry import RetryingClient
 from ytverbatim.mlx_worker import without_wav
 from ytverbatim.render import render_markdown
 from ytverbatim.stages import (
@@ -201,11 +202,16 @@ LLM_STAGES: Final[frozenset[ProgressStage]] = frozenset({"punctuate", "correct",
 
 @dataclass(frozen=True)
 class ProgressEvent:
-    """One step of a source's run: `id` is the video or recording id, and `stage` is one of `STAGES`."""
+    """One step of a source's run: `id` is the video or recording id, and `stage` is one of `STAGES`.
+
+    `retry` marks a notice that the stage's LLM call failed transiently and will be repeated, not a stage starting;
+    `detail` then says why and when.
+    """
 
     id: str
     stage: ProgressStage
     detail: str = ""
+    retry: bool = False
 
 
 @dataclass(frozen=True)
@@ -988,10 +994,10 @@ class _Trace:
     # session names its own finer stages (`info`, `audio`, ...) on the errors it records.
     stage: str | None = None
 
-    def emit(self, stage: ProgressStage, detail: str = "") -> None:
+    def emit(self, stage: ProgressStage, detail: str = "", *, retry: bool = False) -> None:
         if stage != "fetch":
             self.stage = stage
-        self.emit_event(ProgressEvent(self.source_id, stage, detail))
+        self.emit_event(ProgressEvent(self.source_id, stage, detail, retry))
 
 
 @dataclass(frozen=True)
@@ -1468,8 +1474,15 @@ class _Transcription:
 
         return self._stage("normalize", key, _Stretches, compute)
 
-    def _punctuate(self, previous: _Stretches, language: str) -> _TextResult:
+    def _llm(self, stage: ProgressStage) -> LLMClient | None:
+        """Return the configured client, retrying transient server failures and reporting each retry as progress."""
         llm = self.settings.llm
+        if llm is None:
+            return None
+        return RetryingClient(llm, notify=lambda message: self.trace.emit(stage, message, retry=True))
+
+    def _punctuate(self, previous: _Stretches, language: str) -> _TextResult:
+        llm = self._llm("punctuate")
         inputs: dict[str, JsonValue] = {"text": _text_key(previous.stretches), "llm": self.settings.llm_id}
         _mark_conversation(inputs, previous.stretches)
         key = _key("punctuate", inputs)
@@ -1509,7 +1522,7 @@ class _Transcription:
         return self._stage("punctuate", key, _TextResult, compute, self.settings.llm_id or "")
 
     def _correct(self, previous: _TextResult, language: str) -> tuple[_TextResult, str | None]:
-        llm = self.settings.llm if self.settings.text.correct else None
+        llm = self._llm("correct") if self.settings.text.correct else None
         if llm is None:
             return _TextResult(stretches=previous.stretches), None
         context = self.prepared.correction()
@@ -1540,7 +1553,7 @@ class _Transcription:
         return self._stage("correct", _key("correct", inputs), _TextResult, compute, llm.id), llm.id
 
     def _numeric(self, previous: _TextResult, source: Transcribed, second: numeric.SecondOpinion | None) -> _TextResult:
-        llm = self.settings.llm
+        llm = self._llm("numeric")
         captions = self.prepared.captions
         evidence_tracks = _evidence_tracks(captions or (), source)
         inputs: dict[str, JsonValue] = {

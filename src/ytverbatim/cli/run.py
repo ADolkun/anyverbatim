@@ -230,7 +230,7 @@ def _run_files(
             out=root,
             force=force,
             interactive=interactive(),
-            progress=_print_progress,
+            progress=lambda event: _print_progress(event, quiet=quiet),
             on_video=lambda result: _print_result(result, quiet=quiet),
             provenance=memos,
         )
@@ -299,7 +299,10 @@ def _print_skipped(skipped: list[voicememos.Memo]) -> None:
         )
 
 
-def _print_progress(event: pipeline.ProgressEvent) -> None:
+def _print_progress(event: pipeline.ProgressEvent, *, quiet: bool = False) -> None:
+    # A retry that later succeeds is not worth a cron mail; one that is given up on ends in a printed error.
+    if quiet and event.retry:
+        return
     detail = f" {event.detail}" if event.detail else ""
     click.echo(f"… {event.id}  {event.stage}{detail}", err=True)
 

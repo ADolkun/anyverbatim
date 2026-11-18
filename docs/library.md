@@ -17,7 +17,7 @@ Everything in `ytverbatim.__all__`, plus the modules `ytverbatim.errors`, `ytver
 | `load_document`, `ContextDocument` | Read and model `context.json` (contract 2.0); the sub-models are in `ytverbatim.contract`. |
 | `Options`, `AuthOptions`, `YtdlpOptions`, `AsrOptions`, `TextOptions`, `DiarizeOptions`, `LLMOptions` | The options; also in `ytverbatim.config`. |
 | `LLMClient`, `LLMRequest`, `LLMResponse`, `Usage` | The protocol an injected LLM implements. |
-| `ProgressEvent` | What the `progress` callback receives: `id`, `stage`, `detail`. |
+| `ProgressEvent` | What the `progress` callback receives: `id`, `stage`, `detail` and `retry`. |
 | `STAGES`, `ProgressStage`, `LLM_STAGES` | The stage names in run order, their type, and the frozenset of stages that may call your `LLMClient`. |
 | `quantity_tokens`, `QToken`, `QKind` | The quantity tokenizer that numeric verification uses. |
 | `SUPPORTED_BROWSERS`, `__version__` | The browsers `--auth` accepts, and the installed version. |
@@ -37,7 +37,7 @@ A recording gets the id `rec-` plus 16 hex digits of the hash of its audio, and 
 
 To run without an LLM, pass `Options(llm=LLMOptions(provider="none"))` (both from `ytverbatim.config`). The LLM stages are then skipped and `Result.notices` says which. `ytverbatim.process(url, options, llm=client)` takes any object that satisfies `LLMClient`.
 
-`progress` is called with a `ProgressEvent` as each stage starts. `id` is the video or recording id, and `stage` is one of the names below. `ytverbatim.STAGES` lists the stage names in run order (typed as `ytverbatim.ProgressStage`), and `ytverbatim.LLM_STAGES` is the frozenset of those that may call your `LLMClient` (`punctuate`, `correct`, `numeric`); both are API.
+`progress` is called with a `ProgressEvent` as each stage starts. It is also called with `retry=True` when an LLM call of that stage failed transiently and will be repeated; `detail` then reads like `LLM unavailable (server_is_overloaded); retry 1/4 in 17s`. Such an event is not a stage starting, so a consumer that counts stages skips it. `id` is the video or recording id, and `stage` is one of the names below. `ytverbatim.STAGES` lists the stage names in run order (typed as `ytverbatim.ProgressStage`), and `ytverbatim.LLM_STAGES` is the frozenset of those that may call your `LLMClient` (`punctuate`, `correct`, `numeric`); both are API.
 
 | Stage | When |
 |---|---|
@@ -102,6 +102,8 @@ Every error `process` and `expand` raise on purpose subclasses `YtverbatimError`
 - `stage`: where the failure happened, or `None` when unknown. While fetching a video it is `info` (the metadata request), `captions`, `audio` or `video`; after the fetch it is the stage that was running (`asr`, `punctuate`, `correct`, ...). A failed video download is `stage == "video"`, and so is every failure of the video-only fetch that a finished document needs when the video track is requested later, so a caller can retry without the video track.
 
 `process` raises the source's own error as it happened: `AuthError`, `UnavailableError`, `YtDlpError`, `MediaValidationError` (a recording that cannot be read, for one), `ProcTimeout`, `EngineError`, `LLMError` or `ContractError`, with `fix` set where a remedy exists.
+
+`LLMUnavailableError` has a `transient` attribute, `False` by default. A provider sets it for a server-side overload or error that passes by itself (the ChatGPT `server_is_overloaded` and HTTP 500, 502, 503 and 504, for one), and `process` then repeats that LLM call up to four more times, waiting about 15, 30, 60 and 120 seconds with jitter, before it raises the original error with the number of attempts in its message. An `LLMClient` you pass as `llm=` opts in by raising `LLMUnavailableError(..., transient=True)`; every other error, `LLMOutputError` included, is raised on the first attempt. Each retry repeats a call that stored nothing on the provider's side, so only raise it for a failure that leaves the call safe to send again.
 
 `BatchStopError` (`signal`, `until`) means YouTube asked to back off; the cooldown is already written, and every later request refuses until it ends. `process` and `expand` both raise it. `AuthError` carries an `AuthState`, and `YtDlpError` its primary `Signal`; both enums are importable from `ytverbatim.errors`. Bad input raises `ValueError`, and a missing engine extra `DependencyError`.
 

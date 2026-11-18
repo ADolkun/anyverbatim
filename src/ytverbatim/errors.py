@@ -169,7 +169,23 @@ class LLMError(YtverbatimError):
 
 
 class LLMUnavailableError(LLMError):
-    pass
+    """The LLM could not be used. `transient` marks a server-side overload or error that passes by itself.
+
+    Only the provider knows its own codes, so it sets `transient`; the pipeline retries such a call a few times with
+    backoff before giving up. A library `LLMClient` opts in by raising this with `transient=True`.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        responded: bool = False,
+        usage: "Usage | None" = None,
+        code: str | None = None,
+        transient: bool = False,
+    ) -> None:
+        super().__init__(message, responded=responded, usage=usage, code=code)
+        self.transient = transient
 
 
 class LLMOutputError(LLMError):

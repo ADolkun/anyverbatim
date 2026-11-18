@@ -13,6 +13,7 @@ from collections.abc import Callable
 from ytverbatim.errors import ConfigError, LLMOutputError, LLMUnavailableError
 from ytverbatim.llm.jsonio import as_object
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Readiness, Usage
+from ytverbatim.llm.retry import TRANSIENT_HTTP_STATUS
 
 PROVIDER = "openai-compat"
 _READINESS_TIMEOUT_S = 10.0
@@ -159,7 +160,9 @@ def _send(opener: Opener, request: urllib.request.Request, timeout_s: float, lab
         return opener(request, timeout_s)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")[:_BODY_PREVIEW].strip()
-        raise LLMUnavailableError(f"{label}: HTTP {exc.code} from {request.full_url}: {detail}") from exc
+        raise LLMUnavailableError(
+            f"{label}: HTTP {exc.code} from {request.full_url}: {detail}", transient=exc.code in TRANSIENT_HTTP_STATUS
+        ) from exc
     except TimeoutError as exc:
         raise LLMUnavailableError(f"{label}: no response from {request.full_url} within {timeout_s:g}s") from exc
     except urllib.error.URLError as exc:
