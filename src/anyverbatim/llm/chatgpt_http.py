@@ -191,7 +191,7 @@ def error_code(exc: urllib.error.HTTPError) -> str | None:
     """Read the provider's error code from an error body: `{"error": "code"}` or `{"error": {"code"|"type": ...}}`."""
     try:
         body: object = json.loads(exc.read(_ERROR_BODY_LIMIT))
-    except (OSError, ValueError, http.client.HTTPException):
+    except OSError, ValueError, http.client.HTTPException:
         return None
     finally:
         exc.close()

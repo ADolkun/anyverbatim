@@ -48,9 +48,6 @@ def run(
     memory_watch: MemoryWatch | None = None,
 ) -> ProcResult:
     command = Path(argv[0]).name
-    if memory_watch is not None and stdin is not None:
-        # The watch retries communicate(); on Python 3.12 a retry stops writing the input, so the child never sees EOF.
-        raise ValueError("a memory watch cannot be combined with stdin")
     started = time.monotonic()
     with _spawning(command, cwd):
         # Own session so a timeout can kill grandchildren (node, ffmpeg) along with the child.
@@ -70,7 +67,7 @@ def run(
         if memory_watch is None:
             stdout, stderr = child.communicate(stdin, timeout=timeout_s)
         else:
-            stdout, stderr = _watched(child, command, started + timeout_s, memory_watch)
+            stdout, stderr = _watched(child, command, started + timeout_s, memory_watch, stdin)
     except subprocess.TimeoutExpired:
         _kill_group(child)
         raise ProcTimeout(command, timeout_s) from None
@@ -80,15 +77,20 @@ def run(
     return ProcResult(child.returncode, stdout, stderr, time.monotonic() - started)
 
 
-def _watched(child: subprocess.Popen[str], command: str, deadline: float, watch: MemoryWatch) -> tuple[str, str]:
+def _watched(
+    child: subprocess.Popen[str], command: str, deadline: float, watch: MemoryWatch, stdin: str | None
+) -> tuple[str, str]:
+    pending = stdin
     while True:
         remaining = deadline - time.monotonic()
         try:
-            stdout, stderr = child.communicate(timeout=max(0.0, min(watch.poll_s, remaining)))
+            stdout, stderr = child.communicate(pending, timeout=max(0.0, min(watch.poll_s, remaining)))
             return stdout, stderr
         except subprocess.TimeoutExpired:
             if remaining <= watch.poll_s:
                 raise
+        # A retried communicate() keeps writing the first call's input and refuses to be handed it again.
+        pending = None
         _, breach = _check(child, command, watch)
         if breach is not None:
             raise breach
@@ -171,7 +173,7 @@ def background(
     cwd: Path | None = None,
     pass_fds: Sequence[int] = (),
     term_grace_s: float = DEFAULT_TERM_GRACE_S,
-) -> Generator[Background, None, None]:
+) -> Generator[Background]:
     """Run a long-lived child (a server) under `memory_watch` for the duration of the block.
 
     The child gets its own process group, `/dev/null` as stdin, and stdout and stderr appended to `log`. A watcher
@@ -215,7 +217,7 @@ def background(
 
 
 @contextlib.contextmanager
-def exit_on_signals() -> Generator[None, None, None]:
+def exit_on_signals() -> Generator[None]:
     """Raise `SystemExit` on SIGTERM and SIGHUP inside the block, so `finally` blocks run.
 
     By default both end the process on the spot, which skips them: closing the terminal tab of a long run would
@@ -265,7 +267,7 @@ def _check(
 
 
 @contextlib.contextmanager
-def _spawning(command: str, cwd: Path | None) -> Generator[None, None, None]:
+def _spawning(command: str, cwd: Path | None) -> Generator[None]:
     try:
         yield
     except FileNotFoundError as exc:

@@ -32,7 +32,7 @@ class Index:
         self._speakers: dict[str, tuple[str, ...]] = {}
 
     @classmethod
-    def scan(cls, root: Path) -> "Index":
+    def scan(cls, root: Path) -> Index:
         index = cls(root)
         for context in sorted(root.glob(f"rec-*/{_CONTEXT_JSON}")):
             if not ids.is_recording_id(context.parent.name):

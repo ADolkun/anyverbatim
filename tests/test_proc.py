@@ -209,14 +209,12 @@ def test_memory_watch_collects_output_across_polls(script: Path) -> None:
     assert result.stderr == "é" * 300_000
 
 
-def test_memory_watch_refuses_stdin(script: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def no_spawn(*_args: Any, **_kwargs: Any) -> Any:
-        raise AssertionError("must refuse before starting a process")
-
-    monkeypatch.setattr(subprocess, "Popen", no_spawn)
+def test_memory_watch_feeds_stdin_across_polls(script: Path) -> None:
+    # Larger than a pipe buffer and read only after several polls, so the write spans retried communicate() calls.
+    data = "abc" * 400_000
     watch = proc.MemoryWatch(1 << 40, poll_s=0.1, available_percent=_plenty)
-    with pytest.raises(ValueError, match="stdin"):
-        proc.run([sys.executable, str(script), "slow-echo"], timeout_s=30, stdin="abc", memory_watch=watch)
+    result = proc.run([sys.executable, str(script), "slow-echo"], timeout_s=30, stdin=data, memory_watch=watch)
+    assert result.stdout == f"{len(data)}:abc"
 
 
 def test_memory_watch_still_times_out(script: Path, tmp_path: Path) -> None:

@@ -87,7 +87,7 @@ def start_cooldown(signal: Signal, now: datetime) -> Cooldown:
     """Persist a cooldown of 1 h, doubled (up to 24 h) when the previous one ended less than 24 h ago."""
     try:
         previous = read_cooldown()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         previous = None
     hours = COOLDOWN_BASE / timedelta(hours=1)
     until = now + COOLDOWN_BASE

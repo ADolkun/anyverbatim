@@ -129,9 +129,9 @@ class _Attempt:
 
 
 def _redecode(
-    audio: "NDArray[np.float32]",
+    audio: NDArray[np.float32],
     first: _Attempt,
-    decode: Callable[["NDArray[np.float32]"], RawChunk],
+    decode: Callable[[NDArray[np.float32]], RawChunk],
     join: Callable[[str, str], str],
 ) -> _Attempt | None:
     """Decode `audio` again as two halves and return the better attempt; None when it is too short to split."""
@@ -163,7 +163,7 @@ def _repair_windows(engine: Engine, chunk: ChunkInput, first: _Attempt, duration
     if not any(_fails(attempt) for attempt in own):
         return _verdict(first)
 
-    def decode(audio: "NDArray[np.float32]") -> RawChunk:
+    def decode(audio: NDArray[np.float32]) -> RawChunk:
         # The call's language even when it had no hint: the call detected it once, and a window must not re-detect.
         half = engine.transcribe_window(audio, language=raw.language)
         # Judged on its words, as the original window is, because the words are what the splice writes.
@@ -278,7 +278,7 @@ def _max_compression_ratio(raw: RawChunk, duration: float) -> float:
     return max((compression_ratio("".join(texts)) for texts in windows), default=0.0)
 
 
-def _split_point(audio: "NDArray[np.float32]") -> int | None:
+def _split_point(audio: NDArray[np.float32]) -> int | None:
     """Sample index of the quietest 100 ms frame in the middle 40% of the audio, the one nearest the middle on ties."""
     if len(audio) < MIN_REDECODE_S * SAMPLE_RATE:
         return None

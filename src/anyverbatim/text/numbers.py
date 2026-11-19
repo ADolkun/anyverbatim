@@ -376,7 +376,7 @@ def _cn2an_value(integer: str) -> Decimal | None:
     # unit it wants is missing from its table, as after 十 (七十六十五, 一万十五).
     try:
         return Decimal(str(cn2an.cn2an(integer, "smart")))
-    except (ValueError, KeyError, InvalidOperation):
+    except ValueError, KeyError, InvalidOperation:
         return None
 
 

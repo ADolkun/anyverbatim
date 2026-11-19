@@ -84,7 +84,7 @@ def redact(text: str) -> str:
 
 
 @contextlib.contextmanager
-def _ytdlp_lock() -> Generator[None, None, None]:
+def _ytdlp_lock() -> Generator[None]:
     fd = os.open(paths.locks_dir() / "ytdlp.lock", os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)

@@ -234,7 +234,7 @@ def _date(value: object) -> datetime | None:
         return None
     try:
         return datetime.fromtimestamp(seconds + _APPLE_EPOCH, UTC)
-    except (OverflowError, ValueError, OSError):
+    except OverflowError, ValueError, OSError:
         return None
 
 
@@ -252,7 +252,7 @@ class MemoCache:
         # A cache only saves hashing, so an unreadable file is the same as an empty one.
         try:
             raw = json.loads(self._file().read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except OSError, ValueError:
             return {}
         return {k: v for k, v in raw.items() if isinstance(v, dict)} if isinstance(raw, dict) else {}
 
@@ -352,9 +352,9 @@ def _remember(memo: Memo, cache: MemoCache, recording_id: RecordingId) -> str | 
     """
     try:
         return cache.resolve(memo, recording_id)
-    except (DependencyError, EngineMemoryError):
+    except DependencyError, EngineMemoryError:
         raise
-    except (AnyverbatimError, ValueError, OSError):
+    except AnyverbatimError, ValueError, OSError:
         return None
 
 

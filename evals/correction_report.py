@@ -126,7 +126,7 @@ class ErrorChange(_Frozen):
     def removed_share(self) -> float | None:
         return (self.before - self.after) / self.before if self.before else None
 
-    def plus(self, other: "ErrorChange") -> "ErrorChange":
+    def plus(self, other: ErrorChange) -> ErrorChange:
         return ErrorChange(
             before=self.before + other.before, after=self.after + other.after, units=self.units + other.units
         )

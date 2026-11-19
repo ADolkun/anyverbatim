@@ -76,7 +76,7 @@ class NemotronDiarizer:
             )
         self._model = model
 
-    def diarize(self, audio: "NDArray[np.float32]") -> RawDiarization:
+    def diarize(self, audio: NDArray[np.float32]) -> RawDiarization:
         if self._model is None:
             raise RuntimeError("load() must be called before diarize()")
         np = importlib.import_module("numpy")

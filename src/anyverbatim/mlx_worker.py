@@ -183,7 +183,7 @@ def run[R: Request, M: BaseModel](
 
 
 @contextlib.contextmanager
-def mlx_lock() -> Generator[int, None, None]:
+def mlx_lock() -> Generator[int]:
     """Hold the machine-wide MLX lock; two models at once would fight over unified memory.
 
     Yields the locked descriptor. A child given a copy (`pass_fds`) keeps the lock held until it exits, even if this
@@ -230,7 +230,7 @@ def stored_fingerprint(out: Path) -> JsonValue | None:
     """Return the fingerprint of the request whose output `out` holds, or None if it holds none readable."""
     try:
         stored: JsonValue = json.loads((out / FINGERPRINT_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return stored
 
@@ -251,7 +251,7 @@ def without_wav(fingerprint: JsonValue) -> JsonValue:
 def _failure(label: str, out: Path, returncode: int, stderr: str) -> str:
     try:
         error = WorkerError.model_validate_json((out / ERROR_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return f"{label} worker exited with {returncode} and left no error report\n{stderr_preview(stderr)}"
     return f"{label} worker failed ({error.type}): {error.message}"
 

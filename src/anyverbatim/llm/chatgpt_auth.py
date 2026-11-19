@@ -5,7 +5,6 @@ signing in again reuses the registration. Tokens are never printed or logged, an
 """
 
 import base64
-import binascii
 import errno
 import fcntl
 import hashlib
@@ -24,7 +23,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import webbrowser
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -141,7 +140,7 @@ class Account:
         opened = self.earliest_refresh_at > 0 and now >= self.earliest_refresh_at
         return opened or self.expires_at <= now + _REFRESH_MARGIN_S
 
-    def signed_out(self) -> "Account":
+    def signed_out(self) -> Account:
         return Account(self.subject, self.email)
 
 
@@ -371,7 +370,7 @@ def _require_dir(*, create: bool) -> Path | None:
 
 
 @contextmanager
-def _locked() -> Iterator[State]:
+def _locked() -> Generator[State]:
     """Yield the stored state under an exclusive lock, for a read-modify-write that `_save` finishes."""
     _require_dir(create=True)
     try:
@@ -408,7 +407,7 @@ def _read(root: Path | None) -> State:
         if len(raw) > _MAX_STORE_BYTES:
             raise ValueError("oversized")
         return _decode(json.loads(raw))
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         raise ChatGPTAuthError(
             f"the ChatGPT credential store is invalid; remove {paths.chatgpt_credentials_file()} and run "
             f"`{LOGIN_COMMAND}`",
@@ -505,7 +504,7 @@ def _request_json(request: urllib.request.Request, opener: Opener) -> dict[str, 
         found = error_code(exc)
         code = found if found in _KNOWN_ERRORS else "request_failed"
         raise ChatGPTAuthError(f"OpenAI refused the sign-in request (HTTP {exc.code}, {code})", code=code) from None
-    except (urllib.error.URLError, OSError):
+    except urllib.error.URLError, OSError:
         raise ChatGPTAuthError("could not reach OpenAI; the stored sign-in was kept", code="network_error") from None
     try:
         body = response.read()
@@ -578,7 +577,7 @@ def id_token_claims(token: str, client_id: str, now: float, *, nonce: str | None
         _string(claims, "sub")
         if nonce is not None and not hmac.compare_digest(_string(claims, "nonce"), nonce):
             raise ValueError("nonce")
-    except (ValueError, binascii.Error) as exc:
+    except ValueError as exc:
         claim = exc.args[0] if exc.args and exc.args[0] in ("iss", "aud", "azp", "exp", "sub", "nonce") else "format"
         raise ChatGPTAuthError(
             f"OpenAI returned an ID token that failed its {claim} check; the stored sign-in was kept",
@@ -631,7 +630,7 @@ def _credentials(
         # A window that does not open between issue and expiry is meaningless; refresh then follows expiry alone.
         if not now < earliest < now + expires_in:
             earliest = 0.0
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         raise ChatGPTAuthError(
             "OpenAI returned unusable credentials; the stored sign-in was kept", code="invalid_credentials"
         ) from None

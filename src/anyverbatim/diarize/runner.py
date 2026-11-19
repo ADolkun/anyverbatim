@@ -72,7 +72,7 @@ def finished(request: DiarizeRequest) -> Path | None:
         return None
     try:
         stored: JsonValue = json.loads((out / FINGERPRINT_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return out if without_wav(stored) == without_wav(request.fingerprint()) else None
 
