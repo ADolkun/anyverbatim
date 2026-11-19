@@ -18,7 +18,8 @@ Lean contract for coding agents. Keep it short; link to docs for detail.
 
 ## Toolchain
 - Use `uv`; run everything as `uv run ...`. Do not assume a bare `python`.
-- Python 3.14. Ruff (lint and format) and pyrefly run strict; tests use pytest.
+- Python 3.14. Ruff checks every rule (each opt-out in `pyproject.toml` says why) and formats; pyrefly runs strict on source and tests, and its warnings fail too. Pytest runs in strict mode with warnings as errors.
+- Fix a finding rather than silence it. When a suppression is right, name the code (`# noqa: CODE`, `# pyrefly: ignore[kind]`) and say why if it isn't obvious.
 - macOS has no `timeout` or `gtimeout`; do not use them.
 - Source lives in `src/anyverbatim/`; the public API must stay typed (`py.typed`).
 
