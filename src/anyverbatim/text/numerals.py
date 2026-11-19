@@ -41,13 +41,13 @@ _DIGITS = frozenset("0123456789０１２３４５６７８９")
 _LATIN = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 # Letters and digits, half and full width, that digits written next to them would run into.
 _ALNUM = frozenset(_LATIN) | frozenset(chr(ord(ch) + 0xFEE0) for ch in _LATIN) | _DIGITS
-_NUMERALS = frozenset(numbers._NUMERALS)
+_NUMERALS = frozenset(numbers.NUMERALS)
 # GB/T 4.2.1: dates of the lunar calendar keep Chinese numerals. 初 is left out: 初一 to 初十 are single numerals, which
 # are no quantity anyway, while 年初三个月 is "the first three months of the year".
 _LUNAR_MARKERS = ("农历", "阴历", "農曆", "陰曆", "腊月", "臘月", "正月", "大年")
 # Bare numerals before these name a set rather than count: 十一届, 二十大, 二十国集团, 六方会谈.
 _SET_NAME_WORDS = frozenset("届屆大国國方")
-_COUNT_CLASSIFIERS = frozenset(numbers._COUNT_CLASSIFIERS)
+_COUNT_CLASSIFIERS = frozenset(numbers.COUNT_CLASSIFIERS)
 # 一块 is "together" or "a piece" (一块去, 一块蛋糕) far more often than one yuan, unless 钱 follows.
 _PIECE = frozenset("块塊")
 _MONEY_AFTER_PIECE = frozenset("钱錢")
@@ -98,7 +98,7 @@ def conversions(text: str, *, allowed: Callable[[Conversion], bool] | None = Non
     `allowed` refuses rewrites the caller cannot carry (a figure its timed words only partly cover). A range (三到五个,
     下午两点到四点, 三点四十) is rewritten whole or not at all, so a refused or dropped end keeps the others Chinese.
     """
-    quantities = numbers._quantities(text)
+    quantities = numbers.quantities(text)
     starts = {quantity.token.char_start for quantity in quantities}
     covered = {i for quantity in quantities for i in range(quantity.token.char_start, quantity.token.char_end)}
     lunar = _lunar(text, quantities)
@@ -132,9 +132,9 @@ def conversions(text: str, *, allowed: Callable[[Conversion], bool] | None = Non
                 del candidates[index]
 
 
-def _conversion(text: str, quantity: numbers._Quantity, starts: set[int], *, points: bool) -> Conversion | None:
+def _conversion(text: str, quantity: numbers.Quantity, starts: set[int], *, points: bool) -> Conversion | None:
     token, unit, value = quantity.token, quantity.unit, quantity.value
-    if value is None or quantity.prefix == "第" or unit in numbers._QUARTER_NAMES:
+    if value is None or quantity.prefix == "第" or unit in numbers.QUARTER_NAMES:
         return None
     start, end = quantity.run
     run = text[start:end]
@@ -151,7 +151,7 @@ def _conversion(text: str, quantity: numbers._Quantity, starts: set[int], *, poi
     return (start, end, _figure(value, quantity.magnitude, run))
 
 
-def _stays_chinese(quantity: numbers._Quantity, run: str, after: str, starts: set[int]) -> bool:
+def _stays_chinese(quantity: numbers.Quantity, run: str, after: str, starts: set[int]) -> bool:
     """Whether a Chinese numeral token with a value is still kept as written (plan rules K4, K7, K8, K9)."""
     token, unit = quantity.token, quantity.unit
     continued = after in _NUMERALS and token.char_end not in starts
@@ -161,7 +161,7 @@ def _stays_chinese(quantity: numbers._Quantity, run: str, after: str, starts: se
     return continued or spoken_year or single_one or set_name
 
 
-def _points(text: str, quantities: list[numbers._Quantity], groups: list[list[int]], starts: set[int]) -> set[int]:
+def _points(text: str, quantities: list[numbers.Quantity], groups: list[list[int]], starts: set[int]) -> set[int]:
     """Find the X点 tokens to write in digits; a time or a move at one end of a range carries the others."""
     qualified: set[int] = set()
     for group in groups:
@@ -171,7 +171,7 @@ def _points(text: str, quantities: list[numbers._Quantity], groups: list[list[in
     return qualified
 
 
-def _is_points_or_time(text: str, quantity: numbers._Quantity, starts: set[int]) -> bool:
+def _is_points_or_time(text: str, quantity: numbers.Quantity, starts: set[int]) -> bool:
     token = quantity.token
     before, after = text[: token.char_start], text[token.char_end : token.char_end + 1]
     minutes = token.char_end in starts and after in _NUMERALS
@@ -185,7 +185,7 @@ def _figure(value: str, magnitude: str, run: str) -> str:
     """Write the value in the speaker's largest of 万亿, 亿 and 万 if that takes four digits at most, else plainly."""
     if not magnitude:
         return value
-    coefficient = format((Decimal(value) / Decimal(10) ** numbers._magnitude_exponent(magnitude)).normalize(), "f")
+    coefficient = format((Decimal(value) / Decimal(10) ** numbers.magnitude_exponent(magnitude)).normalize(), "f")
     if len(coefficient.replace(".", "").lstrip("0")) > _MAX_COEFFICIENT_DIGITS:
         return value
     if {"萬", "億"} & set(run):
@@ -193,12 +193,12 @@ def _figure(value: str, magnitude: str, run: str) -> str:
     return coefficient + magnitude
 
 
-def _is_range_end(text: str, quantity: numbers._Quantity) -> bool:
+def _is_range_end(text: str, quantity: numbers.Quantity) -> bool:
     start, end = quantity.run
     return not quantity.prefix and not quantity.unit and end - start == 1 and text[start] in _NUMERALS
 
 
-def _ranges(text: str, quantities: list[numbers._Quantity]) -> list[list[int]]:
+def _ranges(text: str, quantities: list[numbers.Quantity]) -> list[list[int]]:
     """Group the quantities one range joins: ends linked by 到, 至, ～, -, — or 、, and an hour with its minutes."""
     groups: list[list[int]] = []
     for index, quantity in enumerate(quantities):
@@ -206,7 +206,7 @@ def _ranges(text: str, quantities: list[numbers._Quantity]) -> list[list[int]]:
             before = quantities[index - 1]
             gap = text[before.token.char_end : quantity.token.char_start]
             minutes = gap == "" and before.unit == "点" and not quantity.unit and not quantity.prefix
-            if minutes or (len(gap) == 1 and gap in numbers._RANGE_LINKS):
+            if minutes or (len(gap) == 1 and gap in numbers.RANGE_LINKS):
                 groups[-1].append(index)
                 continue
         groups.append([index])
@@ -215,7 +215,7 @@ def _ranges(text: str, quantities: list[numbers._Quantity]) -> list[list[int]]:
 
 def _whole(
     text: str,
-    quantities: list[numbers._Quantity],
+    quantities: list[numbers.Quantity],
     group: list[int],
     candidates: dict[int, Conversion],
     covered: set[int],
@@ -229,7 +229,7 @@ def _whole(
     for link, numeral in ((first.char_start - 1, first.char_start - 2), (last.char_end, last.char_end + 1)):
         if (
             0 <= numeral < len(text)
-            and text[link] in numbers._RANGE_LINKS
+            and text[link] in numbers.RANGE_LINKS
             and text[numeral] in _NUMERALS
             and numeral not in covered
         ):
@@ -237,12 +237,12 @@ def _whole(
     return all(index in candidates or _in_digits(text, quantities[index]) for index in group)
 
 
-def _in_digits(text: str, quantity: numbers._Quantity) -> bool:
+def _in_digits(text: str, quantity: numbers.Quantity) -> bool:
     start, end = quantity.run
     return quantity.value is not None and bool(_DIGITS & set(text[start:end]))
 
 
-def _lunar(text: str, quantities: list[numbers._Quantity]) -> list[bool]:
+def _lunar(text: str, quantities: list[numbers.Quantity]) -> list[bool]:
     """Whether each quantity is part of a lunar date: after a marker, directly or through the date tokens before it."""
     lunar: list[bool] = []
     for index, quantity in enumerate(quantities):

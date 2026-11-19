@@ -96,7 +96,7 @@ def _score(word: Word, d: Diarization) -> _Scored:
                 active_frames[c] += 1
     candidates = [c for c in range(d.channels) if active_frames[c]]
     if not candidates:
-        return _Scored(None, False)
+        return _Scored(None, overlapped=False)
     best = max(candidates, key=lambda c: (sums[c], -c))
     together = [0] * d.channels
     for frame in frames:

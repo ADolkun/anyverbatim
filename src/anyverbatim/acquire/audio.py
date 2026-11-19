@@ -198,43 +198,45 @@ def to_wav16k(
     `stream` is the index among the source's audio streams to convert; None leaves the choice to ffmpeg.
     """
     tmp = destination.with_name(f".{destination.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp")
-    mapping = ["-map", f"0:a:{stream}"] if stream is not None else []
-    cwd, name = ffmpeg_input(source)
     try:
-        result = proc.run(
-            [
-                "ffmpeg",
-                "-nostdin",
-                "-v",
-                "error",
-                "-y",
-                "-i",
-                name,
-                *mapping,
-                "-vn",
-                "-acodec",
-                "pcm_s16le",
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
-                "-f",
-                "wav",
-                # Absolute, since ffmpeg runs in the source's folder.
-                str(tmp.absolute()),
-            ],
-            timeout_s=timeout_s,
-            cwd=cwd,
-        )
-        if result.returncode != 0:
-            raise MediaValidationError(
-                f"ffmpeg could not convert {source.name}\n{stderr_preview(redact(result.stderr))}"
-            )
+        _convert(source, tmp, stream, timeout_s)
         validate_audio(tmp, expected_duration=expected_duration)
-        os.replace(tmp, destination)
+        tmp.replace(destination)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+
+
+def _convert(source: Path, tmp: Path, stream: int | None, timeout_s: float) -> None:
+    mapping = ["-map", f"0:a:{stream}"] if stream is not None else []
+    cwd, name = ffmpeg_input(source)
+    result = proc.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-v",
+            "error",
+            "-y",
+            "-i",
+            name,
+            *mapping,
+            "-vn",
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",
+            "-ac",
+            "1",
+            "-f",
+            "wav",
+            # Absolute, since ffmpeg runs in the source's folder.
+            str(tmp.absolute()),
+        ],
+        timeout_s=timeout_s,
+        cwd=cwd,
+    )
+    if result.returncode != 0:
+        raise MediaValidationError(f"ffmpeg could not convert {source.name}\n{stderr_preview(redact(result.stderr))}")
 
 
 def _download(runner: YtDlpRunner, stage_dir: Path, out_dir: Path, cookies: Path | None, timeout_s: float) -> None:

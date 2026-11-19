@@ -113,7 +113,7 @@ def status_command(*, as_json: bool, refresh: bool, ignore_cooldown: bool) -> No
         options = load_options().llm
     except AnyverbatimError as exc:
         fail_other(exc)
-    report, youtube_error = _youtube(refresh=refresh, ignore_cooldown=ignore_cooldown)
+    youtube = _youtube(refresh=refresh, ignore_cooldown=ignore_cooldown)
     try:
         session: chatgpt_auth.Session | None = chatgpt_auth.session()
         store_error = None
@@ -122,21 +122,17 @@ def status_command(*, as_json: bool, refresh: bool, ignore_cooldown: bool) -> No
     memos = voicememos.probe()
     resolution = _resolve_model(options, session)
     if as_json:
-        click.echo(
-            json.dumps(
-                _json(report, youtube_error, session, store_error, options, resolution, memos), ensure_ascii=False
-            )
-        )
+        click.echo(json.dumps(_json(youtube, session, store_error, options, resolution, memos), ensure_ascii=False))
     else:
         _print_rows(
             [
-                _youtube_row(report, youtube_error),
+                _youtube_row(youtube),
                 _chatgpt_row(session, store_error),
                 _llm_row(options, resolution),
                 _memos_row(memos),
             ]
         )
-    youtube_usable = report is not None and (report.ok or _anonymous(report))
+    youtube_usable = isinstance(youtube, AuthReport) and (youtube.ok or _anonymous(youtube))
     chatgpt_usable = options.provider != "chatgpt" or (session is not None and session.usable)
     if not (youtube_usable and chatgpt_usable):
         raise SystemExit(EXIT_ATTENTION)
@@ -185,21 +181,20 @@ def _llm_row(options: LLMOptions, resolution: str | ConfigError | None) -> _Row:
     return row
 
 
-def _youtube(*, refresh: bool, ignore_cooldown: bool) -> tuple[AuthReport | None, AuthError | None]:
+def _youtube(*, refresh: bool, ignore_cooldown: bool) -> AuthReport | AuthError:
     try:
         source = resolve_source()
-        return preflight(source, SubprocessRunner(), refresh=refresh, ignore_cooldown=ignore_cooldown), None
+        return preflight(source, SubprocessRunner(), refresh=refresh, ignore_cooldown=ignore_cooldown)
     except AuthError as exc:
-        return None, exc
+        return exc
     except AnyverbatimError as exc:
         fail_other(exc)
 
 
-def _youtube_row(report: AuthReport | None, error: AuthError | None) -> _Row:
-    if report is None:
-        assert error is not None
-        state = f"{error.state.value}: {redact(error.detail)}" if error.detail else error.state.value
-        return _Row("YouTube", "?", state, [f"Fix: {fix_for(error.state)}"])
+def _youtube_row(report: AuthReport | AuthError) -> _Row:
+    if isinstance(report, AuthError):
+        state = f"{report.state.value}: {redact(report.detail)}" if report.detail else report.state.value
+        return _Row("YouTube", "?", state, [f"Fix: {fix_for(report.state)}"])
     if _anonymous(report):
         return _Row("YouTube", "none", "public videos only (no browser login)")
     if report.ok:
@@ -257,25 +252,23 @@ def _print_rows(rows: list[_Row]) -> None:
 
 
 def _json(
-    report: AuthReport | None,
-    youtube_error: AuthError | None,
+    report: AuthReport | AuthError,
     session: chatgpt_auth.Session | None,
     store_error: chatgpt_auth.ChatGPTAuthError | None,
     options: LLMOptions,
     resolution: str | ConfigError | None,
     memos: voicememos.Probe,
 ) -> dict[str, object]:
-    if report is not None:
+    if isinstance(report, AuthReport):
         youtube: dict[str, object] = {**report.to_json(), "usable": report.ok or _anonymous(report)}
     else:
-        assert youtube_error is not None
-        state = youtube_error.state
+        state = report.state
         youtube = {
             "state": state.value,
             "ok": False,
             "usable": False,
             "fix": fix_for(state),
-            "detail": redact(youtube_error.detail),
+            "detail": redact(report.detail),
         }
     chatgpt_status: dict[str, object] = (
         {"email": session.email, "status": session.status, "usable": session.usable}

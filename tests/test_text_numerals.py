@@ -3,7 +3,7 @@ import random
 
 import pytest
 
-from anyverbatim.text.numbers import _NUMERALS, itn, quantity_tokens
+from anyverbatim.text.numbers import NUMERALS, itn, quantity_tokens
 from anyverbatim.text.numerals import apply, conversions, display
 
 # Plan section 5.3: input after correction, the display form, and the rule it shows.
@@ -305,7 +305,7 @@ def test_p2_sees_figures_that_a_rewrite_would_merge(text: str, change: tuple[int
 
 
 # GB/T 5.3 allows 万 and 亿 beside Arabic digits (3.5万), never 十, 百, 千 or a Chinese digit (1百零8).
-_NEVER_BESIDE_DIGITS = frozenset(_NUMERALS) - set("万萬亿億")
+_NEVER_BESIDE_DIGITS = frozenset(NUMERALS) - set("万萬亿億")
 
 
 def test_p3_no_digit_written_next_to_a_chinese_numeral() -> None:

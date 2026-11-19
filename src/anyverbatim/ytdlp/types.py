@@ -18,8 +18,8 @@ class Signal(StrEnum):
     GEO = "geo"
     UNAVAILABLE = "unavailable"
     DRM = "drm"
-    PO_TOKEN_GVS = "po_token_gvs"
-    PO_TOKEN_SUBS = "po_token_subs"
+    PO_TOKEN_GVS = "po_token_gvs"  # noqa: S105 - a signal name, not a password
+    PO_TOKEN_SUBS = "po_token_subs"  # noqa: S105 - a signal name, not a password
     JS_MISSING = "js_missing"
     N_CHALLENGE = "n_challenge"
     NO_FORMATS = "no_formats"

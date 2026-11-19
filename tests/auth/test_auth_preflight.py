@@ -292,7 +292,7 @@ def test_invalidate_drops_the_cached_login(kit) -> None:
 
 
 def test_recorded_premium_is_reported_and_outlives_the_ttl(kit) -> None:
-    preflight.record_premium(DEFAULT, True, now=NOW)
+    preflight.record_premium(DEFAULT, premium=True, now=NOW)
     report = preflight.preflight(DEFAULT, kit.ok(), now=NOW)
     assert report.premium is True
     assert "Premium: yes" in report.fix
@@ -311,7 +311,7 @@ def test_corrupt_cache_costs_one_probe(kit) -> None:
 def test_cache_file_holds_no_secrets_or_home_paths(home: Path, fakes) -> None:
     good = _write_cookie_file(home / "good.txt", signed_in=True)
     preflight.preflight(CookieFileSource(good), fakes.ok(), now=NOW)
-    preflight.record_premium(CookieFileSource(good), False, now=NOW)
+    preflight.record_premium(CookieFileSource(good), premium=False, now=NOW)
     cache = paths.preflight_cache_file()
     text = cache.read_text(encoding="utf-8")
     assert stat.S_IMODE(cache.stat().st_mode) == 0o600

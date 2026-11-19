@@ -204,7 +204,7 @@ def _repair_windows(engine: Engine, chunk: ChunkInput, first: _Attempt, duration
 
 def _window_attempt(window: Window, words: Sequence[Word], language: str | None) -> _Attempt:
     local = RawChunk(text=_text_of(words).strip(), language=language, words=_shifted(words, -window.start))
-    return _Attempt(local, False, triggers(local, duration=window.end - window.start))
+    return _Attempt(local, capped=False, triggers=triggers(local, duration=window.end - window.start))
 
 
 def _shifted(words: Sequence[Word], offset: float) -> tuple[Word, ...]:

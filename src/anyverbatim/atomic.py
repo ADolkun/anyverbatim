@@ -15,7 +15,7 @@ def write_bytes(path: Path, data: bytes, *, mode: int | None = None) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp, path)
+        tmp.replace(path)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise

@@ -26,11 +26,11 @@ import unicodedata
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast, override
 
 from pydantic import JsonValue
 
-from anyverbatim.asr.protocol import AsrContext, ChunkFlag, EngineSpec, RawChunk, Window
+from anyverbatim.asr.protocol import AsrContext, ChunkFlag, Engine, EngineSpec, RawChunk, Window
 from anyverbatim.contract.models import Word
 from anyverbatim.errors import ConfigError, DependencyError
 
@@ -76,7 +76,7 @@ class _Dims(Protocol):
 class _WhisperModel(Protocol):
     dims: _Dims
 
-    def detect_language(self, mel: Any) -> tuple[Any, dict[str, float]]: ...
+    def detect_language(self, mel: object) -> tuple[Any, dict[str, float]]: ...
 
 
 class _MelArray(Protocol):
@@ -89,12 +89,12 @@ class _AudioModule(Protocol):
     N_FRAMES: int
     FRAMES_PER_SECOND: int
 
-    def log_mel_spectrogram(self, audio: Any, n_mels: int, padding: int) -> _MelArray: ...
+    def log_mel_spectrogram(self, audio: object, n_mels: int, padding: int) -> _MelArray: ...
     def pad_or_trim(self, array: _MelArray, length: int, *, axis: int) -> _MelArray: ...
 
 
 class _WhisperModule(Protocol):
-    def transcribe(self, audio: Any, **kwargs: Any) -> dict[str, Any]: ...
+    def transcribe(self, audio: object, **kwargs: object) -> dict[str, Any]: ...
 
 
 class _ModelHolder(Protocol):
@@ -133,7 +133,7 @@ def snapshot_path(spec: EngineSpec) -> Path:
     return path
 
 
-class WhisperEngine:
+class WhisperEngine(Engine):
     def __init__(self, spec: EngineSpec, mode: Mode) -> None:
         self.spec = spec
         self.mode = mode
@@ -144,6 +144,7 @@ class WhisperEngine:
         self._audio: _AudioModule | None = None
         self._float16: object = None
 
+    @override
     def load(self) -> None:
         path = snapshot_path(self.spec)
         try:
@@ -173,6 +174,7 @@ class WhisperEngine:
             _, probabilities = self._model.detect_language(segment)
         return {code: float(p) for code, p in probabilities.items()}
 
+    @override
     def transcribe(self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None) -> RawChunk:
         self._loaded()
         hint = _normalize_language(language)

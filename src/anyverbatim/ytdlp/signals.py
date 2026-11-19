@@ -23,20 +23,26 @@ _PRIMARY: tuple[tuple[Signal, re.Pattern[str]], ...] = tuple(
         (Signal.PRIVATE, r"\bprivate video\b"),
         (
             Signal.MEMBERS_ONLY,
-            rf"join this channel to get access to members-only content|available to this channel{_Q}s members"
-            r"|members-only content",
+            (
+                rf"join this channel to get access to members-only content|available to this channel{_Q}s members"
+                r"|members-only content"
+            ),
         ),
         (Signal.PREMIUM_ONLY, r"youtube premium\b.*\bmembers|only available (?:to|for) (?:youtube )?premium"),
         (
             Signal.LOGIN_REQUIRED,
-            r"login details are needed to download this content|this video is only available for registered users"
-            r"|use --cookies-from-browser or --cookies for the authentication",
+            (
+                r"login details are needed to download this content|this video is only available for registered users"
+                r"|use --cookies-from-browser or --cookies for the authentication"
+            ),
         ),
         (Signal.GEO, r"not made this video available in your country|not available from your location"),
         (
             Signal.UNAVAILABLE,
-            r"video unavailable|this video is unavailable|this video has been removed|no longer available"
-            r"|account associated with this video has been terminated",
+            (
+                r"video unavailable|this video is unavailable|this video has been removed|no longer available"
+                r"|account associated with this video has been terminated"
+            ),
         ),
         (Signal.DRM, r"this video is drm protected"),
         (Signal.PO_TOKEN_GVS, r"formats require a gvs po token which was not provided"),
@@ -45,8 +51,10 @@ _PRIMARY: tuple[tuple[Signal, re.Pattern[str]], ...] = tuple(
         (Signal.HTTP_403, r"http error 403"),
         (
             Signal.TRANSIENT,
-            r"http error 50[0234]|timed out|temporary failure in name resolution|connection reset"
-            r"|connection aborted|unable to download webpage|incompleteread",
+            (
+                r"http error 50[0234]|timed out|temporary failure in name resolution|connection reset"
+                r"|connection aborted|unable to download webpage|incompleteread"
+            ),
         ),
     )
 )

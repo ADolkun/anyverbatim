@@ -52,7 +52,7 @@ class EngineDef:
 
     def language_policy(self) -> LanguagePolicy:
         policy = self.variant.get("language")
-        if policy == "auto" or policy == "pass" or policy == "detect":
+        if policy in {"auto", "pass", "detect"}:
             return policy
         raise ValueError(f"{self.spec.id} needs the variant language set to 'auto', 'pass' or 'detect', got {policy!r}")
 

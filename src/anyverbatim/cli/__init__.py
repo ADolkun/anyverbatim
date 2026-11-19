@@ -34,7 +34,7 @@ def interactive() -> bool:
 
 
 class LazyGroup(click.Group):
-    def __init__(self, *, lazy_commands: Mapping[str, str], **attrs: Any) -> None:
+    def __init__(self, *, lazy_commands: Mapping[str, str], **attrs: Any) -> None:  # noqa: ANN401 - click.Group takes **Any
         super().__init__(**attrs)
         self._lazy_commands = lazy_commands
 

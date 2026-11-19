@@ -8,10 +8,21 @@ from anyverbatim.asr import registry
 from anyverbatim.asr.chunks import Chunk
 from anyverbatim.asr.protocol import AsrContext, ChunkFlag, EngineDef
 from anyverbatim.contract.models import Word
-from anyverbatim.mlx_worker import ERROR_FILE as ERROR_FILE
-from anyverbatim.mlx_worker import FINGERPRINT_FILE as FINGERPRINT_FILE
-from anyverbatim.mlx_worker import METRICS_FILE as METRICS_FILE
-from anyverbatim.mlx_worker import REQUEST_FILE as REQUEST_FILE
+from anyverbatim.mlx_worker import ERROR_FILE, FINGERPRINT_FILE, METRICS_FILE, REQUEST_FILE
+
+__all__ = [
+    "ERROR_FILE",
+    "FINGERPRINT_FILE",
+    "HYPOTHESES_FILE",
+    "METRICS_FILE",
+    "REQUEST_FILE",
+    "AnomalySpan",
+    "ChunkHypothesis",
+    "FileJob",
+    "RunMetrics",
+    "Seconds",
+    "WorkerRequest",
+]
 
 HYPOTHESES_FILE = "hypotheses.jsonl"
 

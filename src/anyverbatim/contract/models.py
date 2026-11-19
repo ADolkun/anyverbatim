@@ -68,7 +68,7 @@ class Word(_Model):
 
 
 class Reading(_Model):
-    # "asr:<engine-id>" | "caption_manual" | "caption_auto" | "asr2:<engine-id>"
+    # One of "asr:<engine-id>", "caption_manual", "caption_auto" or "asr2:<engine-id>".
     source: str
     text: str
 

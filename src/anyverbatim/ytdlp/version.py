@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from importlib.metadata import PackageNotFoundError, version
 
 from anyverbatim.errors import DependencyError
@@ -17,7 +17,7 @@ class YtDlpVersion:
     released: date
 
     def age_days(self, today: date | None = None) -> int:
-        return ((today or date.today()) - self.released).days
+        return ((today or datetime.now(UTC).astimezone().date()) - self.released).days
 
 
 def installed() -> YtDlpVersion:

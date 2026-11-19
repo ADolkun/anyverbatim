@@ -176,7 +176,7 @@ def status(*, clock: Callable[[], float] = time.time) -> Status:
 
 def readiness(*, clock: Callable[[], float] = time.time) -> Readiness:
     current = status(clock=clock)
-    return Readiness(current in ("ready", "refreshable"), STATUS_DETAIL[current])
+    return Readiness(ready=current in ("ready", "refreshable"), detail=STATUS_DETAIL[current])
 
 
 @dataclass(frozen=True)
@@ -247,14 +247,13 @@ def interactive_login(reason: str, *, opener: Opener = https_open) -> LoginResul
 
     Only callers that know a person is watching may use this; a library never opens a browser on its own.
     """
-    print(
-        f"{reason}; opening the browser to sign in again (waiting up to {LOGIN_TIMEOUT_S / 60:g} minutes)",
-        file=sys.stderr,
+    sys.stderr.write(
+        f"{reason}; opening the browser to sign in again (waiting up to {LOGIN_TIMEOUT_S / 60:g} minutes)\n"
     )
 
     def open_url(url: str) -> None:
         # The URL is printed, so a browser that will not open still leaves a way through: keep waiting.
-        print(f"If no browser opens, visit:\n  {url}", file=sys.stderr)
+        sys.stderr.write(f"If no browser opens, visit:\n  {url}\n")
         webbrowser.open(url)
 
     return login(open_url=open_url, opener=opener)
@@ -403,16 +402,19 @@ def _read(root: Path | None) -> State:
     with os.fdopen(fd, "rb") as handle:
         _require_private(os.fstat(handle.fileno()), directory=False)
         raw = handle.read(_MAX_STORE_BYTES + 1)
+    if len(raw) > _MAX_STORE_BYTES:
+        raise _invalid_store()
     try:
-        if len(raw) > _MAX_STORE_BYTES:
-            raise ValueError("oversized")
         return _decode(json.loads(raw))
     except ValueError, TypeError:
-        raise ChatGPTAuthError(
-            f"the ChatGPT credential store is invalid; remove {paths.chatgpt_credentials_file()} and run "
-            f"`{LOGIN_COMMAND}`",
-            code="invalid_store",
-        ) from None
+        raise _invalid_store() from None
+
+
+def _invalid_store() -> ChatGPTAuthError:
+    return ChatGPTAuthError(
+        f"the ChatGPT credential store is invalid; remove {paths.chatgpt_credentials_file()} and run `{LOGIN_COMMAND}`",
+        code="invalid_store",
+    )
 
 
 def _save(state: State) -> None:
@@ -486,7 +488,7 @@ def _flag(value: dict[str, object], key: str) -> bool:
     """Read an optional boolean; a store written before the field existed lacks it, which reads as false."""
     flag = value.get(key, False)
     if not isinstance(flag, bool):
-        raise ValueError(key)
+        raise TypeError(key)
     return flag
 
 
@@ -525,7 +527,7 @@ def _request_json(request: urllib.request.Request, opener: Opener) -> dict[str, 
 
 def _post_form(url: str, data: dict[str, str], opener: Opener) -> dict[str, object]:
     require_host(url)
-    request = urllib.request.Request(
+    request = urllib.request.Request(  # noqa: S310 - require_host allows only https to the fixed OpenAI hosts
         url,
         data=urllib.parse.urlencode(data).encode(),
         headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"},
@@ -536,7 +538,8 @@ def _post_form(url: str, data: dict[str, str], opener: Opener) -> dict[str, obje
 
 def _discovery(opener: Opener) -> dict[str, object]:
     metadata = _request_json(
-        urllib.request.Request(DISCOVERY_URL, headers={"Accept": "application/json"}, method="GET"), opener
+        urllib.request.Request(DISCOVERY_URL, headers={"Accept": "application/json"}, method="GET"),  # noqa: S310 - fixed https URL
+        opener,
     )
     if metadata.get("issuer") != ISSUER:
         raise ChatGPTAuthError("OpenAI identity discovery named an unexpected issuer", code="invalid_discovery")
@@ -561,28 +564,33 @@ def id_token_claims(token: str, client_id: str, now: float, *, nonce: str | None
     through a redirect.
     """
     try:
-        _header, body, _signature = token.split(".")
-        claims = as_object(json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))))
-        if claims.get("iss") != ISSUER:
-            raise ValueError("iss")
-        audience = claims.get("aud")
-        audiences = [audience] if isinstance(audience, str) else audience
-        if not isinstance(audiences, list) or client_id not in audiences:
-            raise ValueError("aud")
-        if (len(audiences) > 1 and claims.get("azp") != client_id) or claims.get("azp", client_id) != client_id:
-            raise ValueError("azp")
-        expires = claims.get("exp")
-        if isinstance(expires, bool) or not isinstance(expires, int | float) or expires + _CLOCK_SKEW_S <= now:
-            raise ValueError("exp")
-        _string(claims, "sub")
-        if nonce is not None and not hmac.compare_digest(_string(claims, "nonce"), nonce):
-            raise ValueError("nonce")
+        return _checked_claims(token, client_id, now, nonce)
     except ValueError as exc:
         claim = exc.args[0] if exc.args and exc.args[0] in ("iss", "aud", "azp", "exp", "sub", "nonce") else "format"
         raise ChatGPTAuthError(
             f"OpenAI returned an ID token that failed its {claim} check; the stored sign-in was kept",
             code="invalid_identity",
         ) from None
+
+
+def _checked_claims(token: str, client_id: str, now: float, nonce: str | None) -> dict[str, object]:
+    """Raise `ValueError` naming the first claim that fails, or any other `ValueError` for a malformed token."""
+    _header, body, _signature = token.split(".")
+    claims = as_object(json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))))
+    if claims.get("iss") != ISSUER:
+        raise ValueError("iss")
+    audience = claims.get("aud")
+    audiences = [audience] if isinstance(audience, str) else audience
+    if not isinstance(audiences, list) or client_id not in audiences:
+        raise ValueError("aud")
+    if (len(audiences) > 1 and claims.get("azp") != client_id) or claims.get("azp", client_id) != client_id:
+        raise ValueError("azp")
+    expires = claims.get("exp")
+    if isinstance(expires, bool) or not isinstance(expires, int | float) or expires + _CLOCK_SKEW_S <= now:
+        raise ValueError("exp")
+    _string(claims, "sub")
+    if nonce is not None and not hmac.compare_digest(_string(claims, "nonce"), nonce):
+        raise ValueError("nonce")
     return claims
 
 
@@ -596,44 +604,56 @@ def _credentials(
 ) -> Account:
     """Validate a token response: a sign-in (`nonce`) or a refresh of `previous`, which must keep its identity."""
     try:
-        access = _string(payload, "access_token")
-        if _string(payload, "token_type").lower() != "bearer":
-            raise ValueError("token_type")
-        expires_in = _number(payload, "expires_in")
-        if expires_in <= 0:
-            raise ValueError("expires_in")
-        refresh = _string(payload, "refresh_token") if "refresh_token" in payload else ""
-        returned = payload.get("id_token")
-        if returned is None and previous is not None:
-            identity: dict[str, object] = {"sub": previous.subject, "email": previous.email}
-        elif isinstance(returned, str) and returned:
-            identity = id_token_claims(returned, client_id, now, nonce=nonce)
-        else:
-            raise ValueError("id_token")
-        subject = _string(identity, "sub")
-        if previous is not None and subject != previous.subject:
-            raise ValueError("subject")
-        granted = payload.get("scope")
-        if granted is None and previous is not None:
-            scopes = previous.scopes
-        elif isinstance(granted, str):
-            scopes = tuple(sorted(set(granted.split())))
-        else:
-            raise ValueError("scope")
-        # Refresh tokens rotate: a refresh that returns none leaves nothing valid to refresh with next time.
-        if not refresh and (previous is not None or "offline_access" in scopes):
-            raise ValueError("refresh_token")
-        email = identity.get("email", "")
-        if not isinstance(email, str) or not email.isprintable():
-            raise ValueError("email")
-        earliest = _number(payload, "earliest_refresh_at") if "earliest_refresh_at" in payload else 0.0
-        # A window that does not open between issue and expiry is meaningless; refresh then follows expiry alone.
-        if not now < earliest < now + expires_in:
-            earliest = 0.0
+        return _parsed_credentials(payload, client_id, now, nonce=nonce, previous=previous)
     except ValueError, TypeError:
         raise ChatGPTAuthError(
             "OpenAI returned unusable credentials; the stored sign-in was kept", code="invalid_credentials"
         ) from None
+
+
+def _parsed_credentials(
+    payload: dict[str, object],
+    client_id: str,
+    now: float,
+    *,
+    nonce: str | None,
+    previous: Account | None,
+) -> Account:
+    """Raise `ValueError` or `TypeError` for any unusable field."""
+    access = _string(payload, "access_token")
+    if _string(payload, "token_type").lower() != "bearer":
+        raise ValueError("token_type")
+    expires_in = _number(payload, "expires_in")
+    if expires_in <= 0:
+        raise ValueError("expires_in")
+    refresh = _string(payload, "refresh_token") if "refresh_token" in payload else ""
+    returned = payload.get("id_token")
+    if returned is None and previous is not None:
+        identity: dict[str, object] = {"sub": previous.subject, "email": previous.email}
+    elif isinstance(returned, str) and returned:
+        identity = id_token_claims(returned, client_id, now, nonce=nonce)
+    else:
+        raise ValueError("id_token")
+    subject = _string(identity, "sub")
+    if previous is not None and subject != previous.subject:
+        raise ValueError("subject")
+    granted = payload.get("scope")
+    if granted is None and previous is not None:
+        scopes = previous.scopes
+    elif isinstance(granted, str):
+        scopes = tuple(sorted(set(granted.split())))
+    else:
+        raise ValueError("scope")
+    # Refresh tokens rotate: a refresh that returns none leaves nothing valid to refresh with next time.
+    if not refresh and (previous is not None or "offline_access" in scopes):
+        raise ValueError("refresh_token")
+    email = identity.get("email", "")
+    if not isinstance(email, str) or not email.isprintable():
+        raise ValueError("email")
+    earliest = _number(payload, "earliest_refresh_at") if "earliest_refresh_at" in payload else 0.0
+    # A window that does not open between issue and expiry is meaningless; refresh then follows expiry alone.
+    if not now < earliest < now + expires_in:
+        earliest = 0.0
     return Account(
         subject=subject,
         email=email,
@@ -737,7 +757,8 @@ def _authorize_in_browser(
 
     class Callback(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            assert pending is not None
+            if pending is None:
+                raise RuntimeError("a sign-in callback arrived before the sign-in started")
             params = _callback_params(self.path, pending)
             host_matches = self.headers.get("Host") == urllib.parse.urlsplit(pending.redirect_uri).netloc
             valid = params is not None and host_matches and not received
@@ -776,7 +797,7 @@ def _issued_client(pending: _Pending, callback: dict[str, str]) -> str:
     if callback.get("error"):
         raise ChatGPTAuthError("sign-in was not authorized; the stored sign-in was kept", code="access_denied")
     client_id = callback.get("client_id", pending.client_id)
-    if client_id in ("", DYNAMIC_CLIENT) or (pending.client_id != DYNAMIC_CLIENT and client_id != pending.client_id):
+    if client_id in ("", DYNAMIC_CLIENT) or pending.client_id not in (DYNAMIC_CLIENT, client_id):
         raise ChatGPTAuthError("the sign-in callback named an unexpected registration", code="invalid_client")
     return client_id
 

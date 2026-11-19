@@ -15,7 +15,7 @@ import os
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Protocol, cast, override
 
 from pydantic import JsonValue
 
@@ -50,7 +50,7 @@ class _Output(Protocol):
 
 
 class _Model(Protocol):
-    def generate(self, audio: object, **kwargs: Any) -> _Output: ...
+    def generate(self, audio: object, **kwargs: object) -> _Output: ...
 
 
 class _Resampler(Protocol):
@@ -75,8 +75,12 @@ def model_language(language: str | None) -> str | None:
     return _LANGUAGES.get(language.lower().replace("_", "-").split("-")[0])
 
 
+# A private mlx-audio hook, so this seam breaks (KeyError) rather than silently stops pinning if a release renames it.
+_TOKENIZER_HOOK = "_resolve_audio_tokenizer_dir"
+
+
 @contextmanager
-def _pinned_tokenizer(model_class: Any, tokenizer_dir: Path) -> Generator[list[Path]]:
+def _pinned_tokenizer(model_class: type, tokenizer_dir: Path) -> Generator[list[Path]]:
     """Make `Model.post_load_hook` use the pinned tokenizer snapshot instead of resolving the manifest's repo name.
 
     The manifest names the repo without a revision, and redirecting that lookup is the only seam that does not mean
@@ -88,21 +92,22 @@ def _pinned_tokenizer(model_class: Any, tokenizer_dir: Path) -> Generator[list[P
         used.append(model_path)
         return tokenizer_dir
 
-    original = vars(model_class)["_resolve_audio_tokenizer_dir"]
-    model_class._resolve_audio_tokenizer_dir = staticmethod(pinned)
+    original = vars(model_class)[_TOKENIZER_HOOK]
+    setattr(model_class, _TOKENIZER_HOOK, staticmethod(pinned))
     try:
         yield used
     finally:
-        model_class._resolve_audio_tokenizer_dir = original
+        setattr(model_class, _TOKENIZER_HOOK, original)
 
 
-class MimoEngine:
+class MimoEngine(Engine):
     def __init__(self, spec: EngineSpec, tokenizer_repo: str, tokenizer_revision: str) -> None:
         self._spec = spec
         self._tokenizer_repo = tokenizer_repo
         self._tokenizer_revision = tokenizer_revision
         self._model: _Model | None = None
 
+    @override
     def load(self) -> None:
         spec = self._spec
         try:
@@ -130,6 +135,7 @@ class MimoEngine:
             )
         self._model = model
 
+    @override
     def transcribe(self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None) -> RawChunk:
         model = self._model
         if model is None:

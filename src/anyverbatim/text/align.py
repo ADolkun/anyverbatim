@@ -89,8 +89,10 @@ def units(text: str) -> list[Unit]:
     cursor = 0
 
     def plain(stop: int) -> None:
-        for match in _PLAIN_UNIT.finditer(text, cursor, stop):
-            result.append(Unit(match[0].casefold(), match.start(), match.end(), None))
+        result.extend(
+            Unit(match[0].casefold(), match.start(), match.end(), None)
+            for match in _PLAIN_UNIT.finditer(text, cursor, stop)
+        )
 
     for token in quantity_tokens(text):
         plain(token.char_start)
@@ -183,7 +185,7 @@ def align(mine: Sequence[Unit], theirs: Sequence[Unit]) -> Alignment:
     opcodes = Levenshtein.opcodes([u.key for u in mine], [u.key for u in theirs])
     matching = [i for op in opcodes if op.tag == "equal" for i in range(op.src_start, op.src_end)]
     if not matching:
-        return Alignment(opcodes, False)
+        return Alignment(opcodes, anchored=False)
     plain = sum(1 for u in mine if u.token is None)
     anchors = sum(1 for i in matching if mine[i].token is None)
     return Alignment(opcodes, plain < _MIN_ANCHOR_UNITS or anchors >= _MIN_ANCHOR_RATIO * plain)
