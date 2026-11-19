@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
@@ -105,7 +105,7 @@ def test_clips_cover_the_session_windows(session: tuple[Layout, Manifest]) -> No
     layout, manifest = session
     harness = Harness("111111")
     harness.run(layout, manifest)
-    spans = [s for s in (layout.session_dir("main") / "spans.jsonl").read_text().splitlines()]
+    spans = (layout.session_dir("main") / "spans.jsonl").read_text().splitlines()
     assert len(harness.cut) == len(spans) == 6
     assert all(end > start for start, end in harness.cut)
 
@@ -137,7 +137,10 @@ def test_ffmpeg_and_afplay_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_a_failed_cut_fails_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    fail: Callable[..., proc.ProcResult] = lambda argv, *, timeout_s: proc.ProcResult(1, "", "bad input", 0.1)  # noqa: E731
+
+    def fail(argv: Sequence[str], *, timeout_s: float) -> proc.ProcResult:
+        return proc.ProcResult(1, "", "bad input", 0.1)
+
     monkeypatch.setattr(proc, "run", fail)
     with pytest.raises(Exception, match="bad input"):
         listen.ffmpeg_cut(tmp_path / "in.wav", 0.0, 1.0, tmp_path / "out.wav")

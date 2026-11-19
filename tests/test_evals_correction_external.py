@@ -5,7 +5,8 @@ import textwrap
 import time
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any
+from types import ModuleType
+from typing import NoReturn
 
 import pytest
 from chatgpt_fakes import store_account
@@ -78,8 +79,12 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(CLIENT_FACTORY_ENV, raising=False)
 
 
+def refuse_claude_cli(**_: object) -> NoReturn:
+    pytest.fail("fell back to the Claude CLI")
+
+
 @pytest.fixture
-def factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Any]:
+def factory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[ModuleType]:
     modules = tmp_path / "factory-modules"
     modules.mkdir()
     (modules / "fake_eval_factory.py").write_text(textwrap.dedent(FACTORY_MODULE), encoding="utf-8")
@@ -113,7 +118,7 @@ def eval_with_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Lay
 
 
 def test_the_factory_is_called_with_the_candidates_model_and_effort(
-    factory: Any, monkeypatch: pytest.MonkeyPatch
+    factory: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(CLIENT_FACTORY_ENV, "fake_eval_factory:make")
     client = external_client(HIGH)
@@ -158,7 +163,7 @@ def test_an_external_candidate_never_falls_back_to_the_claude_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     layout, _ = eval_with_base(tmp_path, monkeypatch)
-    monkeypatch.setattr(run_correction, "ClaudeCLIClient", lambda **_: pytest.fail("fell back to the Claude CLI"))
+    monkeypatch.setattr(run_correction, "ClaudeCLIClient", refuse_claude_cli)
     result = CliRunner().invoke(run_correction.main, ["correct", "--candidate", "x-gpt61-medium"])
     assert isinstance(result.exception, ConfigError)
     assert "ANYVERBATIM_EVAL_CLIENT_FACTORY" in str(result.exception)
@@ -166,7 +171,7 @@ def test_an_external_candidate_never_falls_back_to_the_claude_cli(
 
 
 def test_a_run_records_the_model_and_effort_and_each_effort_is_its_own_run(
-    factory: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    factory: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     layout, manifest = eval_with_base(tmp_path, monkeypatch)
     monkeypatch.setenv(CLIENT_FACTORY_ENV, "fake_eval_factory:make")
@@ -259,7 +264,7 @@ def test_the_native_candidate_needs_a_chatgpt_sign_in_and_no_factory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     layout, _ = eval_with_base(tmp_path, monkeypatch)
-    monkeypatch.setattr(run_correction, "ClaudeCLIClient", lambda **_: pytest.fail("fell back to the Claude CLI"))
+    monkeypatch.setattr(run_correction, "ClaudeCLIClient", refuse_claude_cli)
     result = CliRunner().invoke(run_correction.main, ["correct", "--candidate", "o-gpt61-medium"])
     assert isinstance(result.exception, ConfigError)
     assert "anyverbatim login" in str(result.exception)

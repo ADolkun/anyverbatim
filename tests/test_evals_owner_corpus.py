@@ -2,6 +2,7 @@ import json
 import wave
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -157,7 +158,8 @@ def test_the_owner_summary_lists_counts_by_generic_label_beside_the_other_corpor
     scores: list[OwnerScore] = run_owner(
         FakeBackend(TURNS), "d-fake", recordings_of(OWNER, root=tmp_path), tmp_path / "r"
     )
-    block = summarize(scores)["corpora"][OWNER]  # type: ignore[index]
+    corpora = cast("dict[str, dict[str, Any]]", summarize(scores)["corpora"])
+    block = corpora[OWNER]
     assert block["recordings"] == 2
     assert block["hypothesis_speakers"] == {"rec-01": 3, "rec-02": 3}
     assert block["mean_abs_speaker_count_error"] == 0

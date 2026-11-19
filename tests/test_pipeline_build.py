@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+import anyverbatim
 from anyverbatim.acquire.creator_note import CreatorNote
 from anyverbatim.acquire.metadata import Chapter, VideoMetadata
 from anyverbatim.asr import registry
@@ -16,6 +17,7 @@ from anyverbatim.contract import Access, ContextDocument, Word, YouTubeSource, d
 from anyverbatim.diarize import registry as diarize_registry
 from anyverbatim.diarize.protocol import Diarization
 from anyverbatim.errors import ContractError
+from anyverbatim.pipeline import correction_context, info_tags
 from anyverbatim.render import render_markdown
 from anyverbatim.stages import Diarized, SourceInfo, Stretch, Transcribed, build_document, from_asr_rows, youtube_source
 
@@ -32,7 +34,9 @@ ACCESS = Access(
 NOW = datetime(2030, 1, 1, tzinfo=UTC)
 
 
-def metadata(*, language: str | None = "en", chapters: Sequence[Chapter] = (), duration: float | None = 100.0):
+def metadata(
+    *, language: str | None = "en", chapters: Sequence[Chapter] = (), duration: float | None = 100.0
+) -> VideoMetadata:
     return VideoMetadata(
         video_id="synthVid001",
         title="Synthetic title",
@@ -50,7 +54,9 @@ def metadata(*, language: str | None = "en", chapters: Sequence[Chapter] = (), d
     )
 
 
-def words(pieces: Sequence[str], start: float = 0.0, step: float = 0.4, gaps: dict[int, float] | None = None):
+def words(
+    pieces: Sequence[str], start: float = 0.0, step: float = 0.4, gaps: dict[int, float] | None = None
+) -> tuple[Word, ...]:
     out: list[Word] = []
     clock = start
     for index, piece in enumerate(pieces):
@@ -348,7 +354,9 @@ FOUR_SENTENCES = [
 ]
 
 
-def looped_row(*spans: tuple[float, float], flags: tuple[ChunkFlag, ...] = ("redecoded", "decoder_anomaly")):
+def looped_row(
+    *spans: tuple[float, float], flags: tuple[ChunkFlag, ...] = ("redecoded", "decoder_anomaly")
+) -> ChunkHypothesis:
     """One whole-file row of four three-word sentences, one second a word, with the given unrepaired spans."""
     return row(
         0,
@@ -415,7 +423,9 @@ def test_touching_spans_flag_a_token_across_their_boundary_once_and_name_the_uni
     assert loop.anomaly_spans == (AnomalySpan(start=5.0, end=9.0), AnomalySpan(start=3.0, end=5.0))
 
 
-def collapsed_row(pieces: Sequence[str], times: Sequence[tuple[float, float]], span: tuple[float, float]):
+def collapsed_row(
+    pieces: Sequence[str], times: Sequence[tuple[float, float]], span: tuple[float, float]
+) -> ChunkHypothesis:
     ws = tuple(Word(text=p, start=a, end=b) for p, (a, b) in zip(pieces, times, strict=True))
     return row(
         0,
@@ -592,7 +602,7 @@ def test_video_and_quality_fields() -> None:
 
 def test_an_unparseable_upload_date_becomes_none() -> None:
     meta = metadata()
-    bad = VideoMetadata(**{**meta.__dict__, "upload_date": "soon", "duration": None})
+    bad = replace(meta, upload_date="soon", duration=None)
     doc = build([row(0, "Hi.", 0, 7, hypothesis="q-base")], engine="q-base", meta=bad)
     assert isinstance(doc.source, YouTubeSource)
     assert doc.source.upload_date is None
@@ -600,14 +610,12 @@ def test_an_unparseable_upload_date_becomes_none() -> None:
 
 
 def test_the_library_surface_is_exported_lazily() -> None:
-    import anyverbatim
-
     assert anyverbatim.process.__module__ == "anyverbatim.pipeline"
     assert anyverbatim.ContextDocument is ContextDocument
     assert anyverbatim.Options.__module__ == "anyverbatim.config"
     assert anyverbatim.LLMClient.__module__ == "anyverbatim.llm.protocol"
     with pytest.raises(AttributeError):
-        _ = anyverbatim.nonexistent  # type: ignore[attr-defined]
+        _ = anyverbatim.nonexistent
     assert {"process", "Options", "ContextDocument", "LLMClient", "__version__"} <= set(dir(anyverbatim))
     assert "process" in vars(anyverbatim), "a resolved name is cached in the module"
 
@@ -619,8 +627,6 @@ def test_importing_the_package_loads_neither_the_pipeline_nor_its_heavy_dependen
 
 
 def test_correction_context_caps_the_glossary_at_twenty_terms_and_carries_the_creator_note() -> None:
-    from anyverbatim.pipeline import correction_context
-
     note = CreatorNote(text="市盈率 not 适应率", author="Example Channel", like_count=3, published="20300101")
     tags = tuple(f"term{i}" for i in range(25))
     context = correction_context(replace(metadata(), creator_note=note), tags)
@@ -631,8 +637,6 @@ def test_correction_context_caps_the_glossary_at_twenty_terms_and_carries_the_cr
 
 
 def test_configured_glossary_terms_come_before_the_tags_within_the_cap() -> None:
-    from anyverbatim.pipeline import correction_context
-
     tags = tuple(f"tag{n}" for n in range(25))
     context = correction_context(metadata(), ("tag3", *tags), ("Acme", "tag3"))
     assert context.glossary[:4] == ("Acme", "tag3", "tag0", "tag1")
@@ -641,8 +645,6 @@ def test_configured_glossary_terms_come_before_the_tags_within_the_cap() -> None
 
 
 def test_info_tags_keeps_only_string_tags_of_a_raw_extraction() -> None:
-    from anyverbatim.pipeline import info_tags
-
     assert info_tags({"tags": ["GAAP", 3, "市盈率", None]}) == ("GAAP", "市盈率")
     assert info_tags({"tags": "GAAP"}) == ()
     assert info_tags({}) == ()

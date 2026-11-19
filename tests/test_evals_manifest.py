@@ -8,7 +8,7 @@ from anyverbatim.errors import ConfigError
 from evals.manifest import EVAL_DIR_ENV, eval_dir, load_manifest
 
 
-def video(video_id: str, language: str, access: str = "public", **extra: Any) -> dict[str, Any]:
+def video(video_id: str, language: str, access: str = "public", **extra: object) -> dict[str, object]:
     return {
         "id": video_id,
         "url": f"https://www.youtube.com/watch?v={video_id}",

@@ -37,7 +37,7 @@ class EchoClient:
             items = json.loads(request.user.split("SEGMENTS:\n", 1)[1])
             reply: object = {"items": [{"i": it["i"], "text": it["text"] + "."} for it in items]}
         elif "SEGMENTS:" in request.user:
-            reply = {"fixed": []}
+            reply = {"fixed": list[object]()}
         else:
             items = json.loads(request.user.split("ITEMS:\n", 1)[1])
             reply = {

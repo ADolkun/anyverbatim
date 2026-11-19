@@ -5,6 +5,7 @@ import pytest
 from click.testing import CliRunner
 from recordings_fixture import FakeWorker, make_meeting, make_owner, pieces, silent, spoken, wav_seconds_of
 
+from anyverbatim.asr.models import ChunkHypothesis, WorkerRequest
 from anyverbatim.contract.models import Word
 from anyverbatim.errors import ConfigError
 from evals import disputes
@@ -96,7 +97,7 @@ def test_attribution_disputes_become_anchored_questions() -> None:
     assert not built.skipped
 
 
-def rows(hypothesis: str, text: str):
+def rows(hypothesis: str, text: str) -> list[ChunkHypothesis]:
     return [spoken(hypothesis, "m1", pieces(text, 1.0), chunk=0)]
 
 
@@ -207,7 +208,7 @@ def test_disputes_are_built_from_finished_runs_and_loaded_back_within_the_limits
     base = "we closed the quarter with twenty five new customers in the region"
     texts = {"w-runs-lid": base, "w-vad-lid": base.replace("twenty five", "twenty four"), "w-prod": base}
 
-    def rows_for(request):
+    def rows_for(request: WorkerRequest) -> list[ChunkHypothesis]:
         name = request.engine.spec.id
         return [spoken(name, "rec-01", pieces(texts[name], 1.0))]
 

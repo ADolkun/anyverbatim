@@ -151,7 +151,7 @@ def test_concurrent_moves_leave_one_winner_and_no_errors(tmp_path: Path, capsys:
         start.wait()
         try:
             outcomes.append(legacy.move_into_place(old, new))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - any failure of a racing thread is an outcome to assert on
             outcomes.append(exc)
 
     threads = [threading.Thread(target=migrate) for _ in range(8)]

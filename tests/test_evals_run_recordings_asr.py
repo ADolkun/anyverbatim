@@ -1,7 +1,9 @@
 import json
 import shutil
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import click
 import pytest
@@ -13,9 +15,12 @@ from anyverbatim.asr.models import AnomalySpan, ChunkHypothesis, FileJob, Worker
 from anyverbatim.errors import ConfigError
 from evals import run_diarization, run_recordings_asr
 from evals.manifest import EVAL_DIR_ENV
+from evals.normalize import View
 from evals.recordings_corpus import (
     ASR_CORPORA,
     PUBLIC_CORPORA,
+    Item,
+    Metric,
     asr_layout,
     batch_key,
     finished_folders,
@@ -26,7 +31,7 @@ from evals.recordings_corpus import (
 )
 from evals.recordings_data import RefUtterance
 from evals.recordings_rescore import rescore_item, total_repair
-from evals.recordings_scoring import ASCEND_POOLED, MEETINGS
+from evals.recordings_scoring import ASCEND_POOLED, MEETINGS, Scored
 from evals.run_diarization import load_words
 from evals.run_recordings_asr import E2_HYPOTHESES, _load_all, run_corpus, scored
 from evals.store import Layout
@@ -35,7 +40,9 @@ EN_LINES = (RefUtterance(0, 3, "A", "hello there everyone"), RefUtterance(70, 73
 ZH_LINES = (RefUtterance(0, 4, "A", "今天开会讨论预算"), RefUtterance(70, 73, "B", "明天继续"))
 
 
-def transcripts(table: dict[tuple[str, str], list[list[tuple[str, float, float]]]]):
+def transcripts(
+    table: dict[tuple[str, str], list[list[tuple[str, float, float]]]],
+) -> Callable[[WorkerRequest], list[ChunkHypothesis]]:
     """Rows per request: ``table[(hypothesis, file)]`` lists one pieces list per row."""
 
     def rows_for(request: WorkerRequest) -> list[ChunkHypothesis]:
@@ -118,7 +125,7 @@ def run_both(root: Path) -> None:
             run_corpus(asr_layout(corpus, root), hypothesis, load_items(corpus, root=root), worker=worker)
 
 
-def invoke(*args: str) -> dict[str, object]:
+def invoke(*args: str) -> dict[str, Any]:
     result = CliRunner().invoke(run_recordings_asr.main, list(args), catch_exceptions=False)
     assert result.exit_code == 0, result.output
     return json.loads(result.output)
@@ -177,9 +184,9 @@ def test_score_counts_rows_holding_a_special_token(root: Path) -> None:
         asr_layout("ami", root), "w-runs-lid", load_items("ami", root=root), worker=FakeWorker(transcripts(table))
     )
     report = invoke("score", "--hyp", "w-runs-lid", "--corpus", "ami")["corpora"]
-    assert report["ami"]["special_token_rows"] == 1  # type: ignore[index]
-    assert report["ami"]["multi_language_recordings"] == 0  # type: ignore[index]
-    assert report["ami"]["chunk_incidents"]["clean_in_mixed_recordings"] == 0  # type: ignore[index]
+    assert report["ami"]["special_token_rows"] == 1
+    assert report["ami"]["multi_language_recordings"] == 0
+    assert report["ami"]["chunk_incidents"]["clean_in_mixed_recordings"] == 0
 
 
 def test_words_writes_a_file_wder_can_read(root: Path) -> None:
@@ -203,9 +210,9 @@ def test_the_owner_corpus_has_no_reference_and_reports_only_what_it_decoded(root
     )
     run_corpus(asr_layout("owner", root), "w-runs-lid", [item], worker=worker)
     report = invoke("score", "--hyp", "w-runs-lid", "--corpus", "owner")["corpora"]
-    assert report["owner"]["recordings"] == 1  # type: ignore[index]
-    assert report["owner"]["decoded_recordings"] == 1  # type: ignore[index]
-    assert set(report["owner"]["language_seconds"]) == {"zh", "en"}  # type: ignore[index]
+    assert report["owner"]["recordings"] == 1
+    assert report["owner"]["decoded_recordings"] == 1
+    assert set(report["owner"]["language_seconds"]) == {"zh", "en"}
     with pytest.raises(ConfigError, match="owner"):
         scored("owner", "w-runs-lid", "itn", [item], root)
 
@@ -305,12 +312,12 @@ def test_the_owner_corpus_is_not_a_default_anywhere(root: Path) -> None:
         run_recordings_asr.compare_command,
         run_recordings_asr.words,
     ):
-        corpus = next(p for p in command.params if p.name == "corpora")
-        assert "owner" not in corpus.default
-    assert (
-        tuple(next(p for p in run_diarization.run.params if p.name == "corpora").default)
-        == run_diarization.DEFAULT_CORPORA
-    )
+        default = next(p for p in command.params if p.name == "corpora").default
+        assert isinstance(default, tuple)
+        assert "owner" not in default
+    diarization_default = next(p for p in run_diarization.run.params if p.name == "corpora").default
+    assert isinstance(diarization_default, tuple)
+    assert diarization_default == run_diarization.DEFAULT_CORPORA
     assert "owner" not in run_diarization.DEFAULT_CORPORA
 
 
@@ -324,9 +331,9 @@ def test_compare_names_the_decision_interval_and_reports_the_meetings_macro_aver
     run_both(root)
     results = invoke("compare", "--a", "w-runs-lid", "--b", "w-prod", "--corpus", "ami", "--corpus", "alimeeting")
     assert results["decision_interval"] == "decision"
-    pooled = results["results"][MEETINGS]  # type: ignore[index]
+    pooled = results["results"][MEETINGS]
     assert pooled["macro_difference"] == pytest.approx(
-        (results["results"]["ami"]["difference"] + results["results"]["alimeeting"]["difference"]) / 2  # type: ignore[index]
+        (results["results"]["ami"]["difference"] + results["results"]["alimeeting"]["difference"]) / 2
     )
     assert "dominate" in pooled["note"]
     assert pooled["recordings"] == 2
@@ -360,8 +367,8 @@ def test_compare_pairs_incidents_per_corpus_and_pools_the_ascend_sessions_with_t
     results = invoke(
         "compare", "--a", "w-runs-lid", "--b", "w-prod", "--corpus", "ascend", "--corpus", "ascend-utterances"
     )["results"]
-    assert set(results) == {"ascend", "ascend-utterances", ASCEND_POOLED}  # type: ignore[arg-type]
-    sessions, clips, pooled = (results[k] for k in ("ascend", "ascend-utterances", ASCEND_POOLED))  # type: ignore[index]
+    assert set(results) == {"ascend", "ascend-utterances", ASCEND_POOLED}
+    sessions, clips, pooled = (results[k] for k in ("ascend", "ascend-utterances", ASCEND_POOLED))
     assert (sessions["incidents"]["fixed"], clips["incidents"]["fixed"]) == (1, 1)
     assert pooled["incidents"] == {
         "lines": 4,
@@ -380,7 +387,7 @@ def test_compare_leaves_out_incidents_for_corpora_without_a_mixed_recording(root
     results = invoke("compare", "--a", "w-runs-lid", "--b", "w-prod", "--corpus", "ami", "--corpus", "alimeeting")[
         "results"
     ]
-    assert all("incidents" not in entry for entry in results.values())  # type: ignore[attr-defined]
+    assert all("incidents" not in entry for entry in results.values())
 
 
 LOOP_LINES = (
@@ -433,7 +440,7 @@ def rescore_output(root: Path, tmp_path: Path, before: ChunkHypothesis, after: C
     return result.output
 
 
-def rescored(root: Path, tmp_path: Path, before: ChunkHypothesis, after: ChunkHypothesis) -> dict[str, object]:
+def rescored(root: Path, tmp_path: Path, before: ChunkHypothesis, after: ChunkHypothesis) -> dict[str, Any]:
     return json.loads(rescore_output(root, tmp_path, before, after))
 
 
@@ -562,8 +569,10 @@ def test_rescore_refuses_windows_the_two_runs_were_not_both_scored_on(
     real = run_recordings_asr.score_items
     calls: list[int] = []
 
-    def short_first(*args, **kwargs):
-        result = real(*args, **kwargs)
+    def short_first(
+        items: Sequence[Item], rows: Mapping[str, Sequence[ChunkHypothesis]], metric: Metric, view: View
+    ) -> Scored:
+        result = real(items, rows, metric, view)
         calls.append(1)
         return replace(result, windows=result.windows[1:]) if len(calls) == 1 else result
 
@@ -695,4 +704,4 @@ def test_score_counts_recordings_whose_rows_hold_more_than_one_language(root: Pa
     items = load_items("ami", root=root)
     run_corpus(asr_layout("ami", root), "w-runs-lid", items, worker=FakeWorker(rows_for))
     report = invoke("score", "--hyp", "w-runs-lid", "--corpus", "ami")["corpora"]
-    assert report["ami"]["multi_language_recordings"] == 1  # type: ignore[index]
+    assert report["ami"]["multi_language_recordings"] == 1

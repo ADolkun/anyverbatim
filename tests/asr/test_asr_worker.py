@@ -9,6 +9,7 @@ from pydantic import JsonValue, ValidationError
 
 from anyverbatim import mlx_worker
 from anyverbatim.asr import worker
+from anyverbatim.asr.audio import Audio
 from anyverbatim.asr.chunks import Chunk, Region
 from anyverbatim.asr.models import (
     ERROR_FILE,
@@ -172,8 +173,8 @@ def test_file_ids_must_be_unique(tmp_path: Path, wav: Path) -> None:
 def test_missing_plan_comes_from_the_vad(tmp_path: Path, wav: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[float] = []
 
-    def fake_regions(audio: object) -> list[Region]:
-        seen.append(audio.duration)  # type: ignore[attr-defined]
+    def fake_regions(audio: Audio) -> list[Region]:
+        seen.append(audio.duration)
         return [Region(0.5, 2.0), Region(5.0, 7.0)]
 
     monkeypatch.setattr(worker, "speech_regions", fake_regions)

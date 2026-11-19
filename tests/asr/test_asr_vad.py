@@ -1,9 +1,9 @@
 import sys
 from types import ModuleType
-from typing import Any
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from anyverbatim.asr import vad
 from anyverbatim.asr.audio import Audio
@@ -15,23 +15,23 @@ from anyverbatim.errors import DependencyError
 class FakeModel:
     def __init__(self, stamps: list[dict[str, float]]) -> None:
         self.stamps = stamps
-        self.calls: list[tuple[Any, dict[str, Any]]] = []
+        self.calls: list[tuple[NDArray[np.float32], dict[str, object]]] = []
 
-    def get_speech_timestamps(self, audio: Any, **kwargs: Any) -> list[dict[str, float]]:
+    def get_speech_timestamps(self, audio: NDArray[np.float32], **kwargs: object) -> list[dict[str, float]]:
         self.calls.append((audio, kwargs))
         return self.stamps
 
 
-def install_fake(monkeypatch: pytest.MonkeyPatch, model: FakeModel) -> list[tuple[str, dict[str, Any]]]:
-    loads: list[tuple[str, dict[str, Any]]] = []
+def install_fake(monkeypatch: pytest.MonkeyPatch, model: FakeModel) -> list[tuple[str, dict[str, object]]]:
+    loads: list[tuple[str, dict[str, object]]] = []
     package, module = ModuleType("mlx_audio"), ModuleType("mlx_audio.vad")
 
-    def load(repo: str, **kwargs: Any) -> FakeModel:
+    def load(repo: str, **kwargs: object) -> FakeModel:
         loads.append((repo, kwargs))
         return model
 
-    module.load = load  # type: ignore[attr-defined]
-    package.vad = module  # type: ignore[attr-defined]
+    vars(module)["load"] = load
+    vars(package)["vad"] = module
     monkeypatch.setitem(sys.modules, "mlx_audio", package)
     monkeypatch.setitem(sys.modules, "mlx_audio.vad", module)
     return loads

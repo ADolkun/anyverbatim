@@ -8,8 +8,8 @@ from anyverbatim.asr.models import ChunkHypothesis
 from anyverbatim.errors import ConfigError
 from evals.diarization import Turn, wder
 from evals.metrics import ErrorCounts, cer, mer, wer
-from evals.normalize import to_units
-from evals.recordings_corpus import FOLDER_CORPORA, Item, Reference
+from evals.normalize import Language, View, to_units
+from evals.recordings_corpus import FOLDER_CORPORA, Item, Metric, Reference
 from evals.recordings_data import RefUtterance
 from evals.recordings_scoring import (
     ChunkScore,
@@ -33,7 +33,7 @@ from evals.recordings_scoring import (
 from evals.run_diarization import load_words
 
 
-def item(reference: Reference, language="en", corpus="ami", wav="audio.wav") -> Item:
+def item(reference: Reference | None, language: Language = "en", corpus: str = "ami", wav: str = "audio.wav") -> Item:
     return Item(corpus, "m1", Path(wav), 100.0, language, reference)
 
 
@@ -123,16 +123,18 @@ def test_a_window_with_an_empty_reference_counts_every_hypothesis_unit_as_an_ins
         ("mer", "zh", "我们今天 meeting 很长", "我们今天 meting 很长"),
     ],
 )
-def test_counting_units_agrees_with_the_text_metrics(metric, language, reference, hypothesis) -> None:
+def test_counting_units_agrees_with_the_text_metrics(
+    metric: Metric, language: Language, reference: str, hypothesis: str
+) -> None:
     by_text = {"wer": wer, "cer": cer, "mer": mer}[metric](reference, hypothesis, language, "itn")
     units = count_units(metric, to_units(reference, language, "itn"), to_units(hypothesis, language, "itn"))
     assert units == by_text
 
 
-def english_item_scores(reference_line: str, spoken_text: str, view: str = "itn") -> list[int]:
+def english_item_scores(reference_line: str, spoken_text: str, view: View = "itn") -> list[int]:
     reference = Reference(reference_line, utterances((0, 4, reference_line)))
     rows = [spoken("w", "m1", pieces(spoken_text, 0.2, 0.3))]
-    return [w.counts.errors for w in score_item(item(reference), rows, "wer", view).windows]  # type: ignore[arg-type]
+    return [w.counts.errors for w in score_item(item(reference), rows, "wer", view).windows]
 
 
 def test_contractions_are_normalized_once_so_both_spellings_match_under_itn() -> None:
@@ -281,7 +283,7 @@ def test_a_recording_that_is_not_mixed_has_no_clean_lines() -> None:
 
 def test_an_item_without_a_reference_cannot_be_scored() -> None:
     with pytest.raises(ConfigError, match="no reference"):
-        score_item(item(None), [], "wer", "itn")  # type: ignore[arg-type]
+        score_item(item(None), [], "wer", "itn")
 
 
 def window(item_id: str, index: int, errors: int, units: int) -> WindowScore:

@@ -10,6 +10,7 @@ import pytest
 
 from anyverbatim.asr.chunks import Chunk
 from anyverbatim.asr.models import ChunkHypothesis
+from anyverbatim.asr.protocol import ChunkFlag
 from anyverbatim.contract.models import Word
 from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from evals.manifest import EVAL_DIR_ENV, Manifest, load_manifest
@@ -116,7 +117,7 @@ def make_eval(root: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Layout, Mani
 
 
 def chunk_rows(
-    hypothesis: str, file: str, texts: Sequence[str], flags: Sequence[tuple[str, ...]] = ()
+    hypothesis: str, file: str, texts: Sequence[str], flags: Sequence[tuple[ChunkFlag, ...]] = ()
 ) -> list[ChunkHypothesis]:
     return [
         ChunkHypothesis(
@@ -126,7 +127,7 @@ def chunk_rows(
             start=CHUNKS[i].start,
             end=CHUNKS[i].end,
             text=text,
-            flags=flags[i] if i < len(flags) else (),  # type: ignore[arg-type]
+            flags=flags[i] if i < len(flags) else (),
         )
         for i, text in enumerate(texts)
     ]

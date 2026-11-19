@@ -1,12 +1,17 @@
+import inspect
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 from chatgpt_fakes import EMAIL, PLAN_SCOPES, FakeOpener, Route, http_error, json_response, store_account, token_payload
 from click.testing import CliRunner
 
 import anyverbatim.cli as cli_module
+from anyverbatim import pipeline
 from anyverbatim.cli import llm as llm_cli
 from anyverbatim.cli import main
 from anyverbatim.cli import run as run_cli
@@ -72,7 +77,11 @@ def test_llm_spec_keeps_its_own_providers_settings_and_drops_the_others() -> Non
 
 
 def test_check_ready_is_local_and_fails_on_a_missing_cli_or_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda _name: None)
+
+    def nothing_installed(name: str) -> None:
+        return None
+
+    monkeypatch.setattr(claude_cli.shutil, "which", nothing_installed)
     with pytest.raises(DependencyError, match="claude CLI not found"):
         check_ready(LLMOptions(provider="claude-cli", model="sonnet"))
     with pytest.raises(ConfigError, match="base_url"):
@@ -147,19 +156,19 @@ def test_chatgpt_options_it_would_ignore_are_rejected(options: LLMOptions, messa
 
 
 @pytest.mark.parametrize(
-    ("account", "detail"),
+    ("sign_in", "detail"),
     [
-        ({}, "not signed in"),
-        ({"scopes": ("openid", "offline_access")}, "without ChatGPT plan permission"),
-        ({"expires_at": time.time() - 1, "refresh": ""}, "expired"),
-        ({"refresh_refused": True}, "refused to renew"),
+        (None, "not signed in"),
+        (partial(store_account, scopes=("openid", "offline_access")), "without ChatGPT plan permission"),
+        (partial(store_account, expires_at=time.time() - 1, refresh=""), "expired"),
+        (partial(store_account, refresh_refused=True), "refused to renew"),
     ],
 )
 def test_check_ready_for_chatgpt_names_login_and_llm_none(
-    config: Path, account: dict[str, object], detail: str
+    config: Path, sign_in: Callable[[], object] | None, detail: str
 ) -> None:
-    if account:
-        store_account(**account)
+    if sign_in is not None:
+        sign_in()
     with pytest.raises(ConfigError, match=detail) as raised:
         check_ready(LLMOptions())
     message = str(raised.value)
@@ -193,7 +202,11 @@ class SignIns:
 def token_endpoint(monkeypatch: pytest.MonkeyPatch, route: Route) -> FakeOpener:
     opener = FakeOpener({f"POST {TOKEN_URL}": route})
     real = chatgpt_auth.access_token
-    monkeypatch.setattr(chatgpt_auth, "access_token", lambda **_kwargs: real(opener=opener))
+
+    def access_token(**_kwargs: object) -> str:
+        return real(opener=opener)
+
+    monkeypatch.setattr(chatgpt_auth, "access_token", access_token)
     return opener
 
 
@@ -238,7 +251,11 @@ def test_a_transient_refresh_failure_in_pre_flight_never_opens_a_browser(
 ) -> None:
     store_account(expires_at=time.time() - 1)
     token_endpoint(monkeypatch, http_error(503))
-    monkeypatch.setattr(chatgpt_auth, "interactive_login", lambda _reason: pytest.fail("opened a browser"))
+
+    def refuse_browser(reason: str) -> NoReturn:
+        pytest.fail("opened a browser")
+
+    monkeypatch.setattr(chatgpt_auth, "interactive_login", refuse_browser)
     with pytest.raises(chatgpt_auth.ChatGPTAuthError) as raised:
         check_ready(LLMOptions(), interactive=True)
     assert raised.value.code == "request_failed"
@@ -306,10 +323,6 @@ def test_run_and_llm_test_pass_the_terminals_interactivity(
 
 
 def test_library_calls_default_to_non_interactive() -> None:
-    import inspect
-
-    from anyverbatim import pipeline
-
     for function in (pipeline.process, pipeline.process_many, check_ready, client_from_options):
         assert inspect.signature(function).parameters["interactive"].default is False
 
@@ -322,7 +335,10 @@ def test_llm_test_sends_one_call_with_the_overrides(config: Path, monkeypatch: p
         built.append(options)
         return probe
 
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda _name: "/usr/local/bin/claude")
+    def which(name: str) -> str:
+        return "/usr/local/bin/claude"
+
+    monkeypatch.setattr(claude_cli.shutil, "which", which)
     monkeypatch.setattr(llm_cli, "client_from_options", build)
     result = CliRunner().invoke(
         main, ["llm", "test", "--provider", "claude-cli", "--model", "claude-haiku-5-5", "--effort", "low"]
@@ -350,7 +366,11 @@ def test_llm_test_uses_the_chatgpt_default_and_its_effort_override(
 
 
 def test_llm_test_stops_before_a_call_when_the_llm_is_not_ready(config: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(llm_cli, "client_from_options", lambda *_a, **_k: pytest.fail("built a client"))
+
+    def refuse_to_build(*_args: object, **_kwargs: object) -> NoReturn:
+        pytest.fail("built a client")
+
+    monkeypatch.setattr(llm_cli, "client_from_options", refuse_to_build)
     result = CliRunner().invoke(main, ["llm", "test"])
     assert result.exit_code == 1
     assert "not signed in" in result.output

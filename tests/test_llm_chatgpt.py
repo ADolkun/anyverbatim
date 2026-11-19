@@ -70,7 +70,7 @@ def message(*texts: str, item_id: str = "msg_1") -> dict[str, object]:
     }
 
 
-REASONING = {"id": "rs_1", "type": "reasoning", "summary": [], "encrypted_content": "opaque"}
+REASONING: dict[str, object] = {"id": "rs_1", "type": "reasoning", "summary": [], "encrypted_content": "opaque"}
 USAGE = {
     "input_tokens": 120,
     "output_tokens": 45,
@@ -376,11 +376,13 @@ def test_the_token_is_refreshed_before_the_request() -> None:
         return FakeResponse(lines=sse(completed([message("ok")])))
 
     opener = FakeOpener({f"POST {TOKEN_URL}": refresh, f"POST {RESPONSES_URL}": responses})
-    real_access_token: Callable[..., str] = chatgpt_auth.access_token
+    real_access_token = chatgpt_auth.access_token
+
+    def access_token_at_now(*, opener: chatgpt_http.Opener) -> str:
+        return real_access_token(opener=opener, clock=lambda: NOW)
+
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(
-            chatgpt_auth, "access_token", lambda *, opener: real_access_token(opener=opener, clock=lambda: NOW)
-        )
+        patch.setattr(chatgpt_auth, "access_token", access_token_at_now)
         assert client(opener).complete(REQUEST).text == "ok"
     assert order == ["refresh_token", "Bearer fresh-token"]
 
@@ -397,12 +399,12 @@ def test_the_token_is_refreshed_before_the_request() -> None:
 )
 def test_https_open_refuses_anything_but_the_fixed_hosts(url: str) -> None:
     with pytest.raises(ConfigError, match="refusing to contact"):
-        chatgpt_http.https_open(urllib.request.Request(url), 1.0)
+        chatgpt_http.https_open(urllib.request.Request(url), 1.0)  # noqa: S310 - the hostile scheme is the input
 
 
 def test_redirects_are_refused_rather_than_followed() -> None:
     handler = chatgpt_http._RefuseRedirects()
-    request = urllib.request.Request(RESPONSES_URL, data=b"{}", headers={"Authorization": "Bearer t"})
+    request = urllib.request.Request(RESPONSES_URL, data=b"{}", headers={"Authorization": "Bearer t"})  # noqa: S310 - never opened
     assert handler.redirect_request(request, io.BytesIO(), 307, "redirect", Message(), "https://example.com/") is None
 
 
@@ -446,7 +448,7 @@ def test_a_stream_that_breaks_off_is_unavailable(signed_in: list[str]) -> None:
 
 def test_the_suite_cannot_reach_openai() -> None:
     with pytest.raises(AssertionError, match="tried to contact"):
-        chatgpt_http.https_open(urllib.request.Request(RESPONSES_URL), 1.0)
+        chatgpt_http.https_open(urllib.request.Request(RESPONSES_URL), 1.0)  # noqa: S310 - the autouse guard refuses it
 
 
 Script = Callable[[socket.socket], None]
@@ -564,7 +566,7 @@ def test_a_response_without_a_reachable_socket_fails_loud_and_is_closed() -> Non
 
     stripped = Stripped()
     with pytest.raises(RuntimeError, match="deadline cannot be enforced"):
-        chatgpt_http.BoundedResponse(stripped, 1.0)  # type: ignore[arg-type]
+        chatgpt_http.BoundedResponse(stripped, 1.0)  # pyrefly: ignore[bad-argument-type]  # duck-typed HTTPResponse
     assert stripped.closed
 
 
@@ -574,7 +576,7 @@ def test_a_response_without_a_reachable_socket_fails_loud_and_is_closed() -> Non
 )
 def test_whatever_a_read_the_deadline_interrupts_returns_is_the_timeout(outcome: Exception | bytes) -> None:
     class Interrupted:
-        fp = None
+        fp: None = None
 
         def read1(self, _size: int) -> bytes:
             bounded._expired.set()  # the deadline timer firing in the middle of this read
@@ -588,13 +590,13 @@ def test_whatever_a_read_the_deadline_interrupts_returns_is_the_timeout(outcome:
         def close(self) -> None:
             pass
 
-    bounded = chatgpt_http.BoundedResponse(Interrupted(), 5.0)  # type: ignore[arg-type]
+    bounded = chatgpt_http.BoundedResponse(Interrupted(), 5.0)  # pyrefly: ignore[bad-argument-type]
     with pytest.raises(TimeoutError):
         bounded.readline()
 
 
 def test_reply_items_with_a_null_status_count_as_complete(signed_in: list[str]) -> None:
-    reasoning = {"type": "reasoning", "id": "rs_1", "status": None, "summary": []}
+    reasoning: dict[str, object] = {"type": "reasoning", "id": "rs_1", "status": None, "summary": []}
     reply = {**message("ok"), "status": None}
     response = client(stream(sse(completed([reasoning, reply])))).complete(REQUEST)
     assert response.text == "ok"
@@ -698,7 +700,11 @@ def test_without_reauth_a_lapsed_sign_in_raises(monkeypatch: pytest.MonkeyPatch)
 
 def responses(*routes: Route) -> FakeOpener:
     queue = list(routes)
-    return FakeOpener({f"POST {RESPONSES_URL}": lambda request: queue.pop(0)(request)})
+
+    def next_route(request: urllib.request.Request) -> FakeResponse:
+        return queue.pop(0)(request)
+
+    return FakeOpener({f"POST {RESPONSES_URL}": next_route})
 
 
 def ok_stream(_request: urllib.request.Request) -> FakeResponse:
@@ -790,7 +796,7 @@ def test_threads_sharing_a_client_sign_in_once(monkeypatch: pytest.MonkeyPatch) 
     def call() -> None:
         try:
             texts.append(chat.complete(REQUEST).text)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - a failure on a worker thread must reach the main assertion
             errors.append(exc)
 
     threads = [threading.Thread(target=call) for _ in range(2)]

@@ -6,6 +6,11 @@ import numpy as np
 import pytest
 
 from anyverbatim.contract.models import Word
+from anyverbatim.diarize import registry as diarize_registry
+from anyverbatim.diarize import worker
+from anyverbatim.diarize.protocol import DiarizerDef, DiarizeRequest, RawDiarization
+from anyverbatim.diarize.protocol import Turn as RawTurn
+from anyverbatim.diarize.runner import DiarizeResult
 from anyverbatim.errors import ConfigError, EngineError
 from evals.diarization import Turn
 from evals.recordings_data import CorpusIndex, RefUtterance, wav_bytes, write_index, write_recording
@@ -83,7 +88,7 @@ def test_wder_is_reported_with_and_without_smoothing_when_words_exist(tmp_path: 
     recording = make_corpus(tmp_path)
     words = [{"text": "w", "start": float(t), "end": t + 0.5} for t in (1, 3, 5, 11, 13, 15, 21, 23)]
     recording.words.write_text(json.dumps(words), encoding="utf-8")
-    raw = ["x", "x", "y", "y", "y", "y", "x", "x"]
+    raw: list[str | None] = ["x", "x", "y", "y", "y", "y", "x", "x"]
     backend = FakeBackend([Turn(0, 30, "x")], smoothed_labels=raw)
     score = score_recording(backend, recording, tmp_path / "out")
     assert score.wder_smoothed is not None
@@ -251,11 +256,6 @@ def test_production_backend_reads_what_the_real_diarize_worker_stores(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Contract check against anyverbatim.diarize with a fake model: no weights, no subprocess."""
-    from anyverbatim.diarize import registry as diarize_registry
-    from anyverbatim.diarize import worker
-    from anyverbatim.diarize.protocol import DiarizeRequest, RawDiarization
-    from anyverbatim.diarize.protocol import Turn as RawTurn
-    from anyverbatim.diarize.runner import DiarizeResult
 
     class FakeModel:
         def load(self) -> None:
@@ -274,7 +274,10 @@ def test_production_backend_reads_what_the_real_diarize_worker_stores(
         metrics = worker.run_request(request, diarizer=FakeModel())
         return DiarizeResult(Path(request.out_dir), metrics, 0, 0.1)
 
-    monkeypatch.setattr(diarize_registry, "check_dependencies", lambda _: None)
+    def no_dependency_check(definition: DiarizerDef) -> None:
+        return None
+
+    monkeypatch.setattr(diarize_registry, "check_dependencies", no_dependency_check)
     recording = make_corpus(tmp_path / "data")
     words = [{"text": "w", "start": float(t), "end": t + 0.5} for t in (1, 3, 11, 13, 21, 23)]
     recording.words.write_text(json.dumps(words), encoding="utf-8")

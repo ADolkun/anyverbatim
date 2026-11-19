@@ -4,7 +4,6 @@ import dataclasses
 import hashlib
 import http.client
 import json
-import os
 import socket
 import stat
 import threading
@@ -92,7 +91,7 @@ def token_endpoint(browser: Browser, **claims: object) -> FakeOpener:
     return FakeOpener({f"POST {TOKEN_URL}": route})
 
 
-def login(browser: Browser, opener: FakeOpener, *, timeout_s: float = 10.0) -> chatgpt_auth.LoginResult:
+def login(browser: Callable[[str], bool], opener: FakeOpener, *, timeout_s: float = 10.0) -> chatgpt_auth.LoginResult:
     return chatgpt_auth.login(open_url=browser, opener=opener, timeout_s=timeout_s, clock=lambda: NOW)
 
 
@@ -449,7 +448,7 @@ def test_the_store_never_holds_more_than_one_account() -> None:
     assert set(raw) == {"schema_version", "host_id", "client_id", "account"}
     assert raw["account"]["scopes"] == list(PLAN_SCOPES)
     assert "id_token" not in raw["account"]
-    assert os.stat(paths.chatgpt_lock_file()).st_mode & 0o077 == 0
+    assert paths.chatgpt_lock_file().stat().st_mode & 0o077 == 0
 
 
 def test_reading_the_status_creates_no_directory(tmp_path: Path) -> None:
@@ -484,7 +483,7 @@ def test_invalid_grant_on_a_first_registration_reauthorizes_once_under_the_issue
         nonce = browsers.rounds[-1].query["nonce"]
         return FakeResponse(body=json.dumps(token_payload(id_token=id_token(nonce=nonce))).encode())
 
-    login(browsers, FakeOpener({f"POST {TOKEN_URL}": token}))  # type: ignore[arg-type]
+    login(browsers, FakeOpener({f"POST {TOKEN_URL}": token}))
     first, second = (b.query for b in browsers.rounds)
     assert first["client_id"] == "dynamic_agent_client"
     assert "agent_name_hint" in first
@@ -501,7 +500,7 @@ def test_a_second_invalid_grant_is_not_retried_again() -> None:
     browsers = Browsers(approve)
     opener = FakeOpener({f"POST {TOKEN_URL}": http_error(400, {"error": "invalid_grant"})})
     with pytest.raises(ChatGPTAuthError) as raised:
-        login(browsers, opener)  # type: ignore[arg-type]
+        login(browsers, opener)
     assert raised.value.code == "invalid_grant"
     assert len(browsers.rounds) == 2
     assert len(opener.requests) == 2
@@ -570,10 +569,10 @@ def test_a_refresh_refused_for_its_client_forgets_only_the_client() -> None:
 @pytest.mark.parametrize(
     "route",
     [
-        http_error(400, {"error": "invalid_grant"}),
-        http_error(401, {"error": "invalid_client"}),
-        http_error(503),
-        json_response({"access_token": "half"}),
+        pytest.param(http_error(400, {"error": "invalid_grant"}), id="invalid_grant"),
+        pytest.param(http_error(401, {"error": "invalid_client"}), id="invalid_client"),
+        pytest.param(http_error(503), id="server_error"),
+        pytest.param(json_response({"access_token": "half"}), id="half_a_grant"),
     ],
 )
 def test_a_failed_refresh_with_time_left_returns_the_current_token(route: Route) -> None:
@@ -621,7 +620,7 @@ def issue(query: dict[str, str]) -> list[dict[str, str]]:
 def test_an_exchange_refused_for_its_client_registers_afresh_within_one_login() -> None:
     store_account()
     browsers = Browsers(issue)
-    login(browsers, scripted_token_endpoint(browsers, "invalid_client", None))  # type: ignore[arg-type]
+    login(browsers, scripted_token_endpoint(browsers, "invalid_client", None))
     first, second = (b.query for b in browsers.rounds)
     assert first["client_id"] == CLIENT_ID
     assert second["client_id"] == chatgpt_auth.DYNAMIC_CLIENT
@@ -643,11 +642,12 @@ def test_each_sign_in_fallback_runs_at_most_once(outcomes: tuple[str, ...], roun
     store_account()
     browsers = Browsers(issue)
     with pytest.raises(ChatGPTAuthError) as raised:
-        login(browsers, scripted_token_endpoint(browsers, *outcomes))  # type: ignore[arg-type]
+        login(browsers, scripted_token_endpoint(browsers, *outcomes))
     assert raised.value.code == code
     assert len(browsers.rounds) == rounds
     account = stored_state().account
-    assert account is not None and account.access_token == "access-1", "a failed sign-in keeps the old session"
+    assert account is not None, "a failed sign-in keeps the old session"
+    assert account.access_token == "access-1", "a failed sign-in keeps the old session"
 
 
 def test_logout_clears_the_tokens_even_when_revocation_fails_unexpectedly() -> None:
@@ -741,7 +741,7 @@ def test_concurrent_refreshes_send_one_token_request() -> None:
     def use() -> None:
         try:
             tokens.append(chatgpt_auth.access_token(opener=opener, clock=lambda: NOW))
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - a failure on a worker thread must reach the main assertion
             errors.append(exc)
 
     threads = [threading.Thread(target=use) for _ in range(2)]
@@ -765,7 +765,12 @@ def test_interactive_login_says_why_prints_the_url_and_opens_the_browser(
         return chatgpt_auth.LoginResult(EMAIL, plan=True)
 
     monkeypatch.setattr(chatgpt_auth, "login", fake_login)
-    monkeypatch.setattr(chatgpt_auth.webbrowser, "open", lambda target: opened.append(target) or False)
+
+    def refuse_to_open(target: str) -> bool:
+        opened.append(target)
+        return False
+
+    monkeypatch.setattr(chatgpt_auth.webbrowser, "open", refuse_to_open)
     assert chatgpt_auth.interactive_login("ChatGPT sign-in lapsed").plan
     err = capsys.readouterr().err
     assert err.startswith("ChatGPT sign-in lapsed; opening the browser to sign in again (waiting up to 5 minutes)\n")

@@ -6,13 +6,13 @@ import signal
 from collections.abc import Callable, Generator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast, override
 
 import pytest
 from click.testing import CliRunner
 from evals_fixture import EN, ZH, make_eval, whole_file_rows
 
-from anyverbatim import paths, pipeline, stages
+from anyverbatim import paths, pipeline, proc, stages
 from anyverbatim.acquire.metadata import trim_info
 from anyverbatim.contract.models import Flag
 from anyverbatim.errors import (
@@ -21,6 +21,7 @@ from anyverbatim.errors import (
     EngineMemoryError,
     LLMOutputError,
     LLMUnavailableError,
+    MemoryTrigger,
     ProcMemoryExceeded,
 )
 from anyverbatim.llm import ClaudeCLIClient
@@ -221,6 +222,7 @@ def test_a_rejected_proposal_is_stored_with_its_guard(tmp_path: Path, monkeypatc
     layout, manifest = based(tmp_path, monkeypatch)
 
     class Numbers(FakeLLM):
+        @override
         def _reply(self, request: LLMRequest) -> str:
             items = segments(request)
             fixed = [{"i": i["i"], "text": i["text"].replace("一百", "二百")} for i in items if "一百" in i["text"]]
@@ -251,6 +253,7 @@ def test_a_double_json_failure_is_recorded_and_raised(tmp_path: Path, monkeypatc
 
 
 class Thinking(FakeLLM):
+    @override
     def _reply(self, request: LLMRequest) -> str:
         return '<think>\n{"fixed": []}\n</think>\n' + super()._reply(request)
 
@@ -275,6 +278,7 @@ def test_a_claude_candidate_is_not_screened_for_think_tags(tmp_path: Path, monke
 
 def test_a_call_that_raised_is_logged_with_its_error(tmp_path: Path) -> None:
     class Down(FakeLLM):
+        @override
         def complete(self, request: LLMRequest) -> LLMResponse:
             raise LLMUnavailableError("quota resets at 5pm")
 
@@ -382,13 +386,16 @@ def test_parity_the_eval_passes_the_pipelines_context_and_confidence(
     assert call["segments"] == [s.text for s in base.stretches]
     assert call["language"] == base.language
     assert call["checkpoint_dir"] == correction_run(layout) / "ckpt" / ZH
-    assert call["client"].id == SONNET.client_id  # type: ignore[attr-defined]
+    client = call["client"]
+    assert isinstance(client, RecordingClient)
+    assert client.id == SONNET.client_id
 
 
 def test_entity_flags_are_stored_with_the_candidate_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     layout, manifest = based(tmp_path, monkeypatch)
 
     class Tickers(FakeLLM):
+        @override
         def _reply(self, request: LLMRequest) -> str:
             items = segments(request)
             fixed = [{"i": i["i"], "text": i["text"].replace("NVDA", "NVDIA")} for i in items if "NVDA" in i["text"]]
@@ -455,15 +462,16 @@ class Rig:
         return Readiness(self.answers.pop(0) if self.answers else True, "fake")
 
     @contextlib.contextmanager
-    def _background(self, argv: list[str], **kwargs: object) -> Generator[FakeServer]:
+    def _background(self, argv: list[str], **kwargs: object) -> Generator[proc.Background]:
         self.started.append({"argv": argv, **kwargs})
         self.locked_during.append(_lock_is_held())
         passed = kwargs.get("pass_fds")
         assert isinstance(passed, tuple)
-        lock_file = os.stat(paths.locks_dir() / "mlx-worker.lock")
+        lock_file = (paths.locks_dir() / "mlx-worker.lock").stat()
         self.passed_the_lock.append([os.fstat(fd).st_ino for fd in passed] == [lock_file.st_ino])
         try:
-            yield self.server
+            # FakeServer carries the members `local_server` reads from a Background.
+            yield cast("proc.Background", self.server)
         except BaseException as exc:
             if self.breach is not None:
                 raise self.breach from exc
@@ -488,14 +496,14 @@ def rig(tmp_path: Path) -> Rig:
     return Rig(cache=tmp_path / "cache", directory=tmp_path / "run")
 
 
-def breach(trigger: str = "footprint") -> ProcMemoryExceeded:
+def breach(trigger: MemoryTrigger = "footprint") -> ProcMemoryExceeded:
     return ProcMemoryExceeded(
         "python",
         trigger,
         footprint_bytes=13 << 30,
         cap_bytes=12 << 30,
         available_percent=40,
-        floor_percent=10,  # type: ignore[arg-type]
+        floor_percent=10,
     )
 
 
@@ -519,7 +527,9 @@ def test_the_local_server_runs_pinned_bounded_and_under_the_worker_lock(rig: Rig
     assert rig.passed_the_lock == [True]
     assert started["cwd"] == correction.REPO_ROOT
     assert started["log"] == rig.directory / "server.log"
-    assert started["memory_watch"].cap_bytes == 12 << 30  # type: ignore[attr-defined]
+    memory_watch = started["memory_watch"]
+    assert isinstance(memory_watch, proc.MemoryWatch)
+    assert memory_watch.cap_bytes == 12 << 30
     env = started["env"]
     assert isinstance(env, dict)
     assert env["HF_HUB_OFFLINE"] == "1"
@@ -547,9 +557,14 @@ def test_a_present_snapshot_skips_the_disk_gate_but_still_goes_through_the_downl
 
 def test_sigterm_during_the_run_leaves_through_the_servers_exit(rig: Rig) -> None:
     before = signal.getsignal(signal.SIGTERM)
-    with pytest.raises(SystemExit) as info, local_server(LOCAL, rig.cache, rig.directory, seams=rig.seams()):
-        os.kill(os.getpid(), signal.SIGTERM)
-        pytest.fail("SIGTERM must end the block")
+
+    def sigterm_inside_the_server() -> None:
+        with local_server(LOCAL, rig.cache, rig.directory, seams=rig.seams()):
+            os.kill(os.getpid(), signal.SIGTERM)
+            pytest.fail("SIGTERM must end the block")
+
+    with pytest.raises(SystemExit) as info:
+        sigterm_inside_the_server()
     assert info.value.code == 128 + signal.SIGTERM
     assert (rig.directory / "server.json").exists()
     assert not _lock_is_held()
@@ -589,7 +604,7 @@ def test_a_claude_candidate_has_no_server(rig: Rig) -> None:
 @pytest.mark.parametrize(
     ("trigger", "fix"), [("footprint", "memory_cap_gib"), ("available", "close memory-heavy apps")]
 )
-def test_a_watch_breach_becomes_an_engine_memory_error(rig: Rig, trigger: str, fix: str) -> None:
+def test_a_watch_breach_becomes_an_engine_memory_error(rig: Rig, trigger: MemoryTrigger, fix: str) -> None:
     rig.breach = breach(trigger)
     with pytest.raises(EngineMemoryError) as info, local_server(LOCAL, rig.cache, rig.directory, seams=rig.seams()):
         raise LLMUnavailableError("cannot reach the server")
@@ -686,7 +701,11 @@ def test_the_commands_run_base_correct_and_cleanup(tmp_path: Path, monkeypatch: 
     punct = FakeLLM("fake:punct")
     corrector = FakeLLM("fake:corrector")
     opened: list[str] = []
-    monkeypatch.setattr(run_correction, "punctuation_client", lambda spec: punct)
+
+    def punctuation_client(spec: str) -> FakeLLM:
+        return punct
+
+    monkeypatch.setattr(run_correction, "punctuation_client", punctuation_client)
 
     @contextlib.contextmanager
     def open_client(store: Layout, candidate: correction.Candidate, cache: Path) -> Generator[FakeLLM]:

@@ -4,6 +4,8 @@ import wave
 from collections.abc import Mapping
 from pathlib import Path
 
+import numpy as np
+from numpy.typing import NDArray
 from pydantic import JsonValue
 
 from anyverbatim.asr.protocol import AsrContext, EngineDef, EngineSpec, RawChunk
@@ -21,9 +23,9 @@ def write_silence(path: Path, seconds: float) -> Path:
     return path
 
 
-def definition(max_chunk_s: float | None = 30.0, **variant: object) -> EngineDef:
+def definition(max_chunk_s: float | None = 30.0, **variant: JsonValue) -> EngineDef:
     spec = EngineSpec("fake", "fake", "example/fake", "0" * 40, max_chunk_s, False, False, True, RATE)
-    return EngineDef(spec, "fake_engine.create", {"language": "pass", **variant})  # type: ignore[arg-type]
+    return EngineDef(spec, "fake_engine.create", {"language": "pass", **variant})
 
 
 class FakeEngine:
@@ -40,8 +42,8 @@ class FakeEngine:
     def load(self) -> None:
         self._log("load")
 
-    def transcribe(self, audio: object, *, language: str | None, context: AsrContext | None) -> RawChunk:
-        samples = len(audio)  # type: ignore[arg-type]
+    def transcribe(self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None) -> RawChunk:
+        samples = len(audio)
         self._log(f"transcribe {samples}")
         self.calls += 1
         if self.variant.get("fail_on_call") == self.calls:

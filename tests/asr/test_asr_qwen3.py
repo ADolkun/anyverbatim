@@ -1,9 +1,9 @@
 import sys
 from types import ModuleType, SimpleNamespace
-from typing import Any
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from anyverbatim.asr import registry
 from anyverbatim.asr.engines import qwen3
@@ -16,22 +16,22 @@ RATE = 16_000
 class FakeModel:
     def __init__(self, text: str = "hello", language: str | list[str] = "English", tokens: int = 7) -> None:
         self.reply = SimpleNamespace(text=text, language=language, generation_tokens=tokens)
-        self.calls: list[tuple[Any, dict[str, Any]]] = []
+        self.calls: list[tuple[NDArray[np.float32], dict[str, object]]] = []
 
-    def generate(self, audio: Any, **kwargs: Any) -> Any:
+    def generate(self, audio: NDArray[np.float32], **kwargs: object) -> SimpleNamespace:
         self.calls.append((audio, kwargs))
         return self.reply
 
 
-def install_fake(monkeypatch: pytest.MonkeyPatch, model: FakeModel) -> list[tuple[str, dict[str, Any]]]:
-    loads: list[tuple[str, dict[str, Any]]] = []
+def install_fake(monkeypatch: pytest.MonkeyPatch, model: FakeModel) -> list[tuple[str, dict[str, object]]]:
+    loads: list[tuple[str, dict[str, object]]] = []
     package, stt, utils = ModuleType("mlx_audio"), ModuleType("mlx_audio.stt"), ModuleType("mlx_audio.stt.utils")
 
-    def load(repo: str, **kwargs: Any) -> FakeModel:
+    def load(repo: str, **kwargs: object) -> FakeModel:
         loads.append((repo, kwargs))
         return model
 
-    utils.load = load  # type: ignore[attr-defined]
+    vars(utils)["load"] = load
     for name, module in (("mlx_audio", package), ("mlx_audio.stt", stt), ("mlx_audio.stt.utils", utils)):
         monkeypatch.setitem(sys.modules, name, module)
     return loads
@@ -44,7 +44,7 @@ def engine(hypothesis: str) -> qwen3.Qwen3Engine:
     return built
 
 
-def clip(seconds: float) -> Any:
+def clip(seconds: float) -> NDArray[np.float32]:
     return np.zeros(round(seconds * RATE), dtype=np.float32)
 
 

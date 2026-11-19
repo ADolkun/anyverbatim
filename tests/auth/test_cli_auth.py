@@ -1,11 +1,15 @@
 import json
+import shutil
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 
 import pytest
+from auth_fakes import Kit
 from chatgpt_fakes import EMAIL, store_account
-from click.testing import CliRunner
+from click.testing import CliRunner, Result
 
 from anyverbatim import paths
 from anyverbatim.acquire import voicememos
@@ -64,11 +68,15 @@ def _use_runner(monkeypatch: pytest.MonkeyPatch, runner: object) -> None:
     monkeypatch.setattr(cli_session, "SubprocessRunner", lambda: runner)
 
 
-def _invoke(*args: str):
+def _which_all(name: str) -> str:
+    return f"/opt/bin/{name}"
+
+
+def _invoke(*args: str) -> Result:
     return CliRunner().invoke(main, ["auth", *args])
 
 
-def _status(*args: str):
+def _status(*args: str) -> Result:
     return CliRunner().invoke(main, ["status", *args])
 
 
@@ -83,7 +91,7 @@ def test_auth_is_registered() -> None:
     assert "status" not in commands, "the YouTube check moved to `anyverbatim status`"
 
 
-def test_status_json_shape_and_cache(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_json_shape_and_cache(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     source.save_source(BrowserSource("chrome", "Default"))
     runner = kit.ok()
     _use_runner(monkeypatch, runner)
@@ -104,7 +112,7 @@ def test_status_json_shape_and_cache(kit, monkeypatch: pytest.MonkeyPatch) -> No
     assert len(runner.calls) == 1
 
 
-def test_status_human_output(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_human_output(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     source.save_source(BrowserSource("chrome", "Default"))
     _use_runner(monkeypatch, kit.ok())
     result = _status()
@@ -114,7 +122,7 @@ def test_status_human_output(kit, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "fakeLikedId" not in result.output
 
 
-def test_status_auth_problem_needs_attention(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_auth_problem_needs_attention(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     source.save_source(BrowserSource("chrome", "Default"))
     _use_runner(monkeypatch, kit.fail(Signal.LOGIN_REQUIRED))
     result = _status()
@@ -123,7 +131,7 @@ def test_status_auth_problem_needs_attention(kit, monkeypatch: pytest.MonkeyPatc
     assert "Fix: chrome profile 'Default' is not signed in" in result.output
 
 
-def test_status_without_a_browser_login_is_fine_for_public_videos(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_without_a_browser_login_is_fine_for_public_videos(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     _use_runner(monkeypatch, kit.ok())
     store_account(expires_at=time.time() + 3600)
     result = _status()
@@ -136,7 +144,7 @@ def test_status_without_a_browser_login_is_fine_for_public_videos(kit, monkeypat
     assert payload["youtube"]["usable"] is True
 
 
-def test_status_with_broken_saved_source_needs_attention(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_with_broken_saved_source_needs_attention(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     paths.auth_source_file().write_text("{", encoding="utf-8")
     _use_runner(monkeypatch, kit.ok())
     store_account(expires_at=time.time() + 3600)
@@ -189,7 +197,7 @@ def test_use_bare_browser_refuses_to_guess() -> None:
     assert "profile_not_found" in result.output
 
 
-def test_use_bare_browser_saves_the_only_profile(kit) -> None:
+def test_use_bare_browser_saves_the_only_profile(kit: Kit) -> None:
     (kit.chrome_root / "Work" / "Cookies").unlink()
     assert _invoke("use", "chrome").exit_code == 0
     assert source.resolve_source() == BrowserSource("chrome", "Default")
@@ -238,10 +246,8 @@ def test_use_none_clears() -> None:
     assert source.resolve_source() is None
 
 
-def test_doctor_prints_one_line_per_check(kit, monkeypatch: pytest.MonkeyPatch) -> None:
-    import shutil
-
-    monkeypatch.setattr(shutil, "which", lambda name: f"/opt/bin/{name}")
+def test_doctor_prints_one_line_per_check(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", _which_all)
     _use_runner(monkeypatch, kit.ok())
     result = _invoke("doctor")
     assert result.exit_code == 2
@@ -251,7 +257,7 @@ def test_doctor_prints_one_line_per_check(kit, monkeypatch: pytest.MonkeyPatch) 
     assert any(line.startswith("    Fix: No auth source set") for line in lines)
 
 
-def test_status_during_a_cooldown_skips_the_probe_unless_ignored(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_during_a_cooldown_skips_the_probe_unless_ignored(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     source.save_source(BrowserSource("chrome", "Default"))
     start_cooldown(Signal.BOT_CHECK, datetime.now(UTC))
     runner = kit.ok()
@@ -272,7 +278,7 @@ def test_status_during_a_cooldown_skips_the_probe_unless_ignored(kit, monkeypatc
     assert len(runner.calls) == 1
 
 
-def test_status_probe_stop_signal_starts_a_cooldown(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_probe_stop_signal_starts_a_cooldown(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     source.save_source(BrowserSource("chrome", "Default"))
     _use_runner(monkeypatch, kit.fail(Signal.BOT_CHECK))
     result = _status("--refresh")
@@ -287,10 +293,8 @@ def test_status_probe_stop_signal_starts_a_cooldown(kit, monkeypatch: pytest.Mon
     assert runner.calls == []
 
 
-def test_doctor_during_a_cooldown_skips_the_probe_unless_ignored(kit, monkeypatch: pytest.MonkeyPatch) -> None:
-    import shutil
-
-    monkeypatch.setattr(shutil, "which", lambda name: f"/opt/bin/{name}")
+def test_doctor_during_a_cooldown_skips_the_probe_unless_ignored(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shutil, "which", _which_all)
     source.save_source(BrowserSource("chrome", "Default"))
     start_cooldown(Signal.RATE_LIMITED, datetime.now(UTC))
     runner = kit.ok()
@@ -304,12 +308,12 @@ def test_doctor_during_a_cooldown_skips_the_probe_unless_ignored(kit, monkeypatc
     assert len(runner.calls) == 1
 
 
-def _signed_in_youtube(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def _signed_in_youtube(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     source.save_source(BrowserSource("chrome", "Default"))
     _use_runner(monkeypatch, kit.ok())
 
 
-def test_status_signed_out_of_chatgpt(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_signed_out_of_chatgpt(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     _signed_in_youtube(kit, monkeypatch)
     result = _status()
     assert result.exit_code == 1
@@ -320,7 +324,7 @@ def test_status_signed_out_of_chatgpt(kit, monkeypatch: pytest.MonkeyPatch) -> N
     assert lines[3] == "LLM          chatgpt:gpt-sol (newest gpt-sol, not resolved, medium effort)"
 
 
-def test_status_signed_in_to_chatgpt(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_signed_in_to_chatgpt(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     _signed_in_youtube(kit, monkeypatch)
     store_account(expires_at=time.time() + 3600)
     result = _status()
@@ -334,7 +338,7 @@ def test_status_signed_in_to_chatgpt(kit, monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_status_resolves_the_model_only_with_a_usable_sign_in(
-    kit, monkeypatch: pytest.MonkeyPatch, newest_sol: list[str]
+    kit: Kit, monkeypatch: pytest.MonkeyPatch, newest_sol: list[str]
 ) -> None:
     _signed_in_youtube(kit, monkeypatch)
     assert _status().exit_code == 1
@@ -345,7 +349,7 @@ def test_status_resolves_the_model_only_with_a_usable_sign_in(
 
 
 def test_status_shows_a_pinned_model_as_is_and_a_family_by_its_newest(
-    kit, monkeypatch: pytest.MonkeyPatch, newest_sol: list[str]
+    kit: Kit, monkeypatch: pytest.MonkeyPatch, newest_sol: list[str]
 ) -> None:
     _signed_in_youtube(kit, monkeypatch)
     store_account(expires_at=time.time() + 3600)
@@ -365,7 +369,7 @@ def test_status_shows_a_pinned_model_as_is_and_a_family_by_its_newest(
 
 
 def test_status_says_why_the_newest_model_could_not_be_read_and_keeps_its_exit_code(
-    kit, monkeypatch: pytest.MonkeyPatch
+    kit: Kit, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _signed_in_youtube(kit, monkeypatch)
     store_account(expires_at=time.time() + 3600)
@@ -389,28 +393,32 @@ def test_status_says_why_the_newest_model_could_not_be_read_and_keeps_its_exit_c
 @pytest.mark.parametrize(
     ("stored", "said", "code"),
     [
-        ({"expires_at": time.time() + 30}, "ok, plan permission, refreshes automatically on the next call", 0),
-        ({"expires_at": time.time() - 1, "refresh": ""}, "needs re-sign-in", 1),
-        ({"scopes": ("openid",)}, "signed in without ChatGPT plan permission", 1),
         (
-            {"refresh_refused": True},
+            partial(store_account, expires_at=time.time() + 30),
+            "ok, plan permission, refreshes automatically on the next call",
+            0,
+        ),
+        (partial(store_account, expires_at=time.time() - 1, refresh=""), "needs re-sign-in", 1),
+        (partial(store_account, scopes=("openid",)), "signed in without ChatGPT plan permission", 1),
+        (
+            partial(store_account, refresh_refused=True),
             "needs re-sign-in: OpenAI refused to renew it, so it works only until its token expires",
             1,
         ),
     ],
 )
 def test_status_shows_when_chatgpt_renews_on_its_own_or_needs_a_sign_in(
-    kit, monkeypatch: pytest.MonkeyPatch, stored: dict[str, object], said: str, code: int
+    kit: Kit, monkeypatch: pytest.MonkeyPatch, stored: Callable[[], object], said: str, code: int
 ) -> None:
     _signed_in_youtube(kit, monkeypatch)
-    store_account(**stored)  # type: ignore[arg-type]
+    stored()
     result = _status()
     assert result.exit_code == code, result.output
     assert result.output.splitlines()[1] == f"ChatGPT      {EMAIL}  {said}"
     assert ("Fix: run `anyverbatim login`" in result.output) is (code == 1)
 
 
-def test_status_with_no_llm_does_not_fail_on_chatgpt(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_with_no_llm_does_not_fail_on_chatgpt(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     _signed_in_youtube(kit, monkeypatch)
     config = paths.config_file()
     config.parent.mkdir(parents=True)
@@ -423,7 +431,7 @@ def test_status_with_no_llm_does_not_fail_on_chatgpt(kit, monkeypatch: pytest.Mo
     assert payload["chatgpt"] == {"email": "", "status": "signed_out", "usable": False}
 
 
-def test_status_shows_voice_memos_after_the_llm(kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_shows_voice_memos_after_the_llm(kit: Kit, monkeypatch: pytest.MonkeyPatch) -> None:
     _signed_in_youtube(kit, monkeypatch)
     store_account(expires_at=time.time() + 3600)
     line = _status().output.splitlines()[3]
@@ -446,7 +454,7 @@ def test_status_shows_voice_memos_after_the_llm(kit, monkeypatch: pytest.MonkeyP
     ],
 )
 def test_the_voice_memos_line_never_changes_the_exit_code(
-    kit, monkeypatch: pytest.MonkeyPatch, probe: voicememos.Probe, line: str
+    kit: Kit, monkeypatch: pytest.MonkeyPatch, probe: voicememos.Probe, line: str
 ) -> None:
     _signed_in_youtube(kit, monkeypatch)
     store_account(expires_at=time.time() + 3600)

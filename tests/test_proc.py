@@ -7,7 +7,6 @@ import textwrap
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -232,7 +231,11 @@ def test_without_a_watch_nothing_polls(script: Path, monkeypatch: pytest.MonkeyP
     timeouts: list[float | None] = []
     original = subprocess.Popen.communicate
 
-    def spy(self: subprocess.Popen[str], input: Any = None, timeout: float | None = None) -> Any:
+    def spy(
+        self: subprocess.Popen[str],
+        input: str | None = None,  # noqa: A002 - Popen.communicate's own parameter name
+        timeout: float | None = None,
+    ) -> tuple[str, str]:
         timeouts.append(timeout)
         return original(self, input, timeout)
 
@@ -251,7 +254,11 @@ def test_a_child_that_exits_as_a_trigger_fires_is_collected_not_reported_killed(
     waits: list[float | None] = []
     original = subprocess.Popen.communicate
 
-    def slow_to_notice(self: subprocess.Popen[str], input: Any = None, timeout: float | None = None) -> Any:
+    def slow_to_notice(
+        self: subprocess.Popen[str],
+        input: str | None = None,  # noqa: A002 - Popen.communicate's own parameter name
+        timeout: float | None = None,
+    ) -> tuple[str, str]:
         waits.append(timeout)
         # The first wait times out even though the child exits during it, as a wait that ends just too early would.
         if len(waits) == 1:
@@ -311,13 +318,15 @@ def test_background_kills_the_whole_group_on_a_normal_exit(script: Path, tmp_pat
 def test_background_kills_the_whole_group_when_the_block_raises(script: Path, tmp_path: Path) -> None:
     pid_file = tmp_path / "pids"
     watch = proc.MemoryWatch(1 << 40, poll_s=0.05, available_percent=_plenty)
-    with (
-        pytest.raises(RuntimeError, match="body failed"),
-        proc.background(_serve(script, pid_file), log=tmp_path / "log", memory_watch=watch),
-    ):
-        leader, helper = _pids(pid_file)
-        raise RuntimeError("body failed")
-    assert _all_gone(leader, helper)
+
+    def fail_inside_the_group() -> None:
+        with proc.background(_serve(script, pid_file), log=tmp_path / "log", memory_watch=watch):
+            _pids(pid_file)
+            raise RuntimeError("body failed")
+
+    with pytest.raises(RuntimeError, match="body failed"):
+        fail_inside_the_group()
+    assert _all_gone(*_pids(pid_file))
 
 
 def test_background_escalates_to_sigkill_after_the_grace(script: Path, tmp_path: Path) -> None:
@@ -343,36 +352,43 @@ def test_a_footprint_breach_kills_the_group_and_is_raised_chained_to_the_block_e
         return Footprint(current=2 << 30, peak=3 << 30) if over["now"] else Footprint(MIB, MIB)
 
     watch = proc.MemoryWatch(1 << 30, poll_s=0.05, footprint=footprint, available_percent=_plenty)
-    with (
-        pytest.raises(ProcMemoryExceeded) as info,
-        proc.background(_serve(script, pid_file), log=tmp_path / "log", memory_watch=watch) as server,
-    ):
-        leader, helper = _pids(pid_file)
-        over["now"] = True
-        _until(lambda: not server.alive(), within_s=5)
-        raise ConnectionRefusedError("server went away")
+    servers: list[proc.Background] = []
+
+    def lose_the_server() -> None:
+        with proc.background(_serve(script, pid_file), log=tmp_path / "log", memory_watch=watch) as server:
+            servers.append(server)
+            _pids(pid_file)
+            over["now"] = True
+            _until(lambda: not server.alive(), within_s=5)
+            raise ConnectionRefusedError("server went away")
+
+    with pytest.raises(ProcMemoryExceeded) as info:
+        lose_the_server()
+    (server,) = servers
     assert server.returncode == -9
     assert info.value.trigger == "footprint"
     assert (info.value.footprint_bytes, info.value.cap_bytes) == (2 << 30, 1 << 30)
     assert isinstance(info.value.__cause__, ConnectionRefusedError)
     assert server.peak_footprint_bytes == 3 << 30
-    assert _all_gone(leader, helper)
+    assert _all_gone(*_pids(pid_file))
 
 
 def test_an_available_memory_breach_is_raised_at_a_clean_exit(script: Path, tmp_path: Path) -> None:
     pid_file = tmp_path / "pids"
     short = {"now": False}
     watch = proc.MemoryWatch(1 << 40, poll_s=0.05, available_percent=lambda: 4 if short["now"] else 50)
-    with (
-        pytest.raises(ProcMemoryExceeded) as info,
-        proc.background(_serve(script, pid_file), log=tmp_path / "log", memory_watch=watch) as server,
-    ):
-        leader, helper = _pids(pid_file)
-        short["now"] = True
-        _until(lambda: not server.alive(), within_s=5)
+
+    def run_short_of_memory() -> None:
+        with proc.background(_serve(script, pid_file), log=tmp_path / "log", memory_watch=watch) as server:
+            _pids(pid_file)
+            short["now"] = True
+            _until(lambda: not server.alive(), within_s=5)
+
+    with pytest.raises(ProcMemoryExceeded) as info:
+        run_short_of_memory()
     assert (info.value.trigger, info.value.available_percent) == ("available", 4)
     assert info.value.__cause__ is None
-    assert _all_gone(leader, helper)
+    assert _all_gone(*_pids(pid_file))
 
 
 def test_a_child_that_exits_on_its_own_is_not_alive_and_exits_cleanly(script: Path, tmp_path: Path) -> None:
@@ -421,21 +437,23 @@ def test_an_interrupt_during_the_grace_still_kills_the_group(script: Path, tmp_p
     watch = proc.MemoryWatch(1 << 40, poll_s=0.05, available_percent=_plenty)
     previous = signal.signal(signal.SIGALRM, interrupt)
     started = time.monotonic()
-    try:
-        with (
-            pytest.raises(_InterruptError),
-            proc.background(
-                _serve(script, pid_file, "stubborn"), log=tmp_path / "log", memory_watch=watch, term_grace_s=30
-            ),
+
+    def interrupted_during_the_grace() -> None:
+        with proc.background(
+            _serve(script, pid_file, "stubborn"), log=tmp_path / "log", memory_watch=watch, term_grace_s=30
         ):
-            leader, helper = _pids(pid_file)
+            _pids(pid_file)
             # Fires inside the 30 s wait for the SIGTERM-ignoring leader, as a second Ctrl-C would.
             signal.setitimer(signal.ITIMER_REAL, 0.3)
+
+    try:
+        with pytest.raises(_InterruptError):
+            interrupted_during_the_grace()
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
     assert time.monotonic() - started < 10
-    assert _all_gone(leader, helper)
+    assert _all_gone(*_pids(pid_file))
 
 
 def _locked(path: Path) -> bool:
@@ -466,12 +484,17 @@ def test_a_passed_lock_stays_held_while_the_child_runs_and_frees_when_it_ends(sc
 def test_exit_on_signals_turns_the_signal_into_system_exit_and_restores_the_handler(signum: signal.Signals) -> None:
     before = signal.getsignal(signum)
     ran: list[str] = []
-    with pytest.raises(SystemExit) as info, proc.exit_on_signals():
-        try:
-            os.kill(os.getpid(), signum)
-            pytest.fail("the signal must end the block")
-        finally:
-            ran.append("finally")
+
+    def signalled_inside_the_block() -> None:
+        with proc.exit_on_signals():
+            try:
+                os.kill(os.getpid(), signum)
+                pytest.fail("the signal must end the block")
+            finally:
+                ran.append("finally")
+
+    with pytest.raises(SystemExit) as info:
+        signalled_inside_the_block()
     assert info.value.code == 128 + signum
     assert ran == ["finally"]
     assert signal.getsignal(signum) == before

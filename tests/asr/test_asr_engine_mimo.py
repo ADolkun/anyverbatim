@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from anyverbatim.asr import registry
 from anyverbatim.asr.engines import mimo
@@ -28,9 +29,9 @@ class FakeModel:
     def __init__(self, tokens: int = 40, text: str = "你好 NVDA") -> None:
         self.tokens = tokens
         self.text = text
-        self.calls: list[tuple[Any, dict[str, Any]]] = []
+        self.calls: list[tuple[NDArray[np.float32], dict[str, object]]] = []
 
-    def generate(self, audio: Any, **kwargs: Any) -> SimpleNamespace:
+    def generate(self, audio: NDArray[np.float32], **kwargs: object) -> SimpleNamespace:
         self.calls.append((audio, kwargs))
         return SimpleNamespace(text=self.text, language=kwargs["language"], generation_tokens=self.tokens)
 
@@ -38,8 +39,8 @@ class FakeModel:
 class Recorder:
     def __init__(self, model: FakeModel) -> None:
         self.model = model
-        self.snapshots: list[tuple[str, dict[str, Any]]] = []
-        self.loads: list[tuple[str, dict[str, Any]]] = []
+        self.snapshots: list[tuple[str, dict[str, object]]] = []
+        self.loads: list[tuple[str, dict[str, object]]] = []
         self.tokenizer_dir_seen: Path | None = None
         self.resampled: list[tuple[int, int]] = []
 
@@ -48,25 +49,25 @@ def install(monkeypatch: pytest.MonkeyPatch, model: FakeModel) -> Recorder:
     rec = Recorder(model)
     stt, utils, asr = ModuleType("mlx_audio.stt"), ModuleType("mlx_audio.utils"), ModuleType(mimo._MODEL_MODULE)
     scipy, signal = ModuleType("scipy"), ModuleType("scipy.signal")
-    asr.Model = FakeAsrModel  # type: ignore[attr-defined]
+    vars(asr)["Model"] = FakeAsrModel
 
-    def get_model_path(repo: str, **kwargs: Any) -> Path:
+    def get_model_path(repo: str, **kwargs: object) -> Path:
         rec.snapshots.append((repo, kwargs))
         return Path("/snapshots/tokenizer")
 
-    def load(repo: str, **kwargs: Any) -> FakeModel:
+    def load(repo: str, **kwargs: object) -> FakeModel:
         rec.loads.append((repo, kwargs))
         rec.tokenizer_dir_seen = FakeAsrModel._resolve_audio_tokenizer_dir(Path("/snapshots/model"))
         return model
 
-    def resample_poly(x: Any, up: int, down: int) -> Any:
+    def resample_poly(x: NDArray[np.float32], up: int, down: int) -> NDArray[np.float32]:
         rec.resampled.append((up, down))
         return np.repeat(x, 2)[: len(x) * up // down]
 
-    utils.get_model_path = get_model_path  # type: ignore[attr-defined]
-    stt.load = load  # type: ignore[attr-defined]
-    signal.resample_poly = resample_poly  # type: ignore[attr-defined]
-    scipy.signal = signal  # type: ignore[attr-defined]
+    vars(utils)["get_model_path"] = get_model_path
+    vars(stt)["load"] = load
+    vars(signal)["resample_poly"] = resample_poly
+    vars(scipy)["signal"] = signal
     for name, module in (
         ("mlx_audio.stt", stt),
         ("mlx_audio.utils", utils),
@@ -103,10 +104,10 @@ def test_the_lookup_is_restored_when_loading_fails(monkeypatch: pytest.MonkeyPat
     rec = install(monkeypatch, FakeModel())
     stt = sys.modules["mlx_audio.stt"]
 
-    def load(repo: str, **kwargs: Any) -> None:
+    def load(repo: str, **kwargs: object) -> None:
         raise OSError("disk full")
 
-    stt.load = load  # type: ignore[attr-defined]
+    vars(stt)["load"] = load
 
     with pytest.raises(EngineError, match=rf"{SPEC.repo}@{SPEC.revision}.*{TOKENIZER_REPO}.*disk full"):
         mimo.create(SPEC, DEFINITION.variant).load()
@@ -119,11 +120,11 @@ def test_a_load_that_never_consults_the_pin_fails_loud(monkeypatch: pytest.Monke
     rec = install(monkeypatch, FakeModel())
     stt = sys.modules["mlx_audio.stt"]
 
-    def load_ignoring_the_hook(repo: str, **kwargs: Any) -> FakeModel:
+    def load_ignoring_the_hook(repo: str, **kwargs: object) -> FakeModel:
         rec.loads.append((repo, kwargs))
         return rec.model
 
-    stt.load = load_ignoring_the_hook  # type: ignore[attr-defined]
+    vars(stt)["load"] = load_ignoring_the_hook
     engine = mimo.create(SPEC, DEFINITION.variant)
     with pytest.raises(EngineError, match=rf"without consulting the pinned tokenizer {TOKENIZER_REPO}"):
         engine.load()

@@ -175,7 +175,7 @@ def make_recording() -> Raw:
         "duration_s": 8.2,
         "language": None,
     }
-    raw["chapters"] = []
+    raw["chapters"] = list[object]()
     raw["transcript"]["diarization"] = {
         "engine": "d-example",
         "model_repo": "example/diarizer",
@@ -263,7 +263,7 @@ def test_words_may_be_absent_without_a_flag() -> None:
 
 def test_no_chapters_is_valid() -> None:
     raw = make_raw()
-    raw["chapters"] = []
+    raw["chapters"] = list[object]()
     for segment in raw["segments"]:
         segment["chapter"] = None
     assert ContextDocument.model_validate(raw).chapters == ()
@@ -374,7 +374,7 @@ def _chapters_without_chapter_refs(raw: Raw) -> None:
 
 
 def _chapter_refs_without_chapters(raw: Raw) -> None:
-    raw["chapters"] = []
+    raw["chapters"] = list[object]()
 
 
 def _segment_in_wrong_chapter(raw: Raw) -> None:
@@ -520,7 +520,7 @@ def _name_of_another_default(raw: Raw) -> None:
 
 
 def _diarized_without_speakers(raw: Raw) -> None:
-    raw["speakers"] = []
+    raw["speakers"] = list[object]()
     for item in (*raw["segments"], *raw["paragraphs"]):
         item["speaker"] = None
 
@@ -695,7 +695,7 @@ def test_unknown_major_is_refused(version: str) -> None:
     assert expected in caught.value.fix
 
 
-@pytest.mark.parametrize("version", [None, 1, "1", "1.x", "v1.0", "1.0.1", ""])
+@pytest.mark.parametrize("version", [None, 1, "1", "1.x", "v1.0", "1.0.1", ""], ids=repr)
 def test_malformed_version_is_refused(version: object) -> None:
     raw = make_raw()
     raw["schema_version"] = version

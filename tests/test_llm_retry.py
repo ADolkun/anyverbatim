@@ -4,6 +4,7 @@ import types
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import override
 
 import pytest
 from pipeline_fixture import CAPTIONED, FIXTURE_ROOT, FakeLLM, isolated, run
@@ -227,6 +228,7 @@ def test_concurrent_calls_retry_independently(monkeypatch: pytest.MonkeyPatch) -
 class FlakyOnce(FakeLLM):
     failures: int = 2
 
+    @override
     def complete(self, request: LLMRequest) -> LLMResponse:
         if self.failures:
             self.failures -= 1

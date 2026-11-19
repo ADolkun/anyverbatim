@@ -82,7 +82,8 @@ class FakeExtractor:
 
     def __call__(self, browser: str, profile: str, logger: child.CaptureLogger) -> Iterable[http.cookiejar.Cookie]:
         self.calls.append((browser, profile))
-        logger.debug(f"Extracting cookies from: {profile} value {SECRET}")
+        extracting = f"Extracting cookies from: {profile} value {SECRET}"
+        logger.debug(extracting)
         for message in self.info:
             logger.info(message)
         for message in self.warnings:
@@ -385,7 +386,11 @@ def test_stale_snapshots_are_cleaned_on_startup(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_logs_never_contain_cookie_values(
-    home: Path, store: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, capsys
+    home: Path,
+    store: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     caplog.set_level(logging.DEBUG)
     out = snapshot.new_snapshot_path()

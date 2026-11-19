@@ -6,6 +6,7 @@ import pytest
 from evals_fixture import EN, ZH, make_eval, write_pair
 
 from anyverbatim.errors import ConfigError
+from evals.manifest import Manifest
 from evals.normalize import Language
 from evals.screen import Span, SpanReading, collect_spans
 from evals.session import (
@@ -34,10 +35,14 @@ def span(index: int, file: str, language: Language, numeric: bool) -> Span:
 
 def population() -> list[Span]:
     spans: list[Span] = []
-    for f, (language, count, numeric_every) in {
-        "zh-a": ("zh", 300, 10), "zh-b": ("zh", 100, 5), "en-a": ("en", 80, 4), "en-b": ("en", 40, 2),
-    }.items():  # fmt: skip
-        spans += [span(i, f, language, i % numeric_every == 0) for i in range(count)]  # type: ignore[arg-type]
+    files: dict[str, tuple[Language, int, int]] = {
+        "zh-a": ("zh", 300, 10),
+        "zh-b": ("zh", 100, 5),
+        "en-a": ("en", 80, 4),
+        "en-b": ("en", 40, 2),
+    }
+    for f, (language, count, numeric_every) in files.items():
+        spans += [span(i, f, language, i % numeric_every == 0) for i in range(count)]
     return spans
 
 
@@ -99,7 +104,7 @@ def test_the_minimum_clip_is_shifted_inside_the_file() -> None:
 
 
 @pytest.fixture
-def pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Layout, object]:
+def pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Layout, Manifest]:
     layout, manifest = make_eval(tmp_path / "eval", monkeypatch)
     write_pair(layout)
     return layout, manifest
@@ -120,9 +125,9 @@ def test_session_refuses_a_hypothesis_that_is_not_complete_on_every_file(
         build_session(layout, manifest, "w-prod", "q-base")
 
 
-def test_session_hides_engines_and_keeps_the_key_apart(pair: tuple[Layout, object]) -> None:
+def test_session_hides_engines_and_keeps_the_key_apart(pair: tuple[Layout, Manifest]) -> None:
     layout, manifest = pair
-    shown, key = build_session(layout, manifest, "w-prod", "q-base", n=20, seed=4)  # type: ignore[arg-type]
+    shown, key = build_session(layout, manifest, "w-prod", "q-base", n=20, seed=4)
     assert write_session(layout, "main", shown, key)
     text = (layout.session_dir("main") / SPANS_FILE).read_text(encoding="utf-8")
     assert "w-prod" not in text
@@ -139,25 +144,24 @@ def test_session_hides_engines_and_keeps_the_key_apart(pair: tuple[Layout, objec
     assert all(e.weight >= 1.0 for e in key.entries)
 
 
-def test_side_randomisation_is_seeded_and_mixes_sides(pair: tuple[Layout, object]) -> None:
+def test_side_randomisation_is_seeded_and_mixes_sides(pair: tuple[Layout, Manifest]) -> None:
     layout, manifest = pair
     sides = {
         seed: tuple(
             e.challenger_option for e in build_session(layout, manifest, "w-prod", "q-base", seed=seed)[1].entries
-        )  # type: ignore[arg-type]
+        )
         for seed in range(12)
     }
     assert sides[3] == tuple(
-        e.challenger_option
-        for e in build_session(layout, manifest, "w-prod", "q-base", seed=3)[1].entries  # type: ignore[arg-type]
+        e.challenger_option for e in build_session(layout, manifest, "w-prod", "q-base", seed=3)[1].entries
     )
     assert len(set(sides.values())) > 1
     assert {side for values in sides.values() for side in values} == {1, 2}
 
 
-def test_clips_follow_the_word_timestamps_with_a_five_second_minimum(pair: tuple[Layout, object]) -> None:
+def test_clips_follow_the_word_timestamps_with_a_five_second_minimum(pair: tuple[Layout, Manifest]) -> None:
     layout, manifest = pair
-    shown, key = build_session(layout, manifest, "w-prod", "q-base", seed=0)  # type: ignore[arg-type]
+    shown, key = build_session(layout, manifest, "w-prod", "q-base", seed=0)
     by_option = {}
     for item, entry in zip(shown, key.entries, strict=True):
         by_option[item.options[2 - entry.challenger_option]] = item
@@ -167,37 +171,37 @@ def test_clips_follow_the_word_timestamps_with_a_five_second_minimum(pair: tuple
     assert (one.clip_start, one.clip_end) == pytest.approx((7.75 - 2.5, 7.75 + 2.5))
 
 
-def test_an_existing_session_is_kept_or_refused(pair: tuple[Layout, object]) -> None:
+def test_an_existing_session_is_kept_or_refused(pair: tuple[Layout, Manifest]) -> None:
     layout, manifest = pair
-    shown, key = build_session(layout, manifest, "w-prod", "q-base", seed=1)  # type: ignore[arg-type]
+    shown, key = build_session(layout, manifest, "w-prod", "q-base", seed=1)
     assert write_session(layout, "main", shown, key)
-    assert not write_session(layout, "main", *build_session(layout, manifest, "w-prod", "q-base", seed=1))  # type: ignore[arg-type]
+    assert not write_session(layout, "main", *build_session(layout, manifest, "w-prod", "q-base", seed=1))
     with pytest.raises(ConfigError, match="already exists"):
-        write_session(layout, "main", *build_session(layout, manifest, "w-prod", "q-base", seed=2))  # type: ignore[arg-type]
+        write_session(layout, "main", *build_session(layout, manifest, "w-prod", "q-base", seed=2))
     assert load_shown(layout.session_dir("main")) == shown
     assert (layout.session_dir("main") / KEY_FILE).exists()
 
 
-def test_session_needs_two_different_complete_runs(pair: tuple[Layout, object]) -> None:
+def test_session_needs_two_different_complete_runs(pair: tuple[Layout, Manifest]) -> None:
     layout, manifest = pair
     with pytest.raises(ConfigError, match="must differ"):
-        build_session(layout, manifest, "w-prod", "w-prod")  # type: ignore[arg-type]
+        build_session(layout, manifest, "w-prod", "w-prod")
     with pytest.raises(ConfigError, match="f-aed is not complete for 2 of 2 files"):
-        build_session(layout, manifest, "w-prod", "f-aed")  # type: ignore[arg-type]
+        build_session(layout, manifest, "w-prod", "f-aed")
 
 
-def test_session_from_spans_equals_build_session_on_the_same_spans(pair: tuple[Layout, object]) -> None:
+def test_session_from_spans_equals_build_session_on_the_same_spans(pair: tuple[Layout, Manifest]) -> None:
     layout, manifest = pair
-    spans = collect_spans(layout, manifest, ["w-prod", "q-base"], pivot="w-prod")  # type: ignore[arg-type]
-    built, built_key = build_session(layout, manifest, "w-prod", "q-base", n=20, seed=4)  # type: ignore[arg-type]
-    shown, key = session_from_spans(spans, manifest, "w-prod", "q-base", n=20, seed=4)  # type: ignore[arg-type]
+    spans = collect_spans(layout, manifest, ["w-prod", "q-base"], pivot="w-prod")
+    built, built_key = build_session(layout, manifest, "w-prod", "q-base", n=20, seed=4)
+    shown, key = session_from_spans(spans, manifest, "w-prod", "q-base", n=20, seed=4)
     assert shown == built
     assert key.model_copy(update={"created": built_key.created}) == built_key
 
 
-def test_session_from_spans_refuses_when_no_audible_span_is_left(pair: tuple[Layout, object]) -> None:
+def test_session_from_spans_refuses_when_no_audible_span_is_left(pair: tuple[Layout, Manifest]) -> None:
     layout, manifest = pair
-    spans = collect_spans(layout, manifest, ["w-prod", "q-base"], pivot="w-prod")  # type: ignore[arg-type]
+    spans = collect_spans(layout, manifest, ["w-prod", "q-base"], pivot="w-prod")
     written_form = [s.model_copy(update={"format_only": True}) for s in spans]
     with pytest.raises(ConfigError, match="no audible disputes"):
-        session_from_spans(written_form, manifest, "w-prod", "q-base")  # type: ignore[arg-type]
+        session_from_spans(written_form, manifest, "w-prod", "q-base")

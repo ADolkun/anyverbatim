@@ -45,16 +45,20 @@ PRIMARY_ROWS = [
     ),
     (
         Signal.RATE_LIMITED,
-        f"ERROR: [youtube] {VID}: This content isn’t available, try again later. The current session has been "
-        "rate-limited by YouTube for up to an hour. It is recommended to use `-t sleep` to add a delay between "
-        "video requests to avoid exceeding the rate limit. For more information, refer to  "
-        "https://github.com/yt-dlp/yt-dlp/wiki/Extractors#this-content-isnt-available-try-again-later",
+        (
+            f"ERROR: [youtube] {VID}: This content isn’t available, try again later. The current session has been "
+            "rate-limited by YouTube for up to an hour. It is recommended to use `-t sleep` to add a delay between "
+            "video requests to avoid exceeding the rate limit. For more information, refer to  "
+            "https://github.com/yt-dlp/yt-dlp/wiki/Extractors#this-content-isnt-available-try-again-later"
+        ),
     ),
     (Signal.RATE_LIMITED, f"ERROR: [youtube] {VID}: This content isn't available, try again later."),
     (
         Signal.HTTP_429,
-        f"ERROR: [youtube] {VID}: Unable to download webpage: HTTP Error 429: Too Many Requests "
-        "(caused by <HTTPError 429: Too Many Requests>)",
+        (
+            f"ERROR: [youtube] {VID}: Unable to download webpage: HTTP Error 429: Too Many Requests "
+            "(caused by <HTTPError 429: Too Many Requests>)"
+        ),
     ),
     (Signal.HTTP_429, "ERROR: Unable to download video subtitles for 'en': HTTP Error 429: Too Many Requests"),
     (Signal.AGE_GATE, f"ERROR: [youtube] {VID}: Sign in to confirm your age. This video may be inappropriate. {HINT}"),
@@ -64,8 +68,10 @@ PRIMARY_ROWS = [
     ),
     (
         Signal.MEMBERS_ONLY,
-        f"ERROR: [youtube] {VID}: Join this channel to get access to members-only content like this video, "
-        "and other exclusive perks.",
+        (
+            f"ERROR: [youtube] {VID}: Join this channel to get access to members-only content like this video, "
+            "and other exclusive perks."
+        ),
     ),
     (Signal.MEMBERS_ONLY, f"ERROR: [youtube] {VID}: This video is available to this channel’s members on level: X"),
     (Signal.PREMIUM_ONLY, f"ERROR: [youtube] {VID}: This video is only available to YouTube Premium members"),
@@ -76,16 +82,20 @@ PRIMARY_ROWS = [
     (Signal.LOGIN_REQUIRED, f"ERROR: [youtube] {VID}: This video is only available for registered users. {HINT}"),
     (
         Signal.GEO,
-        f"ERROR: [youtube] {VID}: The uploader has not made this video available in your country"
-        "\nThis video is available in Japan.",
+        (
+            f"ERROR: [youtube] {VID}: The uploader has not made this video available in your country"
+            "\nThis video is available in Japan."
+        ),
     ),
     (Signal.GEO, f"ERROR: [youtube] {VID}: This video is not available from your location due to geo restriction"),
     (Signal.UNAVAILABLE, f"ERROR: [youtube] {VID}: Video unavailable"),
     (Signal.UNAVAILABLE, f"ERROR: [youtube] {VID}: Video unavailable. This video has been removed by the uploader"),
     (
         Signal.UNAVAILABLE,
-        f"ERROR: [youtube] {VID}: Video unavailable. This video is no longer available because the YouTube "
-        "account associated with this video has been terminated.",
+        (
+            f"ERROR: [youtube] {VID}: Video unavailable. This video is no longer available because the YouTube "
+            "account associated with this video has been terminated."
+        ),
     ),
     (Signal.DRM, f"ERROR: [youtube] {VID}: This video is DRM protected"),
     (
@@ -98,8 +108,10 @@ PRIMARY_ROWS = [
     ),
     (
         Signal.NO_FORMATS,
-        f"ERROR: [youtube] {VID}: Requested format is not available. Use --list-formats for a list of available "
-        "formats",
+        (
+            f"ERROR: [youtube] {VID}: Requested format is not available. Use --list-formats for a list of available "
+            "formats"
+        ),
     ),
     (Signal.NO_FORMATS, f"ERROR: [youtube] {VID}: No video formats found!"),
     (Signal.HTTP_403, "ERROR: unable to download video data: HTTP Error 403: Forbidden"),
@@ -110,8 +122,10 @@ PRIMARY_ROWS = [
     (Signal.TRANSIENT, f"ERROR: [youtube] {VID}: Unable to download webpage: The read operation timed out"),
     (
         Signal.TRANSIENT,
-        f"ERROR: [youtube] {VID}: Unable to download webpage: <urlopen error [Errno 8] "
-        "Temporary failure in name resolution>",
+        (
+            f"ERROR: [youtube] {VID}: Unable to download webpage: <urlopen error [Errno 8] "
+            "Temporary failure in name resolution>"
+        ),
     ),
     (Signal.TRANSIENT, "ERROR: [Errno 54] Connection reset by peer"),
     (Signal.TRANSIENT, "ERROR: ('Connection aborted.', RemoteDisconnected('closed'))"),
@@ -124,16 +138,20 @@ SECONDARY_ROWS = [
     (Signal.AUTH_COOKIES_FOUND, "[debug] [youtube] Found YouTube account cookies"),
     (
         Signal.AGE_VERIFICATION,
-        f"[youtube] {VID}: This video is age-restricted and YouTube is requiring account age-verification; "
-        "some formats may be missing",
+        (
+            f"[youtube] {VID}: This video is age-restricted and YouTube is requiring account age-verification; "
+            "some formats may be missing"
+        ),
     ),
     (Signal.SKIP_CLIENT_NO_COOKIES, 'WARNING: [youtube] Skipping client "visionos" since it does not support cookies'),
     (Signal.JS_MISSING, JS_MISSING_WARNING),
     (Signal.N_CHALLENGE, N_CHALLENGE_WARNING),
     (
         Signal.PO_TOKEN_GVS,
-        f"[debug] [youtube] {VID}: web client https formats require a GVS PO Token which was not provided. "
-        "They will be skipped as they may yield HTTP Error 403.",
+        (
+            f"[debug] [youtube] {VID}: web client https formats require a GVS PO Token which was not provided. "
+            "They will be skipped as they may yield HTTP Error 403."
+        ),
     ),
 ]
 
