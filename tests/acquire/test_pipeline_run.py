@@ -7,24 +7,28 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 from unittest import mock
 
 import pytest
+from acquire_fixture import FakeProc, FakeYtDlp, SessionKit
 from click.testing import CliRunner
+from click.testing import Result as CliResult
 from pipeline_fixture import FakeLLM
 from pydantic import JsonValue
 
+import anyverbatim as yv
 from anyverbatim import config, pipeline, proc
+from anyverbatim import errors as yv_errors
 from anyverbatim.acquire import audio, session
 from anyverbatim.acquire.metadata import Chapter, VideoMetadata, info_path
+from anyverbatim.acquire.session import BatchReport
 from anyverbatim.asr import registry
 from anyverbatim.asr import runner as asr_runner
 from anyverbatim.asr.models import HYPOTHESES_FILE, ChunkHypothesis, RunMetrics, WorkerRequest
 from anyverbatim.asr.runner import WorkerResult
 from anyverbatim.auth.cooldown import stop_fix
 from anyverbatim.auth.fixes import fix_for
-from anyverbatim.auth.source import CookieFileSource
+from anyverbatim.auth.source import CookieFileSource, CookieSource
 from anyverbatim.auth.state import AuthState
 from anyverbatim.cli import main
 from anyverbatim.contract import ContextDocument, Word, YouTubeSource, load_document
@@ -38,6 +42,7 @@ from anyverbatim.errors import (
     EngineError,
     EngineMemoryError,
     MediaValidationError,
+    MemoryTrigger,
     ProcMemoryExceeded,
     ProcTimeout,
     UnavailableError,
@@ -63,11 +68,17 @@ def process(
     options: config.Options | None = None,
     *,
     runner_factory: Callable[[Sequence[str]], YtDlpRunner] | None = None,
-    **kwargs: Any,
+    out: Path | None = None,
+    auth: str | None = None,
+    force: bool = False,
+    cookies_first: bool | None = None,
+    progress: Callable[[ProgressEvent], None] | None = None,
 ) -> Result:
     """`pipeline.process` with a fake yt-dlp runner, which the public function takes from `default_runner`."""
     with mock.patch.object(pipeline, "default_runner", runner_factory or pipeline.default_runner):
-        return pipeline.process(target, options, **kwargs)
+        return pipeline.process(
+            target, options, out=out, auth=auth, force=force, cookies_first=cookies_first, progress=progress
+        )
 
 
 def youtube(document: ContextDocument | None) -> YouTubeSource:
@@ -168,6 +179,10 @@ def engine_installed(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return asked
 
 
+def not_installed(_name: str) -> None:
+    return None
+
+
 @pytest.fixture
 def worker(monkeypatch: pytest.MonkeyPatch) -> FakeWorker:
     fake = FakeWorker()
@@ -175,7 +190,18 @@ def worker(monkeypatch: pytest.MonkeyPatch) -> FakeWorker:
     return fake
 
 
-def run(kit, yt, targets: Sequence[str] = (PUBLIC,), *, options: config.Options | None = None, **kwargs: object):
+def run(
+    kit: SessionKit,
+    yt: FakeYtDlp,
+    targets: Sequence[str] = (PUBLIC,),
+    *,
+    options: config.Options | None = None,
+    source: CookieSource | None = None,
+    captions: bool = True,
+    force: bool = False,
+    ignore_cooldown: bool = False,
+    interactive: bool = False,
+) -> tuple[BatchReport, list[VideoResult], list[ProgressEvent]]:
     results: list[VideoResult] = []
     events: list[ProgressEvent] = []
     report = process_many(
@@ -187,7 +213,11 @@ def run(kit, yt, targets: Sequence[str] = (PUBLIC,), *, options: config.Options 
         clock=lambda: NOW,
         progress=events.append,
         on_video=results.append,
-        **kwargs,  # type: ignore[arg-type]
+        source=source,
+        captions=captions,
+        force=force,
+        ignore_cooldown=ignore_cooldown,
+        interactive=interactive,
     )
     return report, results, events
 
@@ -196,7 +226,7 @@ def engine_options(engine: str) -> config.Options:
     return config.load_options(overrides={"asr": {"engine": engine}})
 
 
-def test_end_to_end_writes_a_valid_document_and_markdown(session_kit, worker: FakeWorker) -> None:
+def test_end_to_end_writes_a_valid_document_and_markdown(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     report, results, events = run(session_kit, yt)
 
@@ -235,7 +265,7 @@ def test_end_to_end_writes_a_valid_document_and_markdown(session_kit, worker: Fa
     assert len(yt.labels("metadata")) == 1
 
 
-def test_process_returns_the_document(session_kit, worker: FakeWorker) -> None:
+def test_process_returns_the_document(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     result = process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt, progress=lambda _event: None)
     doc = result.document
@@ -244,14 +274,14 @@ def test_process_returns_the_document(session_kit, worker: FakeWorker) -> None:
     assert load_document(session_kit.out / PUBLIC / "context.json") == doc
 
 
-def test_process_takes_a_single_video(session_kit, worker: FakeWorker) -> None:
+def test_process_takes_a_single_video(session_kit: SessionKit, worker: FakeWorker) -> None:
     with pytest.raises(ValueError, match="one YouTube video"):
         process("https://www.youtube.com/playlist?list=PLsynthetic", out=session_kit.out)
     with pytest.raises(ValueError, match="not a YouTube URL or id, and there is no such file"):
         process("not a url", out=session_kit.out)
 
 
-def test_a_finished_video_is_skipped_without_fetching_or_decoding(session_kit, worker: FakeWorker) -> None:
+def test_a_finished_video_is_skipped_without_fetching_or_decoding(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     _, first, _ = run(session_kit, yt)
     calls = len(yt.calls)
@@ -265,7 +295,7 @@ def test_a_finished_video_is_skipped_without_fetching_or_decoding(session_kit, w
     assert [e.stage for e in events] == ["skip"]
 
 
-def test_force_redoes_the_video_from_a_clean_asr_directory(session_kit, worker: FakeWorker) -> None:
+def test_force_redoes_the_video_from_a_clean_asr_directory(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     run(session_kit, yt)
     run(session_kit, yt, force=True)
@@ -275,7 +305,7 @@ def test_force_redoes_the_video_from_a_clean_asr_directory(session_kit, worker: 
     assert not (session_kit.out / PUBLIC / "audio.wav").exists()
 
 
-def test_an_interrupted_asr_run_resumes_in_the_same_directory(session_kit, worker: FakeWorker) -> None:
+def test_an_interrupted_asr_run_resumes_in_the_same_directory(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     worker.error = EngineError("killed mid-decode")
     report, _, _ = run(session_kit, yt)
@@ -289,7 +319,9 @@ def test_an_interrupted_asr_run_resumes_in_the_same_directory(session_kit, worke
     assert Path(worker.calls[0].out_dir) == Path(worker.calls[1].out_dir)
 
 
-def test_a_worker_failure_is_a_per_video_error_and_the_batch_continues(session_kit, worker: FakeWorker) -> None:
+def test_a_worker_failure_is_a_per_video_error_and_the_batch_continues(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     yt = session_kit.yt()
     worker.error = EngineError("w-prod worker failed (RuntimeError): out of memory")
     report, results, _ = run(session_kit, yt, ["pubVideo001", "pubVideo002"])
@@ -301,10 +333,10 @@ def test_a_worker_failure_is_a_per_video_error_and_the_batch_continues(session_k
     assert all(r.document is None and r.markdown is None for r in results)
 
 
-def memory_kill(trigger: str = "available") -> EngineMemoryError:
+def memory_kill(trigger: MemoryTrigger = "available") -> EngineMemoryError:
     cause = ProcMemoryExceeded(
         "python3",
-        trigger,  # type: ignore[arg-type]
+        trigger,
         footprint_bytes=5 << 30,
         cap_bytes=12 << 30,
         available_percent=6,
@@ -314,7 +346,9 @@ def memory_kill(trigger: str = "available") -> EngineMemoryError:
 
 
 @pytest.mark.parametrize("trigger", ["available", "footprint"])
-def test_a_memory_kill_stops_the_batch_and_keeps_the_report(session_kit, worker: FakeWorker, trigger: str) -> None:
+def test_a_memory_kill_stops_the_batch_and_keeps_the_report(
+    session_kit: SessionKit, worker: FakeWorker, trigger: MemoryTrigger
+) -> None:
     yt = session_kit.yt()
     worker.error = memory_kill(trigger)
     worker.fail_from_call = 2
@@ -325,7 +359,7 @@ def test_a_memory_kill_stops_the_batch_and_keeps_the_report(session_kit, worker:
 
 
 def test_cli_prints_the_memory_fix_and_exits_nonzero(
-    session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     worker.error = memory_kill()
     result = invoke(session_kit, session_kit.yt(), monkeypatch, PUBLIC, "pubVideo002")
@@ -335,14 +369,14 @@ def test_cli_prints_the_memory_fix_and_exits_nonzero(
     assert len(worker.calls) == 1
 
 
-def test_process_raises_the_engine_error(session_kit, worker: FakeWorker) -> None:
+def test_process_raises_the_engine_error(session_kit: SessionKit, worker: FakeWorker) -> None:
     worker.error = EngineError("boom")
     yt = session_kit.yt()
     with pytest.raises(EngineError, match="boom"):
         process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt)
 
 
-def test_a_fetch_failure_skips_asr(session_kit, worker: FakeWorker) -> None:
+def test_a_fetch_failure_skips_asr(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.GEO)]
     report, results, _ = run(session_kit, yt)
@@ -351,7 +385,7 @@ def test_a_fetch_failure_skips_asr(session_kit, worker: FakeWorker) -> None:
     assert worker.calls == []
 
 
-def test_a_bot_check_stops_the_batch(session_kit, worker: FakeWorker) -> None:
+def test_a_bot_check_stops_the_batch(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.BOT_CHECK)]
     report, results, _ = run(session_kit, yt, [PUBLIC, "pubVideo002"])
@@ -363,7 +397,7 @@ def test_a_bot_check_stops_the_batch(session_kit, worker: FakeWorker) -> None:
 
 
 def test_a_stop_seen_on_a_successful_call_finishes_that_video_and_stops_the_rest(
-    session_kit, worker: FakeWorker
+    session_kit: SessionKit, worker: FakeWorker
 ) -> None:
     yt = session_kit.yt()
     yt.secondary[("metadata", False)] = (Signal.BOT_CHECK,)
@@ -375,7 +409,7 @@ def test_a_stop_seen_on_a_successful_call_finishes_that_video_and_stops_the_rest
     assert (session_kit.out / PUBLIC / "context.md").is_file()
 
 
-def test_process_reraises_a_batch_stop(session_kit, worker: FakeWorker) -> None:
+def test_process_reraises_a_batch_stop(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.BOT_CHECK)]
     with pytest.raises(session.BatchStopError) as stopped:
@@ -383,7 +417,9 @@ def test_process_reraises_a_batch_stop(session_kit, worker: FakeWorker) -> None:
     assert stopped.value.signal is Signal.BOT_CHECK
 
 
-def test_process_raises_a_login_failure_as_an_auth_error_with_its_fix(session_kit, worker: FakeWorker) -> None:
+def test_process_raises_a_login_failure_as_an_auth_error_with_its_fix(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
     with pytest.raises(AuthError) as raised:
@@ -394,7 +430,7 @@ def test_process_raises_a_login_failure_as_an_auth_error_with_its_fix(session_ki
     assert worker.calls == []
 
 
-def test_process_raises_a_yt_dlp_failure_as_it_was_with_its_fix(session_kit, worker: FakeWorker) -> None:
+def test_process_raises_a_yt_dlp_failure_as_it_was_with_its_fix(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.GEO)]
     with pytest.raises(YtDlpError) as raised:
@@ -403,7 +439,7 @@ def test_process_raises_a_yt_dlp_failure_as_it_was_with_its_fix(session_kit, wor
     assert "blocks this video in your country" in raised.value.fix
 
 
-def test_process_raises_an_unavailable_video_as_it_was(session_kit, worker: FakeWorker) -> None:
+def test_process_raises_an_unavailable_video_as_it_was(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     yt.live_status[PUBLIC] = "is_live"
     with pytest.raises(UnavailableError) as raised:
@@ -412,13 +448,13 @@ def test_process_raises_an_unavailable_video_as_it_was(session_kit, worker: Fake
     assert raised.value.fix == ""
 
 
-def test_process_raises_a_media_failure_as_it_was(session_kit, worker: FakeWorker) -> None:
+def test_process_raises_a_media_failure_as_it_was(session_kit: SessionKit, worker: FakeWorker) -> None:
     session_kit.proc.probe_returns("3.0\n")
     with pytest.raises(MediaValidationError):
         process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: session_kit.yt())
 
 
-def test_process_raises_a_timeout_as_it_was(session_kit, worker: FakeWorker) -> None:
+def test_process_raises_a_timeout_as_it_was(session_kit: SessionKit, worker: FakeWorker) -> None:
     def hang(_argv: list[str]) -> proc.ProcResult:
         raise ProcTimeout("ffmpeg", 600.0)
 
@@ -428,7 +464,9 @@ def test_process_raises_a_timeout_as_it_was(session_kit, worker: FakeWorker) -> 
     assert raised.value.timeout_s == 600.0
 
 
-def test_a_recorded_failure_keeps_its_cause_out_of_the_batch_report(session_kit, worker: FakeWorker) -> None:
+def test_a_recorded_failure_keeps_its_cause_out_of_the_batch_report(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     yt = session_kit.yt()
     raw = "ERROR: [youtube] synthetic cause line\nTraceback-like detail that must stay out of the report"
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.GEO, preview=raw)]
@@ -443,7 +481,7 @@ def test_a_recorded_failure_keeps_its_cause_out_of_the_batch_report(session_kit,
     assert "cause" not in video
 
 
-def test_cookies_first_sends_the_first_extraction_with_cookies(session_kit, worker: FakeWorker) -> None:
+def test_cookies_first_sends_the_first_extraction_with_cookies(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     process(
         MEMBERS,
@@ -456,7 +494,7 @@ def test_cookies_first_sends_the_first_extraction_with_cookies(session_kit, work
     assert len(yt.labels("metadata", cookied=True)) == 1
 
 
-def test_by_default_the_first_extraction_is_anonymous(session_kit, worker: FakeWorker) -> None:
+def test_by_default_the_first_extraction_is_anonymous(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     process(
         MEMBERS,
@@ -468,7 +506,9 @@ def test_by_default_the_first_extraction_is_anonymous(session_kit, worker: FakeW
     assert yt.labels("metadata", cookied=True) == []
 
 
-def test_cookies_first_without_a_source_is_an_auth_error_with_a_fix(session_kit, worker: FakeWorker) -> None:
+def test_cookies_first_without_a_source_is_an_auth_error_with_a_fix(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     yt = session_kit.yt()
     with pytest.raises(AuthError) as raised:
         process(MEMBERS, out=session_kit.out, cookies_first=True, runner_factory=lambda _sleep: yt)
@@ -477,7 +517,7 @@ def test_cookies_first_without_a_source_is_an_auth_error_with_a_fix(session_kit,
     assert yt.calls == []
 
 
-NOTE = {
+NOTE: dict[str, object] = {
     "is_pinned": True,
     "author_is_uploader": True,
     "text": "Correction: the figure is 12%.",
@@ -491,7 +531,9 @@ def note_options(*, on: bool) -> config.Options:
     return config.load_options(overrides={"ytdlp": {"creator_note": on}})
 
 
-def test_the_document_carries_the_creator_note_only_when_the_option_is_on(session_kit, worker: FakeWorker) -> None:
+def test_the_document_carries_the_creator_note_only_when_the_option_is_on(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     yt = session_kit.yt()
     yt.comments[PUBLIC] = [NOTE]
     _, results, _ = run(session_kit, yt)
@@ -519,7 +561,7 @@ def test_the_document_carries_the_creator_note_only_when_the_option_is_on(sessio
     assert len(yt.labels("metadata")) == 2
 
 
-def test_a_video_without_a_pinned_creator_comment_has_no_note(session_kit, worker: FakeWorker) -> None:
+def test_a_video_without_a_pinned_creator_comment_has_no_note(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     yt.comments[PUBLIC] = [{**NOTE, "author_is_uploader": False}]
     _, results, _ = run(session_kit, yt, options=note_options(on=True))
@@ -528,7 +570,9 @@ def test_a_video_without_a_pinned_creator_comment_has_no_note(session_kit, worke
     assert "--get-comments" in yt.labels("metadata")[0].args
 
 
-def test_turning_the_option_off_drops_a_saved_note_from_the_document(session_kit, worker: FakeWorker) -> None:
+def test_turning_the_option_off_drops_a_saved_note_from_the_document(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     yt = session_kit.yt()
     yt.comments[PUBLIC] = [NOTE]
     run(session_kit, yt, options=note_options(on=True))
@@ -539,13 +583,15 @@ def test_turning_the_option_off_drops_a_saved_note_from_the_document(session_kit
     assert len(yt.labels("metadata")) == 1
 
 
-def settings_for(kit, options: config.Options) -> pipeline._Settings:
+def settings_for(kit: SessionKit, options: config.Options) -> pipeline._Settings:
     return pipeline._settings(
         options, None, kit.out, kind="youtube", force=False, captions=True, emit=lambda _e: None, clock=lambda: NOW
     )
 
 
-def test_the_default_run_key_is_the_one_made_before_the_creator_note_existed(session_kit, worker: FakeWorker) -> None:
+def test_the_default_run_key_is_the_one_made_before_the_creator_note_existed(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     default = settings_for(session_kit, config.load_options())
     versions = pipeline.stage_versions()
     before = input_hash(
@@ -570,14 +616,14 @@ def video_options(*, on: bool) -> config.Options:
     return config.load_options(overrides={"ytdlp": {"video": on}})
 
 
-def test_a_default_run_requests_no_video(session_kit, worker: FakeWorker) -> None:
+def test_a_default_run_requests_no_video(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     run(session_kit, yt)
     assert [c.label for c in yt.calls] == ["metadata", "captions", "audio"]
     assert not (session_kit.out / PUBLIC / "video.mp4").exists()
 
 
-def test_the_option_downloads_the_video_during_a_run(session_kit, worker: FakeWorker) -> None:
+def test_the_option_downloads_the_video_during_a_run(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     _, results, _ = run(session_kit, yt, options=video_options(on=True))
     assert [c.label for c in yt.calls] == ["metadata", "captions", "audio", "video"]
@@ -590,7 +636,7 @@ def test_the_option_downloads_the_video_during_a_run(session_kit, worker: FakeWo
 
 
 def test_a_current_document_with_a_wanted_video_makes_exactly_one_video_request(
-    session_kit, worker: FakeWorker
+    session_kit: SessionKit, worker: FakeWorker
 ) -> None:
     yt = session_kit.yt()
     _, first, _ = run(session_kit, yt)
@@ -615,7 +661,7 @@ def age_info(vdir: Path) -> None:
     os.utime(vdir / "info.json", (old, old))
 
 
-def test_an_old_extraction_is_refreshed_once_before_the_video(session_kit, worker: FakeWorker) -> None:
+def test_an_old_extraction_is_refreshed_once_before_the_video(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     run(session_kit, yt)
     age_info(session_kit.out / PUBLIC)
@@ -627,7 +673,9 @@ def test_an_old_extraction_is_refreshed_once_before_the_video(session_kit, worke
     assert all(c.cookies is None for c in yt.calls[before:])
 
 
-def test_the_reuse_path_keeps_the_cookies_the_document_was_made_with(session_kit, worker: FakeWorker) -> None:
+def test_the_reuse_path_keeps_the_cookies_the_document_was_made_with(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     source = CookieFileSource(Path("/nonexistent/cookies.txt"))
     yt = session_kit.yt()
     yt.availability[MEMBERS] = "subscriber_only"
@@ -646,7 +694,7 @@ def test_the_reuse_path_keeps_the_cookies_the_document_was_made_with(session_kit
     assert all(c.cookies is not None for c in after), "no anonymous attempt that YouTube would refuse"
 
 
-def test_the_reuse_path_stays_anonymous_under_policy_never(session_kit, worker: FakeWorker) -> None:
+def test_the_reuse_path_stays_anonymous_under_policy_never(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     run(session_kit, yt)
     age_info(session_kit.out / PUBLIC)
@@ -658,7 +706,7 @@ def test_the_reuse_path_stays_anonymous_under_policy_never(session_kit, worker: 
 
 
 def test_a_stale_info_403_keeps_the_creator_note(
-    session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(audio, "INFO_MAX_AGE_S", -1.0)
     yt = session_kit.yt()
@@ -677,7 +725,7 @@ def test_a_stale_info_403_keeps_the_creator_note(
     assert youtube(document).creator_note is not None
 
 
-def test_a_present_video_still_waives_the_cooldown(session_kit, worker: FakeWorker) -> None:
+def test_a_present_video_still_waives_the_cooldown(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     run(session_kit, yt, options=video_options(on=True))
     session.start_cooldown(Signal.RATE_LIMITED, NOW)
@@ -690,7 +738,9 @@ def test_a_present_video_still_waives_the_cooldown(session_kit, worker: FakeWork
     assert len(yt.calls) == calls
 
 
-def test_a_failed_video_probe_does_not_abort_the_batch_precheck(session_kit, worker: FakeWorker, fake_proc) -> None:
+def test_a_failed_video_probe_does_not_abort_the_batch_precheck(
+    session_kit: SessionKit, worker: FakeWorker, fake_proc: FakeProc
+) -> None:
     yt = session_kit.yt()
     run(session_kit, yt, options=video_options(on=True))
     session.start_cooldown(Signal.RATE_LIMITED, NOW)
@@ -703,7 +753,9 @@ def test_a_failed_video_probe_does_not_abort_the_batch_precheck(session_kit, wor
         run(session_kit, yt, options=video_options(on=True))
 
 
-def test_a_video_failure_on_the_reuse_path_does_not_stop_the_next_video(session_kit, worker: FakeWorker) -> None:
+def test_a_video_failure_on_the_reuse_path_does_not_stop_the_next_video(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     yt = session_kit.yt()
     targets = [PUBLIC, "pubVideo002"]
     run(session_kit, yt, targets)
@@ -717,7 +769,7 @@ def test_a_video_failure_on_the_reuse_path_does_not_stop_the_next_video(session_
     assert (session_kit.out / "pubVideo002" / "video.mp4").is_file()
 
 
-def test_a_failed_video_download_fails_a_current_document_loudly(session_kit, worker: FakeWorker) -> None:
+def test_a_failed_video_download_fails_a_current_document_loudly(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     run(session_kit, yt)
     yt.failures[("video", False)] = [session_kit.fail(Signal.NO_FORMATS)]
@@ -725,7 +777,9 @@ def test_a_failed_video_download_fails_a_current_document_loudly(session_kit, wo
         process(PUBLIC, video_options(on=True), out=session_kit.out, runner_factory=lambda _sleep: yt)
 
 
-def test_a_cooldown_still_refuses_a_current_document_whose_video_is_missing(session_kit, worker: FakeWorker) -> None:
+def test_a_cooldown_still_refuses_a_current_document_whose_video_is_missing(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     yt = session_kit.yt()
     run(session_kit, yt)
     session.start_cooldown(Signal.RATE_LIMITED, NOW)
@@ -735,14 +789,14 @@ def test_a_cooldown_still_refuses_a_current_document_whose_video_is_missing(sess
     assert len(yt.calls) == calls
 
 
-def test_the_video_option_is_not_part_of_the_run_key(session_kit, worker: FakeWorker) -> None:
+def test_the_video_option_is_not_part_of_the_run_key(session_kit: SessionKit, worker: FakeWorker) -> None:
     assert (
         settings_for(session_kit, video_options(on=True)).run_key()
         == settings_for(session_kit, config.load_options()).run_key()
     )
 
 
-def test_a_held_lock_raises_busy_without_touching_the_network(session_kit, worker: FakeWorker) -> None:
+def test_a_held_lock_raises_busy_without_touching_the_network(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     vdir = session_kit.out / PUBLIC
     with video_lock(vdir):
@@ -757,18 +811,19 @@ def test_a_held_lock_raises_busy_without_touching_the_network(session_kit, worke
     assert report.exit_code == 0, "the lock is released when the holder is done"
 
 
-def test_the_lock_is_released_after_a_failure(session_kit, worker: FakeWorker) -> None:
+def test_the_lock_is_released_after_a_failure(session_kit: SessionKit, worker: FakeWorker) -> None:
     worker.error = EngineError("boom")
     run(session_kit, session_kit.yt())
     with video_lock(session_kit.out / PUBLIC):
         pass
 
 
-def test_the_engine_option_selects_a_chunked_hypothesis(session_kit, worker: FakeWorker) -> None:
+def test_the_engine_option_selects_a_chunked_hypothesis(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     _, results, _ = run(session_kit, yt, options=engine_options("q-base"))
     (request,) = worker.calls
-    assert request.engine.spec.id == "q-base" and request.files[0].chunks is None, "the worker plans the chunks"
+    assert request.engine.spec.id == "q-base"
+    assert request.files[0].chunks is None, "the worker plans the chunks"
     doc = results[0].document
     assert doc is not None
     assert doc.transcript.runs[0].engine == "q-base"
@@ -778,14 +833,16 @@ def test_the_engine_option_selects_a_chunked_hypothesis(session_kit, worker: Fak
     assert Path(request.out_dir).parent.name == "q-base"
 
 
-def test_an_unknown_engine_fails_before_any_request(session_kit, worker: FakeWorker) -> None:
+def test_an_unknown_engine_fails_before_any_request(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     with pytest.raises(ConfigError, match="unknown ASR hypothesis"):
         run(session_kit, yt, options=engine_options("nope"))
     assert yt.calls == []
 
 
-def test_captions_as_the_source_fall_back_to_asr_without_a_manual_track(session_kit, worker: FakeWorker) -> None:
+def test_captions_as_the_source_fall_back_to_asr_without_a_manual_track(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     options = config.load_options(overrides={"asr": {"source": "captions"}})
     yt = session_kit.yt()
     _, results, _ = run(session_kit, yt, options=options)
@@ -798,13 +855,13 @@ def test_captions_as_the_source_fall_back_to_asr_without_a_manual_track(session_
     assert len(yt.labels("audio")) == 1, "the audio is fetched only once ASR turns out to be needed"
 
 
-def test_no_captions_flag_reaches_the_fetch(session_kit, worker: FakeWorker) -> None:
+def test_no_captions_flag_reaches_the_fetch(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     run(session_kit, yt, captions=False)
     assert yt.labels("captions") == []
 
 
-def test_a_cooldown_refuses_the_run(session_kit, worker: FakeWorker) -> None:
+def test_a_cooldown_refuses_the_run(session_kit: SessionKit, worker: FakeWorker) -> None:
     session.start_cooldown(Signal.RATE_LIMITED, NOW)
     yt = session_kit.yt()
     with pytest.raises(session.BatchStopError):
@@ -814,7 +871,7 @@ def test_a_cooldown_refuses_the_run(session_kit, worker: FakeWorker) -> None:
     assert report.exit_code == 0
 
 
-def test_a_playlist_runs_every_video(session_kit, worker: FakeWorker) -> None:
+def test_a_playlist_runs_every_video(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     yt.playlist = ["plVideo0001", "plVideo0002"]
     report, results, _ = run(session_kit, yt, ["https://www.youtube.com/playlist?list=PLsynthetic"])
@@ -823,13 +880,13 @@ def test_a_playlist_runs_every_video(session_kit, worker: FakeWorker) -> None:
     assert all((session_kit.out / v / "context.md").is_file() for v in yt.playlist)
 
 
-def batch_ids(kit) -> list[tuple[str, str]]:
+def batch_ids(kit: SessionKit) -> list[tuple[str, str]]:
     batch = json.loads((kit.out / "batch_report.json").read_text(encoding="utf-8"))
     return [(video["id"], video["status"]) for video in batch["videos"]]
 
 
 def test_a_chapter_ending_before_it_starts_fails_that_video_only(
-    session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     real = pipeline.load_metadata
 
@@ -851,7 +908,7 @@ def test_a_chapter_ending_before_it_starts_fails_that_video_only(
         process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: session_kit.yt())
 
 
-def test_a_malformed_hypothesis_row_fails_that_video_only(session_kit, worker: FakeWorker) -> None:
+def test_a_malformed_hypothesis_row_fails_that_video_only(session_kit: SessionKit, worker: FakeWorker) -> None:
     worker.garbage[PUBLIC] = '{"hypothesis": "w-prod", "file": "pubVideo001", "chunk": "zero"'
     report, results, _ = run(session_kit, session_kit.yt(), [PUBLIC, "pubVideo002"])
     first, second = (r.outcome for r in results)
@@ -863,7 +920,7 @@ def test_a_malformed_hypothesis_row_fails_that_video_only(session_kit, worker: F
 
 
 def test_an_os_error_is_a_per_video_error_and_process_raises_it_unchanged(
-    session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     real = Path.unlink
 
@@ -885,7 +942,9 @@ def test_an_os_error_is_a_per_video_error_and_process_raises_it_unchanged(
         process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: session_kit.yt(), force=True)
 
 
-def test_a_stop_seen_while_expanding_a_playlist_stops_before_any_video(session_kit, worker: FakeWorker) -> None:
+def test_a_stop_seen_while_expanding_a_playlist_stops_before_any_video(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     yt = session_kit.yt()
     yt.playlist = ["plVideo0001", "plVideo0002"]
     yt.secondary[("expand", False)] = (Signal.BOT_CHECK,)
@@ -898,7 +957,7 @@ def test_a_stop_seen_while_expanding_a_playlist_stops_before_any_video(session_k
 
 
 def test_process_returns_a_finished_document_despite_a_stop_on_a_successful_call(
-    session_kit, worker: FakeWorker, caplog: pytest.LogCaptureFixture
+    session_kit: SessionKit, worker: FakeWorker, caplog: pytest.LogCaptureFixture
 ) -> None:
     yt = session_kit.yt()
     yt.secondary[("metadata", False)] = (Signal.BOT_CHECK,)
@@ -913,9 +972,9 @@ def test_process_returns_a_finished_document_despite_a_stop_on_a_successful_call
 
 
 def test_a_missing_engine_extra_fails_before_any_request(
-    session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch, engine_installed: list[str]
+    session_kit: SessionKit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch, engine_installed: list[str]
 ) -> None:
-    monkeypatch.setattr(registry, "find_spec", lambda name: None)
+    monkeypatch.setattr(registry, "find_spec", not_installed)
     yt = session_kit.yt()
     with pytest.raises(DependencyError, match=r"anyverbatim\[whisper\]"):
         run(session_kit, yt)
@@ -927,12 +986,14 @@ def test_a_missing_engine_extra_fails_before_any_request(
     assert worker.calls == []
 
 
-def test_the_dependency_check_asks_for_the_adapter_modules(session_kit, worker: FakeWorker, engine_installed) -> None:
+def test_the_dependency_check_asks_for_the_adapter_modules(
+    session_kit: SessionKit, worker: FakeWorker, engine_installed: list[str]
+) -> None:
     run(session_kit, session_kit.yt())
     assert engine_installed == ["mlx_whisper"]
 
 
-def test_a_context_from_another_engine_is_transcribed_again(session_kit, worker: FakeWorker) -> None:
+def test_a_context_from_another_engine_is_transcribed_again(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     run(session_kit, yt)
     _, results, events = run(session_kit, yt, options=engine_options("q-base"))
@@ -947,7 +1008,7 @@ def test_a_context_from_another_engine_is_transcribed_again(session_kit, worker:
     assert again[0].outcome.reused == ("context",)
 
 
-def test_a_cooldown_does_not_refuse_a_batch_that_needs_no_request(session_kit, worker: FakeWorker) -> None:
+def test_a_cooldown_does_not_refuse_a_batch_that_needs_no_request(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     run(session_kit, yt)
     calls = len(yt.calls)
@@ -964,7 +1025,7 @@ def test_a_cooldown_does_not_refuse_a_batch_that_needs_no_request(session_kit, w
     assert len(yt.calls) == calls
 
 
-def invoke(kit, yt, monkeypatch: pytest.MonkeyPatch, *args: str):
+def invoke(kit: SessionKit, yt: FakeYtDlp, monkeypatch: pytest.MonkeyPatch, *args: str) -> CliResult:
     monkeypatch.setattr(session, "SubprocessRunner", lambda *, sleep_args=(): yt)
     return CliRunner().invoke(main, ["run", "--out", str(kit.out), *args])
 
@@ -977,7 +1038,7 @@ def test_run_is_registered() -> None:
 
 
 def test_cli_prints_the_output_path_per_video_and_exits_zero(
-    session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result = invoke(session_kit, session_kit.yt(), monkeypatch, PUBLIC)
     assert result.exit_code == 0, result.output
@@ -991,7 +1052,7 @@ def test_cli_prints_the_output_path_per_video_and_exits_zero(
 
 
 def test_cli_second_run_is_skipped_and_force_redoes_it(
-    session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     yt = session_kit.yt()
     invoke(session_kit, yt, monkeypatch, PUBLIC)
@@ -1006,7 +1067,7 @@ def test_cli_second_run_is_skipped_and_force_redoes_it(
 
 
 def test_cli_engine_flag_selects_the_hypothesis(
-    session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result = invoke(session_kit, session_kit.yt(), monkeypatch, PUBLIC, "--engine", "q-base")
     assert result.exit_code == 0, result.output
@@ -1016,7 +1077,9 @@ def test_cli_engine_flag_selects_the_hypothesis(
     assert "unknown ASR hypothesis" in bad.output
 
 
-def test_cli_exit_codes_follow_fetch(session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_exit_codes_follow_fetch(
+    session_kit: SessionKit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
     auth = invoke(session_kit, yt, monkeypatch, "memVideo001")
@@ -1047,13 +1110,15 @@ def test_cli_exit_codes_follow_fetch(session_kit, worker: FakeWorker, monkeypatc
     assert allowed.exit_code == 0, allowed.output
 
 
-def test_cli_rejects_non_youtube_targets(session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_rejects_non_youtube_targets(
+    session_kit: SessionKit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
     result = invoke(session_kit, session_kit.yt(), monkeypatch, "https://example.com/video")
     assert result.exit_code == 1
     assert "not a YouTube" in result.output
 
 
-def test_process_returns_a_result_that_matches_the_disk(session_kit, worker: FakeWorker) -> None:
+def test_process_returns_a_result_that_matches_the_disk(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     events: list[ProgressEvent] = []
     result = process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: yt, progress=events.append)
@@ -1074,13 +1139,13 @@ def test_process_returns_a_result_that_matches_the_disk(session_kit, worker: Fak
     assert again.json_bytes == result.json_bytes
 
 
-def test_process_names_the_video_file_when_the_video_was_requested(session_kit, worker: FakeWorker) -> None:
+def test_process_names_the_video_file_when_the_video_was_requested(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     result = process(PUBLIC, video_options(on=True), out=session_kit.out, runner_factory=lambda _sleep: yt)
     assert result.video_path == session_kit.out / PUBLIC / "video.mp4"
 
 
-def test_process_reads_the_document_under_the_source_lock(session_kit, worker: FakeWorker) -> None:
+def test_process_reads_the_document_under_the_source_lock(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     held: list[bool] = []
     real_read = Path.read_bytes
@@ -1100,7 +1165,7 @@ def test_process_reads_the_document_under_the_source_lock(session_kit, worker: F
     assert all(held)
 
 
-def test_a_batch_stop_from_process_has_its_fix(session_kit, worker: FakeWorker) -> None:
+def test_a_batch_stop_from_process_has_its_fix(session_kit: SessionKit, worker: FakeWorker) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.BOT_CHECK)]
     with pytest.raises(BatchStopError) as mid_run:
@@ -1114,7 +1179,7 @@ def test_a_batch_stop_from_process_has_its_fix(session_kit, worker: FakeWorker) 
 
 
 def test_an_auth_error_from_process_has_its_fix_even_before_any_video_is_fetched(
-    session_kit, worker: FakeWorker
+    session_kit: SessionKit, worker: FakeWorker
 ) -> None:
     always = config.load_options(overrides={"auth": {"policy": "always"}})
     with pytest.raises(AuthError) as raised:
@@ -1126,7 +1191,7 @@ def test_an_auth_error_from_process_has_its_fix_even_before_any_video_is_fetched
 @pytest.mark.parametrize(
     ("label", "stage"), [("metadata", "info"), ("captions", "captions"), ("audio", "audio"), ("video", "video")]
 )
-def test_a_failed_fetch_names_its_stage(session_kit, worker: FakeWorker, label: str, stage: str) -> None:
+def test_a_failed_fetch_names_its_stage(session_kit: SessionKit, worker: FakeWorker, label: str, stage: str) -> None:
     yt = session_kit.yt()
     yt.failures[(label, False)] = [session_kit.fail(Signal.NO_FORMATS)]
     with pytest.raises(YtDlpError) as raised:
@@ -1135,7 +1200,9 @@ def test_a_failed_fetch_names_its_stage(session_kit, worker: FakeWorker, label: 
     assert raised.value.fix
 
 
-def test_a_failed_video_download_on_a_finished_document_is_the_video_stage(session_kit, worker: FakeWorker) -> None:
+def test_a_failed_video_download_on_a_finished_document_is_the_video_stage(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     yt = session_kit.yt()
     run(session_kit, yt)
     yt.failures[("video", False)] = [session_kit.fail(Signal.NO_FORMATS)]
@@ -1144,23 +1211,28 @@ def test_a_failed_video_download_on_a_finished_document_is_the_video_stage(sessi
     assert raised.value.stage == "video"
 
 
-def test_a_failure_after_the_fetch_names_the_stage_that_was_running(session_kit, worker: FakeWorker) -> None:
+def test_a_failure_after_the_fetch_names_the_stage_that_was_running(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     worker.error = EngineError("boom")
     with pytest.raises(EngineError) as raised:
         process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: session_kit.yt())
     assert raised.value.stage == "asr"
 
 
-def test_a_caller_needs_only_the_public_names(session_kit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_caller_needs_only_the_public_names(
+    session_kit: SessionKit, worker: FakeWorker, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Everything an application such as knowledge-flow does with this package, through `anyverbatim` and
     `anyverbatim.errors` alone; only the yt-dlp runner is swapped, as the test cannot reach YouTube."""
-    import anyverbatim as yv
-    from anyverbatim.errors import AnyverbatimError, AuthError, AuthState, BatchStopError, Signal
-
     yt = session_kit.yt()
     yt.playlist = [PUBLIC, "pubVideo002"]
-    monkeypatch.setattr(pipeline, "default_runner", lambda _sleep: yt)
-    monkeypatch.setattr(session, "default_runner", lambda _sleep: yt)
+
+    def runner(_sleep: Sequence[str]) -> YtDlpRunner:
+        return yt
+
+    monkeypatch.setattr(pipeline, "default_runner", runner)
+    monkeypatch.setattr(session, "default_runner", runner)
     out = session_kit.out
 
     members = yv.parse_youtube("https://www.youtube.com/playlist?list=UUMOxxxxxxxxxxxxxxxxxxxxxx")
@@ -1206,28 +1278,28 @@ def test_a_caller_needs_only_the_public_names(session_kit, worker: FakeWorker, m
     assert result.video_path == yv.video_file(PUBLIC, out)
     assert result.video_path is not None
 
-    yt.failures[("video", False)] = [session_kit.fail(Signal.NO_FORMATS)]
-    with pytest.raises(AnyverbatimError) as failed:
+    yt.failures[("video", False)] = [session_kit.fail(yv_errors.Signal.NO_FORMATS)]
+    with pytest.raises(yv_errors.AnyverbatimError) as failed:
         yv.process(yv.video_url("pubVideo002"), options, llm=FakeLLM(), out=out, auth="none")
     assert failed.value.stage == "video"
     assert failed.value.fix
 
-    yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
-    with pytest.raises(AuthError) as refused:
+    yt.failures[("metadata", False)] = [session_kit.fail(yv_errors.Signal.MEMBERS_ONLY)]
+    with pytest.raises(yv_errors.AuthError) as refused:
         yv.process(yv.video_url(MEMBERS), options, llm=FakeLLM(), out=out, auth="none", cookies_first=False)
-    assert refused.value.state is AuthState.AUTH_REQUIRED
+    assert refused.value.state is yv_errors.AuthState.AUTH_REQUIRED
     assert refused.value.fix
 
-    yt.failures[("metadata", False)] = [session_kit.fail(Signal.BOT_CHECK)]
-    with pytest.raises(BatchStopError) as stopped:
+    yt.failures[("metadata", False)] = [session_kit.fail(yv_errors.Signal.BOT_CHECK)]
+    with pytest.raises(yv_errors.BatchStopError) as stopped:
         yv.process(yv.video_url("pubVideo003"), options, llm=FakeLLM(), out=out, auth="none")
-    assert stopped.value.signal is Signal.BOT_CHECK
+    assert stopped.value.signal is yv_errors.Signal.BOT_CHECK
     assert stopped.value.until is not None
     assert stopped.value.fix
 
 
 def test_a_finished_call_takes_the_source_lock_once_and_probes_the_video_under_it(
-    session_kit, worker: FakeWorker
+    session_kit: SessionKit, worker: FakeWorker
 ) -> None:
     yt = session_kit.yt()
     real_lock, real_ready = pipeline.video_lock, pipeline.ready_video
@@ -1259,7 +1331,7 @@ def test_a_finished_call_takes_the_source_lock_once_and_probes_the_video_under_i
     assert result.video_path == session_kit.out / PUBLIC / "video.mp4"
 
 
-def test_a_video_that_cannot_be_probed_fails_with_the_video_stage(session_kit, worker: FakeWorker) -> None:
+def test_a_video_that_cannot_be_probed_fails_with_the_video_stage(session_kit: SessionKit, worker: FakeWorker) -> None:
     def timed_out(_directory: Path) -> Path | None:
         raise ProcTimeout("ffprobe", 20.0)
 
@@ -1269,7 +1341,7 @@ def test_a_video_that_cannot_be_probed_fails_with_the_video_stage(session_kit, w
     assert "could not be probed" in str(raised.value)
 
     with (
-        mock.patch.object(pipeline, "ready_video", lambda _directory: None),
+        mock.patch.object(pipeline, "ready_video", return_value=None),
         pytest.raises(MediaValidationError) as gone,
     ):
         process(PUBLIC, video_options(on=True), out=session_kit.out, runner_factory=lambda _sleep: session_kit.yt())
@@ -1277,7 +1349,9 @@ def test_a_video_that_cannot_be_probed_fails_with_the_video_stage(session_kit, w
     assert "no valid video file" in str(gone.value)
 
 
-def test_the_whole_video_only_fetch_of_a_finished_document_is_the_video_stage(session_kit, worker: FakeWorker) -> None:
+def test_the_whole_video_only_fetch_of_a_finished_document_is_the_video_stage(
+    session_kit: SessionKit, worker: FakeWorker
+) -> None:
     yt = session_kit.yt()
     run(session_kit, yt)
     stale = time.time() - 2 * audio.INFO_MAX_AGE_S
@@ -1289,7 +1363,7 @@ def test_the_whole_video_only_fetch_of_a_finished_document_is_the_video_stage(se
     assert raised.value.primary is Signal.GEO
 
 
-def test_a_memory_stop_names_the_stage_it_ended_in(session_kit, worker: FakeWorker) -> None:
+def test_a_memory_stop_names_the_stage_it_ended_in(session_kit: SessionKit, worker: FakeWorker) -> None:
     worker.error = memory_kill()
     with pytest.raises(EngineMemoryError) as raised:
         process(PUBLIC, out=session_kit.out, runner_factory=lambda _sleep: session_kit.yt())

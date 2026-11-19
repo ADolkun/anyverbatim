@@ -2,7 +2,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from click.testing import CliRunner
+from acquire_fixture import FakeYtDlp, SessionKit
+from click.testing import CliRunner, Result
 
 from anyverbatim import paths
 from anyverbatim.acquire import session
@@ -11,7 +12,7 @@ from anyverbatim.cli import main
 from anyverbatim.ytdlp.types import Signal
 
 
-def _invoke(kit, yt, monkeypatch: pytest.MonkeyPatch, *args: str):
+def _invoke(kit: SessionKit, yt: FakeYtDlp, monkeypatch: pytest.MonkeyPatch, *args: str) -> Result:
     def runner(*, sleep_args: Sequence[str] = ()) -> object:
         kit.sleep_args.append(tuple(sleep_args))
         return yt
@@ -24,7 +25,7 @@ def test_fetch_is_registered() -> None:
     assert "fetch" in CliRunner().invoke(main, ["--help"]).output
 
 
-def test_public_video_prints_one_line_and_exits_zero(session_kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_public_video_prints_one_line_and_exits_zero(session_kit: SessionKit, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _invoke(session_kit, session_kit.yt(), monkeypatch, "pubVideo001")
     assert result.exit_code == 0, result.output
     line = next(line for line in result.output.splitlines() if line.startswith("✓"))
@@ -36,7 +37,7 @@ def test_public_video_prints_one_line_and_exits_zero(session_kit, monkeypatch: p
     assert str(session_kit.home) not in result.output
 
 
-def test_fetch_follows_the_creator_note_option(session_kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_follows_the_creator_note_option(session_kit: SessionKit, monkeypatch: pytest.MonkeyPatch) -> None:
     yt = session_kit.yt()
     assert _invoke(session_kit, yt, monkeypatch, "pubVideo001").exit_code == 0
     assert "--get-comments" not in yt.labels("metadata")[0].args
@@ -48,7 +49,7 @@ def test_fetch_follows_the_creator_note_option(session_kit, monkeypatch: pytest.
     assert "--get-comments" in yt.labels("metadata")[1].args
 
 
-def test_members_without_source_exits_two_with_fix(session_kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_members_without_source_exits_two_with_fix(session_kit: SessionKit, monkeypatch: pytest.MonkeyPatch) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
     result = _invoke(session_kit, yt, monkeypatch, "memVideo001")
@@ -57,7 +58,7 @@ def test_members_without_source_exits_two_with_fix(session_kit, monkeypatch: pyt
     assert "Fix:" in result.output
 
 
-def test_permanent_failure_exits_one(session_kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_permanent_failure_exits_one(session_kit: SessionKit, monkeypatch: pytest.MonkeyPatch) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.GEO)]
     result = _invoke(session_kit, yt, monkeypatch, "pubVideo001", "pubVideo002")
@@ -65,7 +66,9 @@ def test_permanent_failure_exits_one(session_kit, monkeypatch: pytest.MonkeyPatc
     assert "1 ok, 1 failed" in result.output
 
 
-def test_bot_check_exits_three_and_later_runs_are_refused(session_kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bot_check_exits_three_and_later_runs_are_refused(
+    session_kit: SessionKit, monkeypatch: pytest.MonkeyPatch
+) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.BOT_CHECK)]
     result = _invoke(session_kit, yt, monkeypatch, "pubVideo001")
@@ -80,12 +83,12 @@ def test_bot_check_exits_three_and_later_runs_are_refused(session_kit, monkeypat
     assert allowed.exit_code == 0, allowed.output
 
 
-def test_expired_cooldown_does_not_refuse(session_kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_expired_cooldown_does_not_refuse(session_kit: SessionKit, monkeypatch: pytest.MonkeyPatch) -> None:
     session.start_cooldown(Signal.RATE_LIMITED, datetime.now(UTC) - timedelta(hours=3))
     assert _invoke(session_kit, session_kit.yt(), monkeypatch, "pubVideo001").exit_code == 0
 
 
-def test_options_reach_the_session(session_kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_options_reach_the_session(session_kit: SessionKit, monkeypatch: pytest.MonkeyPatch) -> None:
     yt = session_kit.yt()
     yt.playlist = [f"plVideo{n:04d}" for n in range(3)]
     result = _invoke(
@@ -105,7 +108,7 @@ def test_options_reach_the_session(session_kit, monkeypatch: pytest.MonkeyPatch)
     assert session_kit.sleep_args[-1] == ("-t", "sleep")
 
 
-def test_invalid_target_exits_one(session_kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_invalid_target_exits_one(session_kit: SessionKit, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _invoke(session_kit, session_kit.yt(), monkeypatch, "https://example.com/nope")
     assert result.exit_code == 1
     assert "not a YouTube" in result.output

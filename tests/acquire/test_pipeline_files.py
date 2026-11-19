@@ -3,16 +3,23 @@
 import hashlib
 import json
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
+from typing import override
 
 import numpy as np
 import pytest
+from acquire_fixture import SessionKit
 from click.testing import CliRunner
-from pydantic import ValidationError
+from click.testing import Result as CliResult
+from pydantic import JsonValue, ValidationError
 
 from anyverbatim import atomic, config, pipeline, proc, speakers, store
+from anyverbatim.acquire import local
+from anyverbatim.acquire.session import BatchReport
 from anyverbatim.asr import registry
 from anyverbatim.asr import runner as asr_runner
 from anyverbatim.asr.models import (
@@ -35,9 +42,9 @@ from anyverbatim.diarize.protocol import DiarizeRequest, FileDiarization, Turn
 from anyverbatim.diarize.runner import DiarizeResult
 from anyverbatim.errors import ConfigError, ContractError, DependencyError, EngineError, LLMError, MediaValidationError
 from anyverbatim.index import INDEX_MD
-from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.llm.protocol import LLMClient, LLMRequest, LLMResponse, Usage
 from anyverbatim.mlx_worker import without_wav
-from anyverbatim.pipeline import ProgressEvent, VideoResult, process, process_files
+from anyverbatim.pipeline import ProgressEvent, Result, VideoResult, process, process_files
 
 NOW = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
 TITLE = "Synthetic weekly sync"
@@ -66,7 +73,9 @@ class Media:
         if argv[0] == "ffprobe" and "json" not in argv:
             return proc.ProcResult(0, "12.5\n", "", 0.0)
         given = argv[argv.index("-i") + 1] if "-i" in argv else argv[-1]
-        assert cwd is not None and given.startswith("./") and "/" not in given[2:], "ffmpeg sees only ./<name>"
+        assert cwd is not None
+        assert given.startswith("./"), "ffmpeg sees only ./<name>"
+        assert "/" not in given[2:], "ffmpeg sees only ./<name>"
         return (self.ffprobe if argv[0] == "ffprobe" else self.ffmpeg)(argv, cwd / given)
 
     def ffprobe(self, argv: list[str], source: Path) -> proc.ProcResult:
@@ -215,14 +224,18 @@ class FakeLLM:
                 "items": [{"i": it["i"], "text": it["text"][:1].upper() + it["text"][1:] + "."} for it in items]
             }
         else:
-            reply = {"fixed": []}
+            reply = {"fixed": list[object]()}
         return LLMResponse(text=json.dumps(reply), usage=Usage(10, 2), elapsed_s=0.0)
+
+
+def found(_name: str) -> object:
+    return object()
 
 
 @pytest.fixture(autouse=True)
 def engine_installed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(registry, "find_spec", lambda _name: object())
-    monkeypatch.setattr(diarize_registry, "find_spec", lambda _name: object())
+    monkeypatch.setattr(registry, "find_spec", found)
+    monkeypatch.setattr(diarize_registry, "find_spec", found)
 
 
 @pytest.fixture(autouse=True)
@@ -233,7 +246,7 @@ def diarizer(monkeypatch: pytest.MonkeyPatch) -> Diarizer:
 
 
 @pytest.fixture
-def media(session_kit, monkeypatch: pytest.MonkeyPatch) -> Media:
+def media(session_kit: SessionKit, monkeypatch: pytest.MonkeyPatch) -> Media:
     fake = Media()
     monkeypatch.setattr(proc, "run", fake)
     return fake
@@ -246,16 +259,26 @@ def worker(monkeypatch: pytest.MonkeyPatch) -> Worker:
     return fake
 
 
-def run_files(kit, files: list[Path], options: config.Options | None = None, **kwargs: object):
+def run_files(
+    kit: SessionKit,
+    files: list[Path],
+    options: config.Options | None = None,
+    *,
+    llm: LLMClient | None = None,
+    force: bool = False,
+    provenance: Mapping[Path, local.Provenance] | None = None,
+) -> tuple[BatchReport, list[VideoResult], list[ProgressEvent]]:
     results: list[VideoResult] = []
     events: list[ProgressEvent] = []
     report = process_files(
         files,
         options,
+        llm=llm,
         out=kit.out,
+        force=force,
         progress=events.append,
         on_video=results.append,
-        **kwargs,  # type: ignore[arg-type]
+        provenance=provenance,
     )
     return report, results, events
 
@@ -271,7 +294,7 @@ def rec_id(packets: str = "alpha") -> str:
 
 
 def test_a_recording_end_to_end_gives_a_2_0_document_markdown_and_index(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     path = media.add(tmp_path / "in" / "meeting.m4a", tags={"title": TITLE})
     llm = FakeLLM()
@@ -289,7 +312,8 @@ def test_a_recording_end_to_end_gives_a_2_0_document_markdown_and_index(
     assert source.recorded_at is None
     assert source.duration_s == 12.5
     assert source.language is None
-    assert doc.chapters == () and [s.id for s in doc.speakers] == ["S1"], "one voice is still a diarized speaker"
+    assert doc.chapters == ()
+    assert [s.id for s in doc.speakers] == ["S1"], "one voice is still a diarized speaker"
     assert {s.speaker for s in doc.segments} == {"S1"}
     assert doc.transcript.diarization is not None
     assert doc.segments[0].text.startswith("We met 5 people")
@@ -330,7 +354,7 @@ def test_a_recording_end_to_end_gives_a_2_0_document_markdown_and_index(
 
 
 def test_a_done_file_is_skipped_even_renamed_or_remuxed(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     run_files(session_kit, [media.add(tmp_path / "meeting.m4a")])
     renamed = media.add(tmp_path / "renamed.mov", tags={"title": "Edited"})
@@ -345,7 +369,7 @@ def test_a_done_file_is_skipped_even_renamed_or_remuxed(
 
 
 def test_the_same_audio_under_two_names_is_processed_once(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     first = media.add(tmp_path / "zoom" / "audio.m4a")
     second = media.add(tmp_path / "zoom" / "video.mp4")
@@ -365,7 +389,7 @@ def test_the_same_audio_under_two_names_is_processed_once(
 
 
 def test_a_file_that_cannot_be_read_is_an_error_keyed_by_its_name(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     silent = media.add(tmp_path / "screen.mov", "silent")
     good = media.add(tmp_path / "meeting.m4a")
@@ -380,7 +404,7 @@ def test_a_file_that_cannot_be_read_is_an_error_keyed_by_its_name(
 
 
 def test_a_source_gone_before_its_audio_is_read_asks_for_the_file_again(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     media.vanish = True
     path = media.add(tmp_path / "meeting.m4a")
@@ -395,7 +419,7 @@ def test_a_source_gone_before_its_audio_is_read_asks_for_the_file_again(
     assert raised.value.fix == "pass the file again"
 
 
-def test_process_takes_a_file(session_kit, media: Media, worker: Worker, tmp_path: Path) -> None:
+def test_process_takes_a_file(session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path) -> None:
     path = media.add(tmp_path / "meeting.m4a")
     first = process(str(path), out=session_kit.out)
     doc = first.document
@@ -404,20 +428,29 @@ def test_process_takes_a_file(session_kit, media: Media, worker: Worker, tmp_pat
     assert process(path, out=session_kit.out).document == doc
 
 
-@pytest.mark.parametrize("given", [{"auth": "chrome"}, {"captions": False}, {"cookies_first": True}])
-def test_youtube_only_arguments_with_a_file_raise(session_kit, tmp_path: Path, given: dict[str, object]) -> None:
+@pytest.mark.parametrize(
+    ("name", "given"),
+    [
+        ("auth", partial(process, auth="chrome")),
+        ("captions", partial(process, captions=False)),
+        ("cookies_first", partial(process, cookies_first=True)),
+    ],
+)
+def test_youtube_only_arguments_with_a_file_raise(
+    session_kit: SessionKit, tmp_path: Path, name: str, given: partial[Result]
+) -> None:
     path = tmp_path / "meeting.m4a"
     path.write_bytes(b"x")
-    with pytest.raises(ValueError, match=f"{next(iter(given))} only apply to YouTube videos"):
-        process(path, out=session_kit.out, **given)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match=f"{name} only apply to YouTube videos"):
+        given(path, out=session_kit.out)
 
 
-def test_process_refuses_a_folder(session_kit, tmp_path: Path) -> None:
+def test_process_refuses_a_folder(session_kit: SessionKit, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="process takes one file"):
         process(tmp_path, out=session_kit.out)
 
 
-def settings(kit, kind: pipeline.SourceKind, **asr: object) -> pipeline._Settings:
+def settings(kit: SessionKit, kind: pipeline.SourceKind, **asr: object) -> pipeline._Settings:
     options = config.load_options(overrides={"asr": asr})
     return pipeline._settings(
         options, None, kit.out, kind=kind, force=False, captions=True, emit=lambda _e: None, clock=lambda: NOW
@@ -425,12 +458,12 @@ def settings(kit, kind: pipeline.SourceKind, **asr: object) -> pipeline._Setting
 
 
 @pytest.mark.parametrize("kind", ["youtube", "recording"])
-def test_an_explicit_engine_wins_for_every_source(session_kit, kind: pipeline.SourceKind) -> None:
+def test_an_explicit_engine_wins_for_every_source(session_kit: SessionKit, kind: pipeline.SourceKind) -> None:
     assert settings(session_kit, kind).definition.spec.id == "w-prod"
     assert settings(session_kit, kind, engine="w-vad").definition.spec.id == "w-vad"
 
 
-def asr_keys(kit, kind: pipeline.SourceKind, **asr: object) -> tuple[str, str]:
+def asr_keys(kit: SessionKit, kind: pipeline.SourceKind, **asr: object) -> tuple[str, str]:
     decoding = pipeline._Decoding(settings(kit, kind, **asr), "src", kit.out / "src", None)
     request = decoding.asr_request()
     return decoding.asr_key(request, None), pipeline._key("asr", {"request": without_wav(request.fingerprint())})
@@ -439,7 +472,7 @@ def asr_keys(kit, kind: pipeline.SourceKind, **asr: object) -> tuple[str, str]:
 @pytest.mark.parametrize(
     "asr", [{}, {"language": "zh"}, {"languages": ("zh", "en")}, {"language": "en", "languages": ("zh",)}]
 )
-def test_youtube_defaults_to_w_prod_whatever_the_languages_say(session_kit, asr: dict[str, object]) -> None:
+def test_youtube_defaults_to_w_prod_whatever_the_languages_say(session_kit: SessionKit, asr: dict[str, object]) -> None:
     youtube = settings(session_kit, "youtube", **asr)
     assert youtube.definition.spec.id == "w-prod"
     assert youtube.languages == ()
@@ -452,7 +485,7 @@ def test_youtube_defaults_to_w_prod_whatever_the_languages_say(session_kit, asr:
 
 
 def test_a_recording_with_languages_defaults_to_w_runs_lid_and_sends_them_to_the_worker(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     chosen = settings(session_kit, "recording", languages=("zh", "en"))
     assert chosen.definition.spec.id == "w-runs-lid"
@@ -468,7 +501,7 @@ def test_a_recording_with_languages_defaults_to_w_runs_lid_and_sends_them_to_the
     assert request.files[0].language is None
 
 
-def test_a_recording_without_languages_defaults_to_w_prod_with_unchanged_keys(session_kit) -> None:
+def test_a_recording_without_languages_defaults_to_w_prod_with_unchanged_keys(session_kit: SessionKit) -> None:
     plain = settings(session_kit, "recording")
     assert plain.definition.spec.id == "w-prod"
     assert plain.languages == ()
@@ -485,7 +518,7 @@ def test_a_recording_without_languages_defaults_to_w_prod_with_unchanged_keys(se
     ],
 )
 def test_an_explicit_engine_beats_the_languages_default(
-    session_kit, kind: pipeline.SourceKind, asr: dict[str, object], engine: str, languages: tuple[str, ...]
+    session_kit: SessionKit, kind: pipeline.SourceKind, asr: dict[str, object], engine: str, languages: tuple[str, ...]
 ) -> None:
     chosen = settings(session_kit, kind, **asr)
     assert chosen.definition.spec.id == engine
@@ -493,7 +526,7 @@ def test_an_explicit_engine_beats_the_languages_default(
 
 
 def test_a_forced_language_still_reaches_the_decode_of_a_recording_with_languages(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     options = config.load_options(overrides={"asr": {"languages": ("zh", "en"), "language": "zh"}})
     run_files(session_kit, [media.add(tmp_path / "meeting.m4a")], options)
@@ -503,18 +536,20 @@ def test_a_forced_language_still_reaches_the_decode_of_a_recording_with_language
 
 
 def test_an_explicit_engine_reaches_a_recordings_worker(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     options = config.load_options(overrides={"asr": {"engine": "w-vad"}})
     run_files(session_kit, [media.add(tmp_path / "meeting.m4a")], options)
     assert worker.calls[0].engine.spec.id == "w-vad"
 
 
-def test_youtube_requests_keep_their_fingerprint(session_kit) -> None:
+def test_youtube_requests_keep_their_fingerprint(session_kit: SessionKit) -> None:
     youtube = settings(session_kit, "youtube", engine="w-runs-lid", languages=("zh", "en"))
     assert youtube.languages == (), "the allowed set is for recordings only"
     request = pipeline._Decoding(youtube, "pubVideo001", session_kit.out / "pubVideo001", "en").asr_request()
-    job = request.fingerprint()["files"][0]  # type: ignore[index]
+    files = request.fingerprint()["files"]
+    assert isinstance(files, list)
+    job = files[0]
     assert job == {
         "id": "pubVideo001",
         "wav": str(session_kit.out / "pubVideo001" / "audio.wav"),
@@ -533,7 +568,7 @@ def test_youtube_requests_keep_their_fingerprint(session_kit) -> None:
 
 
 def test_a_forced_language_reaches_the_request_the_document_and_the_run_key(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     path = media.add(tmp_path / "meeting.m4a")
     run_files(session_kit, [path])
@@ -544,19 +579,19 @@ def test_a_forced_language_reaches_the_request_the_document_and_the_run_key(
     assert recording(results[0]).language == "zh"
 
 
-def test_youtube_documents_are_unaffected_by_recording_only_settings(session_kit) -> None:
+def test_youtube_documents_are_unaffected_by_recording_only_settings(session_kit: SessionKit) -> None:
     youtube = settings(session_kit, "youtube")
     keyed = youtube.run_key()
     assert settings(session_kit, "youtube", languages=("zh",)).run_key() == keyed
     assert settings(session_kit, "youtube", language="zh").run_key() != keyed, "a forced language is a choice"
 
 
-def cli(kit, *args: str):
+def cli(kit: SessionKit, *args: str) -> CliResult:
     return CliRunner().invoke(main, ["run", "--out", str(kit.out), "--llm", "none", *args])
 
 
 def test_cli_runs_a_folder_and_prints_each_context_path(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     media.add(tmp_path / "in" / "b.m4a", "beta")
     media.add(tmp_path / "in" / "sub" / "a.m4a")
@@ -570,7 +605,7 @@ def test_cli_runs_a_folder_and_prints_each_context_path(
     assert "index.md" in result.output
 
 
-def test_cli_refuses_mixed_youtube_and_local_targets(session_kit, tmp_path: Path) -> None:
+def test_cli_refuses_mixed_youtube_and_local_targets(session_kit: SessionKit, tmp_path: Path) -> None:
     path = tmp_path / "meeting.m4a"
     path.write_bytes(b"x")
     result = cli(session_kit, "pubVideo001", str(path))
@@ -578,7 +613,7 @@ def test_cli_refuses_mixed_youtube_and_local_targets(session_kit, tmp_path: Path
     assert "run YouTube and local targets separately" in result.output
 
 
-def test_cli_refuses_youtube_only_options_with_files(session_kit, tmp_path: Path) -> None:
+def test_cli_refuses_youtube_only_options_with_files(session_kit: SessionKit, tmp_path: Path) -> None:
     path = tmp_path / "meeting.m4a"
     path.write_bytes(b"x")
     result = cli(session_kit, "--no-captions", "--auth", "chrome", str(path))
@@ -586,14 +621,14 @@ def test_cli_refuses_youtube_only_options_with_files(session_kit, tmp_path: Path
     assert "--auth, --captions/--no-captions only apply to YouTube targets" in result.output
 
 
-def test_cli_refuses_a_target_that_names_nothing(session_kit, tmp_path: Path) -> None:
+def test_cli_refuses_a_target_that_names_nothing(session_kit: SessionKit, tmp_path: Path) -> None:
     result = cli(session_kit, str(tmp_path / "missing.m4a"))
     assert result.exit_code == 1
     assert "no such file or folder" in result.output
 
 
 def test_a_name_with_a_colon_is_a_file_and_errors_name_no_folder(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     folder = tmp_path / "Client Acme Secret"
     path = media.add(folder / "notes:1.m4a")
@@ -610,7 +645,9 @@ def test_a_name_with_a_colon_is_a_file_and_errors_name_no_folder(
     assert str(tmp_path) not in report
 
 
-def test_a_missing_ffmpeg_stops_the_batch_once(session_kit, worker: Worker, tmp_path: Path, monkeypatch) -> None:
+def test_a_missing_ffmpeg_stops_the_batch_once(
+    session_kit: SessionKit, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def missing(argv: list[str], **_: object) -> proc.ProcResult:
         raise DependencyError(f"required executable not found: {argv[0]}")
 
@@ -623,7 +660,9 @@ def test_a_missing_ffmpeg_stops_the_batch_once(session_kit, worker: Worker, tmp_
     assert json.loads((session_kit.out / "batch_report.json").read_text(encoding="utf-8"))["videos"] == []
 
 
-def test_a_failed_run_leaves_no_copy_of_the_audio(session_kit, media: Media, worker: Worker, tmp_path: Path) -> None:
+def test_a_failed_run_leaves_no_copy_of_the_audio(
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
+) -> None:
     worker.error = EngineError("synthetic decode failure")
     _, results, _ = run_files(session_kit, [media.add(tmp_path / "meeting.m4a")])
     assert results[0].outcome.error == "engine"
@@ -632,7 +671,7 @@ def test_a_failed_run_leaves_no_copy_of_the_audio(session_kit, media: Media, wor
 
 
 def test_control_characters_in_a_file_name_are_dropped(
-    session_kit, media: Media, worker: Worker, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
 ) -> None:
     _, results, _ = run_files(session_kit, [media.add(tmp_path / "team\x1b[31mcall.m4a")])
     source = recording(results[0])
@@ -640,17 +679,19 @@ def test_control_characters_in_a_file_name_are_dropped(
 
 
 @pytest.mark.parametrize(("given", "normalised"), [("zh-Hans", "zh"), ("EN", "en"), ("yue", "yue")])
-def test_a_forced_language_is_normalised_up_front(session_kit, given: str, normalised: str) -> None:
+def test_a_forced_language_is_normalised_up_front(session_kit: SessionKit, given: str, normalised: str) -> None:
     assert settings(session_kit, "recording", language=given).language == normalised
 
 
 @pytest.mark.parametrize("given", ["klingon", "xx", "z"])
-def test_an_unknown_forced_language_is_refused_before_any_work(session_kit, given: str) -> None:
+def test_an_unknown_forced_language_is_refused_before_any_work(session_kit: SessionKit, given: str) -> None:
     with pytest.raises(ConfigError, match="is not a language code w-prod knows"):
         settings(session_kit, "youtube", language=given)
 
 
-def test_cli_reports_a_duplicate_in_the_summary(session_kit, media: Media, worker: Worker, tmp_path: Path) -> None:
+def test_cli_reports_a_duplicate_in_the_summary(
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path
+) -> None:
     first = media.add(tmp_path / "audio.m4a")
     second = media.add(tmp_path / "video.mp4")
     result = cli(session_kit, str(first), str(second))
@@ -659,7 +700,7 @@ def test_cli_reports_a_duplicate_in_the_summary(session_kit, media: Media, worke
     assert "1 ok, 0 failed, 1 duplicate" in result.output
 
 
-def test_cli_names_an_unreadable_folder_with_the_access_fix(session_kit, tmp_path: Path) -> None:
+def test_cli_names_an_unreadable_folder_with_the_access_fix(session_kit: SessionKit, tmp_path: Path) -> None:
     locked = tmp_path / "in" / "Recordings"
     locked.mkdir(parents=True)
     locked.chmod(0)
@@ -680,7 +721,7 @@ def two_voices(diarizer: Diarizer) -> None:
 
 
 def test_a_two_voice_recording_gets_speaker_paragraphs_and_reuses_both_workers(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     two_voices(diarizer)
     path = media.add(tmp_path / "meeting.m4a")
@@ -719,19 +760,19 @@ def test_a_two_voice_recording_gets_speaker_paragraphs_and_reuses_both_workers(
 
 
 def test_the_asr_stage_stores_the_assignment_digest(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     two_voices(diarizer)
     run_files(session_kit, [media.add(tmp_path / "meeting.m4a")])
     stored = json.loads((session_kit.out / rec_id() / ".stages" / "asr.json").read_text(encoding="utf-8"))["output"]
     stretches = [[s["start"], s["end"], s["speaker"]] for s in stored["stretches"]]
     assert [speaker for _, _, speaker in stretches] == ["S1", "S2"]
-    assert stored["assignment"] == store.digest(stretches)
+    assert stored["assignment"] == store.digest([*stretches])
     assert stored["diarization"]["params"]["attribution"]["smoothing"] is True
 
 
 def test_overlapping_speech_is_flagged_in_json_only(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     # A second voice talks over "5 people".
     diarizer.turns = [(0, 8, 0), (2, 3, 1)]
@@ -749,7 +790,7 @@ def test_overlapping_speech_is_flagged_in_json_only(
 
 
 def test_diarization_can_be_turned_off_for_a_recording(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     two_voices(diarizer)
     path = media.add(tmp_path / "meeting.m4a")
@@ -765,7 +806,7 @@ def test_diarization_can_be_turned_off_for_a_recording(
 
 
 def test_cli_diarize_flags_set_the_mode(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     two_voices(diarizer)
     path = media.add(tmp_path / "meeting.m4a")
@@ -779,7 +820,7 @@ def test_cli_diarize_flags_set_the_mode(
     assert "2 speakers" in result.output
 
 
-def test_youtube_with_auto_is_not_diarized_and_keeps_its_keys(session_kit) -> None:
+def test_youtube_with_auto_is_not_diarized_and_keeps_its_keys(session_kit: SessionKit) -> None:
     youtube = settings(session_kit, "youtube")
     assert youtube.diarizer is None
     off = pipeline._settings(
@@ -814,7 +855,7 @@ def test_youtube_with_auto_is_not_diarized_and_keeps_its_keys(session_kit) -> No
 
 
 def test_a_failed_diarization_is_an_engine_error_and_a_rerun_keeps_the_decode(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     diarizer.error = EngineError("synthetic diarizer failure")
     path = media.add(tmp_path / "meeting.m4a")
@@ -836,7 +877,12 @@ def test_a_failed_diarization_is_an_engine_error_and_a_rerun_keeps_the_decode(
 
 
 def test_an_attribution_rule_change_rebuilds_the_document_without_either_worker(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit,
+    media: Media,
+    worker: Worker,
+    diarizer: Diarizer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     two_voices(diarizer)
     path = media.add(tmp_path / "meeting.m4a")
@@ -855,7 +901,7 @@ def test_an_attribution_rule_change_rebuilds_the_document_without_either_worker(
 
 
 def test_a_moved_output_root_reuses_both_finished_worker_folders(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     two_voices(diarizer)
     path = media.add(tmp_path / "meeting.m4a")
@@ -875,7 +921,7 @@ def test_a_moved_output_root_reuses_both_finished_worker_folders(
 
 
 def test_a_failure_reading_the_diarization_back_is_reported_at_the_asr_stage(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     diarizer.truncated = True
     _, results, _ = run_files(session_kit, [media.add(tmp_path / "meeting.m4a")])
@@ -889,23 +935,30 @@ def test_a_failure_reading_the_diarization_back_is_reported_at_the_asr_stage(
 THREE_VOICES = [(0, 2, 0), (3, 5, 3), (6, 8, 5)]
 
 
-def speakers_cli(kit, *args: str):
+def speakers_cli(kit: SessionKit, *args: str) -> CliResult:
     return CliRunner().invoke(main, ["speakers", "--out", str(kit.out), *args])
 
 
-def diarized(kit, media: Media, diarizer: Diarizer, tmp_path: Path, turns=None, **kwargs) -> Path:
+def diarized(
+    kit: SessionKit,
+    media: Media,
+    diarizer: Diarizer,
+    tmp_path: Path,
+    turns: list[tuple[int, int, int]] | None = None,
+    llm: FakeLLM | None = None,
+) -> Path:
     diarizer.turns = turns or THREE_VOICES
     path = media.add(tmp_path / "meeting.m4a")
-    run_files(kit, [path], **kwargs)
+    run_files(kit, [path], llm=llm)
     return path
 
 
-def stored_document(kit) -> ContextDocument:
+def stored_document(kit: SessionKit) -> ContextDocument:
     return load_document(kit.out / rec_id() / "context.json")
 
 
 def test_list_mode_shows_each_speakers_id_name_talk_time_and_a_short_first_line(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     worker.spoken = tuple(f"word{i}" for i in range(22))
     diarized(session_kit, media, diarizer, tmp_path, turns=[(0, 10, 0), (11, 21, 3)])
@@ -926,7 +979,7 @@ def test_list_mode_shows_each_speakers_id_name_talk_time_and_a_short_first_line(
 
 
 def test_a_rename_rewrites_json_markdown_record_and_index_and_a_rerun_skips(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     path = diarized(session_kit, media, diarizer, tmp_path)
     rdir = session_kit.out / rec_id()
@@ -969,7 +1022,7 @@ def test_a_rename_rewrites_json_markdown_record_and_index_and_a_rerun_skips(
 
 
 def test_clearing_every_name_removes_the_file_and_restores_the_record_of_a_document_never_named(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     path = diarized(session_kit, media, diarizer, tmp_path)
     rdir = session_kit.out / rec_id()
@@ -984,7 +1037,7 @@ def test_clearing_every_name_removes_the_file_and_restores_the_record_of_a_docum
 
 
 def test_sharing_a_name_merges_labels_talk_time_and_consecutive_paragraphs(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     diarized(session_kit, media, diarizer, tmp_path)
     rdir = session_kit.out / rec_id()
@@ -997,7 +1050,8 @@ def test_sharing_a_name_merges_labels_talk_time_and_consecutive_paragraphs(
     markdown = (rdir / "context.md").read_text(encoding="utf-8")
     share = round(100 * (talk["S1"] + talk["S3"]) / total)
     assert f"Speakers: Alice ({share}%) · Speaker 2 ({100 - share}%)" in markdown
-    assert markdown.count("**Alice:**") == 2 and markdown.count("**Speaker 2:**") == 1, "Bob sits between them"
+    assert markdown.count("**Alice:**") == 2, "Bob sits between them"
+    assert markdown.count("**Speaker 2:**") == 1, "Bob sits between them"
     assert "| Alice, Speaker 2 |" in (session_kit.out / INDEX_MD).read_text(encoding="utf-8")
 
     assert speakers_cli(session_kit, rec_id(), "S1=Alice", "S2=Bob", "S3=Bob").exit_code == 0
@@ -1014,7 +1068,7 @@ def test_sharing_a_name_merges_labels_talk_time_and_consecutive_paragraphs(
 
 
 def test_one_name_for_everyone_shows_no_labels(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     diarized(session_kit, media, diarizer, tmp_path)
     assert speakers_cli(session_kit, rec_id(), "S1=Alice", "S2=Alice", "S3=Alice").exit_code == 0
@@ -1024,7 +1078,7 @@ def test_one_name_for_everyone_shows_no_labels(
 
 
 def test_a_text_stage_rerun_keeps_the_names_and_sends_none_to_the_llm(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     path = diarized(session_kit, media, diarizer, tmp_path)
     assert speakers_cli(session_kit, rec_id(), "S1=Zelda", "S2=Quentin").exit_code == 0
@@ -1042,14 +1096,15 @@ def test_a_text_stage_rerun_keeps_the_names_and_sends_none_to_the_llm(
     assert doc is not None
     assert [(s.id, s.name) for s in doc.speakers] == [("S1", "Zelda"), ("S2", "Quentin"), ("S3", None)]
     assert "**Zelda:**" in (session_kit.out / rec_id() / "context.md").read_text(encoding="utf-8")
-    assert len(worker.calls) == 1 and len(diarizer.calls) == 1, "no worker ran again"
+    assert len(worker.calls) == 1, "no worker ran again"
+    assert len(diarizer.calls) == 1, "no worker ran again"
 
     _, results, _ = run_files(session_kit, [path], llm=FakeLLM())
     assert results[0].outcome.reused == ("context",)
 
 
 def test_a_changed_assignment_drops_the_names_with_a_warning_and_they_can_be_set_again(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     path = diarized(session_kit, media, diarizer, tmp_path)
     rdir = session_kit.out / rec_id()
@@ -1085,7 +1140,7 @@ def test_a_changed_assignment_drops_the_names_with_a_warning_and_they_can_be_set
 
 
 def test_an_unknown_id_fails_and_lists_the_valid_ones_without_touching_anything(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     diarized(session_kit, media, diarizer, tmp_path)
     rdir = session_kit.out / rec_id()
@@ -1098,7 +1153,7 @@ def test_an_unknown_id_fails_and_lists_the_valid_ones_without_touching_anything(
 
 
 def test_a_name_that_is_another_ids_default_label_is_refused(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     diarized(session_kit, media, diarizer, tmp_path)
     result = speakers_cli(session_kit, rec_id(), "S1=Speaker 2")
@@ -1110,7 +1165,7 @@ def test_a_name_that_is_another_ids_default_label_is_refused(
 
 @pytest.mark.parametrize("argument", ["Alice", "=Alice", "X1=Alice", "S0=Alice"])
 def test_an_assignment_without_a_speaker_id_is_refused(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path, argument: str
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path, argument: str
 ) -> None:
     diarized(session_kit, media, diarizer, tmp_path)
     result = speakers_cli(session_kit, rec_id(), argument)
@@ -1119,7 +1174,7 @@ def test_an_assignment_without_a_speaker_id_is_refused(
 
 
 def test_a_recording_that_was_not_diarized_has_no_speakers_to_name(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     path = media.add(tmp_path / "meeting.m4a")
     off = config.load_options(overrides={"diarize": {"mode": "off"}})
@@ -1131,7 +1186,7 @@ def test_a_recording_that_was_not_diarized_has_no_speakers_to_name(
 
 
 def test_a_garbage_names_file_fails_the_run_loudly(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     path = diarized(session_kit, media, diarizer, tmp_path)
     (session_kit.out / rec_id() / "speakers.json").write_text('{"names": 1}', encoding="utf-8")
@@ -1142,6 +1197,7 @@ def test_a_garbage_names_file_fails_the_run_loudly(
 
 @dataclass
 class BrokenLLM(FakeLLM):
+    @override
     def complete(self, request: LLMRequest) -> LLMResponse:
         raise LLMError("synthetic LLM outage")
 
@@ -1151,7 +1207,7 @@ def untouched(rdir: Path) -> tuple[bytes, bytes, bool]:
 
 
 def test_a_rename_keeps_the_settings_the_document_was_made_with(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     path = diarized(session_kit, media, diarizer, tmp_path, llm=FakeLLM())
     assert speakers_cli(session_kit, rec_id(), "S1=Alice").exit_code == 0
@@ -1173,7 +1229,7 @@ def test_a_rename_keeps_the_settings_the_document_was_made_with(
 
 
 def test_a_rename_binds_to_the_attribution_of_the_document_not_of_a_newer_asr_stage(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     path = diarized(session_kit, media, diarizer, tmp_path)
     rdir = session_kit.out / rec_id()
@@ -1203,7 +1259,7 @@ def test_a_rename_binds_to_the_attribution_of_the_document_not_of_a_newer_asr_st
 
 
 def test_a_rename_refuses_a_document_without_a_record_that_vouches_for_it(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     diarized(session_kit, media, diarizer, tmp_path)
     rdir = session_kit.out / rec_id()
@@ -1228,7 +1284,7 @@ def test_a_rename_refuses_a_document_without_a_record_that_vouches_for_it(
     assert record.read_bytes() == kept
 
 
-def test_a_source_never_transcribed_fails_with_exit_1_and_leaves_no_folder(session_kit) -> None:
+def test_a_source_never_transcribed_fails_with_exit_1_and_leaves_no_folder(session_kit: SessionKit) -> None:
     never = rec_id("never")
     for args in ([never], [never, "S1=Alice"]):
         result = speakers_cli(session_kit, *args)
@@ -1250,7 +1306,13 @@ def test_a_source_never_transcribed_fails_with_exit_1_and_leaves_no_folder(sessi
     ],
 )
 def test_a_repeated_id_a_control_character_or_another_ids_default_label_is_refused(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path, arguments, message: str
+    session_kit: SessionKit,
+    media: Media,
+    worker: Worker,
+    diarizer: Diarizer,
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+    message: str,
 ) -> None:
     diarized(session_kit, media, diarizer, tmp_path)
     rdir = session_kit.out / rec_id()
@@ -1268,7 +1330,7 @@ def test_a_hand_edited_name_with_a_control_character_is_caught(tmp_path: Path) -
 
 
 def test_the_contract_refuses_another_ids_default_label_in_any_case_or_spacing(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     diarized(session_kit, media, diarizer, tmp_path)
     data = stored_document(session_kit).model_dump(mode="json")
@@ -1280,7 +1342,7 @@ def test_the_contract_refuses_another_ids_default_label_in_any_case_or_spacing(
 
 
 def test_lowercase_ids_work_and_a_new_id_merges_onto_an_existing_name(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     diarized(session_kit, media, diarizer, tmp_path)
     assert speakers_cli(session_kit, rec_id(), "s1=Alice").exit_code == 0
@@ -1292,7 +1354,7 @@ def test_lowercase_ids_work_and_a_new_id_merges_onto_an_existing_name(
 
 
 def test_a_rename_while_a_run_holds_the_source_fails_at_once(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     diarized(session_kit, media, diarizer, tmp_path)
     rdir = session_kit.out / rec_id()
@@ -1334,7 +1396,9 @@ LID_OPTIONS = config.load_options(
 )
 
 
-def lid_run(kit, media: Media, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *rows: tuple[str, str]):
+def lid_run(
+    kit: SessionKit, media: Media, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *rows: tuple[str, str]
+) -> tuple[ContextDocument, FakeLLM]:
     monkeypatch.setattr(asr_runner, "run_worker", LidWorker(rows=rows))
     llm = FakeLLM()
     _, results, _ = run_files(kit, [media.add(tmp_path / "meeting.m4a")], LID_OPTIONS, llm=llm)
@@ -1354,7 +1418,7 @@ def punctuation_system(llm: FakeLLM, text: str) -> str:
 
 
 def test_a_mandarin_stretch_in_an_english_recording_gets_mandarin_text_rules(
-    session_kit, media: Media, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     doc, llm = lid_run(
         session_kit,
@@ -1380,7 +1444,7 @@ def test_a_mandarin_stretch_in_an_english_recording_gets_mandarin_text_rules(
 
 
 def test_an_english_stretch_in_a_mandarin_recording_keeps_english_text_rules(
-    session_kit, media: Media, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     doc, llm = lid_run(
         session_kit,
@@ -1395,15 +1459,22 @@ def test_an_english_stretch_in_a_mandarin_recording_keeps_english_text_rules(
     assert "Use ASCII punctuation" in punctuation_system(llm, "I think so")
 
 
-def test_stretch_languages_change_only_the_asr_key_of_a_recording_with_a_chunked_engine(session_kit) -> None:
-    for kind, engine in (("youtube", "w-runs-lid"), ("youtube", "w-prod"), ("recording", "w-prod")):
-        key, plain = asr_keys(session_kit, kind, engine=engine)  # type: ignore[arg-type]
+def test_stretch_languages_change_only_the_asr_key_of_a_recording_with_a_chunked_engine(
+    session_kit: SessionKit,
+) -> None:
+    cases: list[tuple[pipeline.SourceKind, str]] = [
+        ("youtube", "w-runs-lid"),
+        ("youtube", "w-prod"),
+        ("recording", "w-prod"),
+    ]
+    for kind, engine in cases:
+        key, plain = asr_keys(session_kit, kind, engine=engine)
         assert key == plain, (kind, engine)
     key, plain = asr_keys(session_kit, "recording", engine="w-runs-lid")
     assert key != plain
 
 
-def test_an_empty_glossary_keeps_the_youtube_run_key_and_a_glossary_changes_it(session_kit) -> None:
+def test_an_empty_glossary_keeps_the_youtube_run_key_and_a_glossary_changes_it(session_kit: SessionKit) -> None:
     def run_key(**text: object) -> str:
         options = config.load_options(overrides={"text": text})
         return pipeline._settings(
@@ -1423,7 +1494,7 @@ def test_an_empty_glossary_keeps_the_youtube_run_key_and_a_glossary_changes_it(s
     assert run_key(glossary=("Acme",)) != run_key()
 
 
-def test_the_glossary_is_trimmed_deduplicated_and_capped(session_kit) -> None:
+def test_the_glossary_is_trimmed_deduplicated_and_capped(session_kit: SessionKit) -> None:
     given = (" Acme ", "", "Acme", "Kubernetes")
     options = config.load_options(overrides={"text": {"glossary": given}})
     built = pipeline._settings(
@@ -1452,14 +1523,19 @@ def test_the_glossary_is_trimmed_deduplicated_and_capped(session_kit) -> None:
 
 
 def test_only_a_diarized_documents_punctuate_and_correct_keys_say_it_is_a_conversation(
-    session_kit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit,
+    media: Media,
+    worker: Worker,
+    diarizer: Diarizer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    keyed: list[tuple[str, dict[str, object]]] = []
+    keyed: list[tuple[str, dict[str, JsonValue]]] = []
     real_key = pipeline._key
 
-    def recording_key(stage: str, inputs: dict[str, object]) -> str:
+    def recording_key(stage: str, inputs: dict[str, JsonValue]) -> str:
         keyed.append((stage, dict(inputs)))
-        return real_key(stage, inputs)  # type: ignore[arg-type]
+        return real_key(stage, inputs)
 
     monkeypatch.setattr(pipeline, "_key", recording_key)
     two_voices(diarizer)
