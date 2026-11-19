@@ -29,7 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Exact pins: mlx-audio ships often and engine behaviour changes between releases; bump with a live engine smoke.
-asr = ["mlx-audio[stt]==0.6.5"]
+asr = ["mlx-audio[stt]==0.6.6"]
 # The Whisper control engine; it pulls in torch, so it stays out of the core and the asr extra.
 whisper = ["mlx-whisper==0.4.3"]
 
