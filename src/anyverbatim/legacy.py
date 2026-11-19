@@ -60,7 +60,9 @@ def move_into_place(old: Path, new: Path) -> Path:
         if os.path.lexists(new) and os.path.lexists(old):
             raise _both_exist(old, new) from exc
         raise _move_failed(old, new, exc.strerror or str(exc)) from exc
-    sys.stderr.write(f"{APP}: moved {old} to {new} ({LEGACY_APP} was renamed to {APP})\n")
+    # A host app embedding the library may run with no stderr at all (a windowed app).
+    if sys.stderr is not None:
+        sys.stderr.write(f"{APP}: moved {old} to {new} ({LEGACY_APP} was renamed to {APP})\n")
     return new
 
 

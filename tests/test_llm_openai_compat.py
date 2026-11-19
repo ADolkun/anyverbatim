@@ -198,6 +198,17 @@ def test_a_key_may_go_over_https_or_to_loopback(base_url: str) -> None:
     OpenAICompatClient(base_url=base_url, model="m", api_key_env="FAKE_LLM_KEY")
 
 
+@pytest.mark.parametrize("base_url", ["file:///etc/passwd", "ftp://example.com/v1", "http:///v1", "http://[::1/v1"])
+def test_a_base_url_must_be_http_or_https_with_a_host(base_url: str) -> None:
+    with pytest.raises(ConfigError, match="http or https"):
+        OpenAICompatClient(base_url=base_url, model="m")
+    opener = StubOpener()
+    status = openai_compat.readiness(base_url, None, opener=opener)
+    assert not status.ready
+    assert "http or https" in status.detail
+    assert opener.requests == []
+
+
 def test_without_a_key_plain_http_anywhere_is_fine() -> None:
     OpenAICompatClient(base_url="http://192.168.1.20:8080/v1", model="m")
 

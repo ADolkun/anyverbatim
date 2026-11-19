@@ -120,9 +120,12 @@ def readiness(
 
 def _require_safe_transport(base_url: str, api_key_env: str | None) -> None:
     """Refuse any URL but http(s), and a bearer key in clear text anywhere but this machine."""
-    parts = urllib.parse.urlsplit(base_url)
+    try:
+        parts = urllib.parse.urlsplit(base_url)
+    except ValueError:
+        parts = None
     # urllib also opens file: and other schemes; a base_url is user config, so anything else would read local files.
-    if parts.scheme not in {"http", "https"} or not parts.hostname:
+    if parts is None or parts.scheme not in {"http", "https"} or not parts.hostname:
         raise ConfigError(f"[llm] base_url {base_url} must be an http or https URL")
     if api_key_env is None:
         return

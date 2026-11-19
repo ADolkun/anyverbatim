@@ -4,6 +4,7 @@ import errno
 import json
 import os
 import shutil
+import sys
 import threading
 from pathlib import Path
 
@@ -74,6 +75,14 @@ def test_every_path_lookup_refuses_an_old_variable(name: str, monkeypatch: pytes
     monkeypatch.setenv(name, "set")
     with pytest.raises(ConfigError, match="ANYVERBATIM_" + name.removeprefix("YTVERBATIM_")):
         paths.state_dir()
+
+
+def test_the_move_works_in_a_process_without_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    old, new = tmp_path / "ytverbatim", tmp_path / "anyverbatim"
+    old.mkdir(mode=0o700)
+    monkeypatch.setattr(sys, "stderr", None)
+    assert legacy.move_into_place(old, new) == new
+    assert new.is_dir()
 
 
 def test_only_the_old_directory_is_moved_with_one_notice(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
