@@ -1,7 +1,8 @@
-.PHONY: lint format format-check typecheck test privacy-check check install-hooks live-smoke
+.PHONY: lint format format-check typecheck test privacy-check package-check check install-hooks live-smoke
 
 lint:
 	uv run ruff check .
+	uv run zizmor --quiet .github
 
 format:
 	uv run ruff format .
@@ -13,12 +14,17 @@ typecheck:
 	uv run pyrefly check --min-severity warn
 
 test:
-	uv run pytest
+	uv run pytest -n auto --cov
 
 privacy-check:
 	uv run python scripts/check_private.py --all-tracked
 
-check: lint format-check typecheck test privacy-check
+package-check:
+	rm -rf dist
+	uv build --quiet
+	uv run --isolated --no-project --with dist/*.whl python -I scripts/check_package.py
+
+check: lint format-check typecheck test privacy-check package-check
 
 # Opt-in, networked, never in `check` or CI; prints to the terminal only.
 live-smoke:

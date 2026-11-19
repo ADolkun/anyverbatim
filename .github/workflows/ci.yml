@@ -14,12 +14,52 @@ concurrency:
 
 jobs:
   check:
+    name: make check
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No version: installs the newest uv that satisfies `required-version` in pyproject.toml.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.9"
           enable-cache: true
-      - run: uv sync --frozen
+      - run: uv sync --locked
+      # make check audits the workflows offline; with a token zizmor adds the online audits
+      # (impostor commits, known-vulnerable actions). Kept out of make check's environment.
+      - name: Audit workflows online
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run --no-sync zizmor --quiet .github
       - run: make check
+      - name: Coverage summary
+        if: ${{ !cancelled() }}
+        run: uv run --no-sync coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY"
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+
+  # The one required check, so jobs can be added or renamed without touching the branch ruleset. A skipped job
+  # (dependency review on a push) passes; a failed or cancelled one does not.
+  gate:
+    name: CI gate
+    if: ${{ !cancelled() }}
+    needs: [check, dependency-review]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every job to have passed or been skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          case " $RESULTS " in *" failure "* | *" cancelled "*) exit 1 ;; esac
