@@ -9,6 +9,7 @@ from anyverbatim.errors import ConfigError
 from evals import run_asr
 from evals.decide import decide
 from evals.listen import Choice, LoggedDecision
+from evals.metrics import weighted_wilson
 from evals.normalize import Language
 from evals.report import ABResult, Report, WinStats, build_report, render_markdown
 from evals.screen import (
@@ -27,8 +28,6 @@ HOUR = 3600.0
 
 
 def stats(wins: int, losses: int) -> WinStats:
-    from evals.metrics import weighted_wilson
-
     w = weighted_wilson([(True, 1.0)] * wins + [(False, 1.0)] * losses)
     return WinStats(challenger_wins=wins, control_wins=losses, both=3, neither=1, skipped=0, rate=w.rate,
                     effective_n=w.effective_n, low=w.low, high=w.high)  # fmt: skip
@@ -40,7 +39,9 @@ def quality(**extra: float) -> dict[Language, Quality]:
 
 
 def screen_row(name: str, cer: float | None = 0.10, **extra: float) -> HypothesisScreen:
-    reference = {"zh": Rate(errors=round(cer * 1000), reference_units=1000)} if cer is not None else {}
+    reference: dict[Language, Rate] = (
+        {"zh": Rate(errors=round(cer * 1000), reference_units=1000)} if cer is not None else {}
+    )
     return HypothesisScreen(hypothesis=name, quality=quality(**extra), reference_cer=reference,
                             reference_cer_raw=reference, reference_mer=reference, caption_wer=None,
                             speed=NO_SPEED.model_copy(update={"rtf": 0.1, "load_s": 1.0}),
@@ -167,8 +168,8 @@ def test_the_report_and_results_hold_no_transcript_text_or_ids(tmp_path: Path, m
     key = load_key(layout.session_dir("main"))
     with (layout.session_dir("main") / DECISIONS_FILE).open("w", encoding="utf-8") as handle:
         for i, entry in enumerate(key.entries):
-            choice = str(entry.challenger_option) if i % 3 else "both"
-            handle.write(LoggedDecision(span=entry.id, choice=choice, at="t").model_dump_json() + "\n")  # type: ignore[arg-type]
+            choice: Choice = ("1" if entry.challenger_option == 1 else "2") if i % 3 else "both"
+            handle.write(LoggedDecision(span=entry.id, choice=choice, at="t").model_dump_json() + "\n")
     result = build_report(layout, manifest, screen, "main", "t")
     assert result.ab is not None
     assert result.ab.overall.challenger_wins == sum(1 for i in range(len(key.entries)) if i % 3)

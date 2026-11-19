@@ -55,7 +55,7 @@ def make_library(
             "ZFOLDER": None,
         }
         connection.execute(
-            f"INSERT INTO {voicememos.TABLE} ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
+            f"INSERT INTO {voicememos.TABLE} ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",  # noqa: S608 - table and column names are constants, values are bound
             [values[c] for c in columns],
         )
         if row.path and row.audio is not None:

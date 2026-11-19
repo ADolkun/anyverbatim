@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from fake_diarizer import CHANNELS, FRAME_S, definition, write_silence
+from pydantic import JsonValue
 
 from anyverbatim import mlx_worker, paths, proc
 from anyverbatim.contract.models import Word
@@ -25,7 +26,7 @@ from anyverbatim.diarize.protocol import (
     probs_path,
     turns_path,
 )
-from anyverbatim.errors import EngineError, EngineMemoryError, ProcMemoryExceeded
+from anyverbatim.errors import EngineError, EngineMemoryError, MemoryTrigger, ProcMemoryExceeded
 
 HERE = Path(__file__).parent
 GIB = 1 << 30
@@ -41,7 +42,7 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return home
 
 
-def make_request(tmp_path: Path, *seconds: float, **variant: object) -> DiarizeRequest:
+def make_request(tmp_path: Path, *seconds: float, **variant: JsonValue) -> DiarizeRequest:
     jobs = tuple(
         FileJob(id=f"f{i}", wav=str(write_silence(tmp_path / f"f{i}.wav", s))) for i, s in enumerate(seconds or (4.0,))
     )
@@ -215,7 +216,9 @@ def test_the_worker_runs_in_its_output_folder_under_the_asr_lock_and_a_memory_wa
         runner.run_worker(request)
     assert seen["cap"] == 12 * GIB
     assert seen["cwd"] == (tmp_path / "out").resolve()
-    assert seen["argv"][1:4] == ["-P", "-m", "anyverbatim.diarize.worker"]  # type: ignore[index]
+    argv = seen["argv"]
+    assert isinstance(argv, list)
+    assert argv[1:4] == ["-P", "-m", "anyverbatim.diarize.worker"]
     written = DiarizeRequest.model_validate_json((tmp_path / "out" / REQUEST_FILE).read_text(encoding="utf-8"))
     assert Path(written.out_dir).is_absolute()
     assert all(Path(job.wav).is_absolute() for job in written.files)
@@ -250,12 +253,12 @@ def test_the_memory_advice_names_a_lighter_diarizer_only_when_there_is_one() -> 
     ],
 )
 def test_a_memory_kill_becomes_an_engine_memory_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trigger: str, fix: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trigger: MemoryTrigger, fix: str
 ) -> None:
     def fake_run(argv: list[str], **_: object) -> proc.ProcResult:
         raise ProcMemoryExceeded(
             "python3",
-            trigger,  # type: ignore[arg-type]
+            trigger,
             footprint_bytes=9 * GIB,
             cap_bytes=8 * GIB,
             available_percent=40 if trigger == "footprint" else 6,

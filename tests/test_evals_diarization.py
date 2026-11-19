@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 
 import pytest
 
@@ -54,7 +55,7 @@ def test_parse_rttm_rejects_short_and_negative_lines() -> None:
         parse_rttm("SPEAKER rec 1 zero 1.0 <NA> <NA> A <NA> <NA>\n")
 
 
-def test_rttm_round_trip_sorts_and_drops_empty_turns(tmp_path) -> None:
+def test_rttm_round_trip_sorts_and_drops_empty_turns(tmp_path: Path) -> None:
     path = tmp_path / "out.rttm"
     write_rttm(path, "rec", turns((5.0, 6.0, "B"), (0.0, 2.5, "A"), (7.0, 7.0, "A")))
     assert read_rttm(path) == {"rec": turns((0.0, 2.5, "A"), (5.0, 6.0, "B"))}

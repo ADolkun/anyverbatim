@@ -1,5 +1,5 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -13,6 +13,7 @@ from anyverbatim.asr.protocol import EngineDef, EngineSpec
 from anyverbatim.asr.runner import WorkerResult
 from anyverbatim.errors import ConfigError
 from evals import disk, run_asr
+from evals.manifest import Manifest
 from evals.store import (
     CAPTION_HYPOTHESIS,
     REFERENCE,
@@ -116,8 +117,20 @@ def test_asr_cli_with_a_fake_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         )  # fmt: skip
         return WorkerResult(layout.rows_path(hypothesis, request.files[0].id), metrics, GB, 6.0)
 
-    def run_hypothesis(*args: object, **kwargs: object) -> run_asr.AsrOutcome:
-        return original(*args, worker=worker, free=plenty, **kwargs)  # type: ignore[arg-type]
+    def run_hypothesis(
+        store: Layout,
+        manifest: Manifest,
+        hypothesis: str,
+        files: Sequence[str],
+        cache: Path,
+        *,
+        definition: EngineDef | None = None,
+        memory_cap: int | None = None,
+    ) -> run_asr.AsrOutcome:
+        return original(
+            store, manifest, hypothesis, files, cache, definition=definition, worker=worker, free=plenty,
+            memory_cap=memory_cap,
+        )  # fmt: skip
 
     original = run_asr.run_hypothesis
     monkeypatch.setattr(run_asr, "run_hypothesis", run_hypothesis)

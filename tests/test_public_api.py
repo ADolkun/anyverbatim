@@ -6,6 +6,8 @@
 import dataclasses
 import inspect
 import re
+import subprocess
+import sys
 import typing
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -19,6 +21,7 @@ from anyverbatim import config, contract, errors, ids
 from anyverbatim.asr import registry
 from anyverbatim.diarize import registry as diarize_registry
 from anyverbatim.errors import DependencyError
+from anyverbatim.pipeline import SourceKind
 
 EXPECTED_ALL = [
     "AsrOptions",
@@ -89,9 +92,6 @@ def test_the_progress_stages_are_pinned() -> None:
 
 
 def test_importing_the_package_loads_none_of_the_library() -> None:
-    import subprocess
-    import sys
-
     code = "import sys, anyverbatim; sys.exit(any(m.startswith('anyverbatim.pipeline') for m in sys.modules))"
     assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
 
@@ -234,7 +234,8 @@ def test_errors_export_every_error_class_with_the_auth_vocabulary() -> None:
     assert set(errors.__all__) == classes | {"AuthState", "Signal"}
     for name in classes:
         error = getattr(errors, name)
-        assert error.fix == "" and error.stage is None, "both default to unset, for the caller to read"
+        assert error.fix == "", "both default to unset, for the caller to read"
+        assert error.stage is None, "both default to unset, for the caller to read"
 
 
 def test_the_error_attributes_an_application_reads_are_pinned() -> None:
@@ -298,8 +299,12 @@ def libraries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> set[str]:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     present = {"mlx_whisper", "mlx_audio"}
-    monkeypatch.setattr(registry, "find_spec", lambda name: object() if name in present else None)
-    monkeypatch.setattr(diarize_registry, "find_spec", lambda name: object() if name in present else None)
+
+    def find_spec(name: str) -> object | None:
+        return object() if name in present else None
+
+    monkeypatch.setattr(registry, "find_spec", find_spec)
+    monkeypatch.setattr(diarize_registry, "find_spec", find_spec)
     return present
 
 
@@ -309,10 +314,10 @@ def test_check_dependencies_passes_when_the_engine_is_installed(libraries: set[s
 
 
 @pytest.mark.parametrize("source", ["youtube", "recording"])
-def test_check_dependencies_names_the_extra_the_default_engine_needs(libraries: set[str], source: str) -> None:
+def test_check_dependencies_names_the_extra_the_default_engine_needs(libraries: set[str], source: SourceKind) -> None:
     libraries.discard("mlx_whisper")
     with pytest.raises(DependencyError, match=r"install anyverbatim\[whisper\]"):
-        anyverbatim.check_dependencies(source=source)  # type: ignore[arg-type]
+        anyverbatim.check_dependencies(source=source)
 
 
 def test_a_recording_needs_the_asr_extra_for_its_diarizer_or_its_engine(libraries: set[str]) -> None:
@@ -356,4 +361,4 @@ def test_check_dependencies_checks_the_second_opinion_engine(libraries: set[str]
 
 def test_an_unknown_source_is_a_value_error(libraries: set[str]) -> None:
     with pytest.raises(ValueError, match="source must be one of"):
-        anyverbatim.check_dependencies(source="bogus")  # type: ignore[arg-type]
+        anyverbatim.check_dependencies(source="bogus")  # pyrefly: ignore[bad-argument-type]  # the invalid input

@@ -1,5 +1,6 @@
 """`STAGES` and `LLM_STAGES` describe what a real run does: the stages it reaches and the ones that call the LLM."""
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from unittest import mock
@@ -33,13 +34,13 @@ class StageRecordingLLM:
 def run_video(video_id: str, out: Path) -> tuple[list[ProgressEvent], StageRecordingLLM]:
     events: list[ProgressEvent] = []
     llm = StageRecordingLLM(events)
-    result = run(video_id, out, llm, FakeYtDlp(), events)  # type: ignore[arg-type]
+    result = run(video_id, out, llm, FakeYtDlp(), events)
     assert result.document is not None, result.outcome
     return events, llm
 
 
 @pytest.fixture
-def offline(tmp_path: Path):
+def offline(tmp_path: Path) -> Iterator[Path]:
     home = tmp_path / "home"
     home.mkdir()
     with (

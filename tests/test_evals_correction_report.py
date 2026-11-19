@@ -9,10 +9,10 @@ from evals.screen import Span, SpanReading
 from evals.store import Layout
 
 
-def span(id: str, before: str, proposed: str) -> Span:
+def span(span_id: str, before: str, proposed: str) -> Span:
     readings = {BEFORE: before, PROPOSED: proposed}
     return Span(
-        id=id, file="f", language="zh", window=0,
+        id=span_id, file="f", language="zh", window=0,
         readings=tuple(
             SpanReading(hypothesis=h, text=t, start=0.0, end=1.0, before=None, after=None) for h, t in readings.items()
         ),

@@ -1,6 +1,7 @@
 import json
 import unicodedata
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 from click.testing import CliRunner
@@ -27,7 +28,11 @@ def library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rows: list[Row]) ->
 
 
 def no_hashing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(voicememos.MemoCache, "resolve", lambda *_a, **_k: pytest.fail("the listing hashed a memo"))
+
+    def refuse(*_args: object, **_kwargs: object) -> NoReturn:
+        pytest.fail("the listing hashed a memo")
+
+    monkeypatch.setattr(voicememos.MemoCache, "resolve", refuse)
 
 
 def test_the_listing_shows_date_duration_title_status_and_a_short_id(

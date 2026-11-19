@@ -123,10 +123,10 @@ def test_number_violations_counts_stretches() -> None:
     assert number_violations(base, unflagged) == 2
 
 
-def span(id: str, base: str, readings: dict[str, str], *, format_only: bool = False, language: str = "zh") -> Span:
+def span(span_id: str, base: str, readings: dict[str, str], *, format_only: bool = False, language: str = "zh") -> Span:
     shown = {"base": base, **readings}
     return Span(
-        id=id, file="f", language="zh" if language == "zh" else "en", window=0,
+        id=span_id, file="f", language="zh" if language == "zh" else "en", window=0,
         readings=tuple(
             SpanReading(hypothesis=h, text=t, start=0.0, end=1.0, before=None, after=None) for h, t in shown.items()
         ),
@@ -217,7 +217,7 @@ def judge(net: float, over: float = 0.05, *, width: float = 1.0) -> JudgeStats:
 
 
 def screen(
-    id: str,
+    screen_id: str,
     net: float = 10.0,
     *,
     local: bool = False,
@@ -228,7 +228,7 @@ def screen(
     width: float = 1.0,
 ) -> CandidateScreen:
     return CandidateScreen(
-        id=id, local=local, complete=complete, llm_output_failed=failed, number_violations=violations,
+        id=screen_id, local=local, complete=complete, llm_output_failed=failed, number_violations=violations,
         first_try_validity=1.0, judge=judge(net, over, width=width),
     )  # fmt: skip
 
@@ -293,9 +293,11 @@ def test_pick_none_eligible() -> None:
     assert pick([]).candidate is None
 
 
-def entry(id: str, weight: float, *, language: str = "zh", stratum: Stratum = "other", option: int = 1) -> KeyEntry:
+def entry(
+    entry_id: str, weight: float, *, language: str = "zh", stratum: Stratum = "other", option: int = 1
+) -> KeyEntry:
     return KeyEntry(
-        id=id, source="s", file="f", language="zh" if language == "zh" else "en", stratum=stratum,
+        id=entry_id, source="s", file="f", language="zh" if language == "zh" else "en", stratum=stratum,
         weight=weight, challenger_option=1 if option == 1 else 2,
     )  # fmt: skip
 

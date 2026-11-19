@@ -387,7 +387,8 @@ def test_a_checkpoint_hit_skips_the_llm(tmp_path: Path) -> None:
     second = run(DISPUTED, evidence, again, tmp_path)
     assert again.requests == []
     assert second.texts == first.texts
-    assert second.usage == first.usage and first.usage, "a reused batch still counts toward the cost"
+    assert second.usage == first.usage, "a reused batch still counts toward the cost"
+    assert first.usage, "a reused batch still counts toward the cost"
 
 
 def test_a_reading_with_another_unit_is_never_applied(tmp_path: Path) -> None:

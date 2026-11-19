@@ -1,12 +1,13 @@
 import logging
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
 from fake_engine import write_silence
+from numpy.typing import NDArray
 from pydantic import JsonValue
 
 from anyverbatim import pipeline, store
@@ -66,8 +67,7 @@ class FakeMel:
 class FakeModel:
     def __init__(self, mx: FakeMx) -> None:
         self.mx = mx
-        self.dims = ModuleType("dims")
-        self.dims.n_mels = 128  # type: ignore[attr-defined]
+        self.dims = SimpleNamespace(n_mels=128)
         self.probabilities = {"en": 0.25, "zh": 0.7, "yue": 0.05}
         self.mels: list[FakeMel] = []
 
@@ -80,7 +80,7 @@ class FakeModel:
 class FakeWhisper:
     def __init__(self, mx: FakeMx) -> None:
         self.mx = mx
-        self.calls: list[tuple[Any, dict[str, Any]]] = []
+        self.calls: list[tuple[NDArray[np.float32], dict[str, object]]] = []
         self.result: dict[str, Any] = RESULT
         # Returned in turn before `result`, for a test that needs successive decodes to differ.
         self.results: list[dict[str, Any]] = []
@@ -88,7 +88,7 @@ class FakeWhisper:
         self.loads: list[tuple[str, object]] = []
         self.model = FakeModel(mx)
 
-    def transcribe(self, audio: Any, **kwargs: Any) -> dict[str, Any]:
+    def transcribe(self, audio: NDArray[np.float32], **kwargs: object) -> dict[str, Any]:
         self.mx.events.append(("transcribe", None))
         self.calls.append((audio, kwargs))
         if self.error is not None:
@@ -109,7 +109,7 @@ def snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (path / "config.json").write_text("{}", encoding="utf-8")
     (path / "weights.npz").write_bytes(b"")
     constants = ModuleType("huggingface_hub.constants")
-    constants.default_cache_path = str(cache)  # type: ignore[attr-defined]
+    vars(constants)["default_cache_path"] = str(cache)
     monkeypatch.setitem(sys.modules, "huggingface_hub", ModuleType("huggingface_hub"))
     monkeypatch.setitem(sys.modules, "huggingface_hub.constants", constants)
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "candidates-hub"))
@@ -125,7 +125,7 @@ def fake(monkeypatch: pytest.MonkeyPatch, mx: FakeMx, snapshot: Path) -> FakeWhi
         ModuleType("mlx_whisper.tokenizer"),
         ModuleType("mlx_whisper.audio"),
     )
-    package.transcribe = whisper.transcribe  # type: ignore[attr-defined]
+    vars(package)["transcribe"] = whisper.transcribe
 
     class ModelHolder:
         @classmethod
@@ -133,22 +133,29 @@ def fake(monkeypatch: pytest.MonkeyPatch, mx: FakeMx, snapshot: Path) -> FakeWhi
             whisper.loads.append((model_path, dtype))
             return whisper.model
 
-    transcribe_module.ModelHolder = ModelHolder  # type: ignore[attr-defined]
-    audio.SAMPLE_RATE = 16_000  # type: ignore[attr-defined]
-    audio.N_SAMPLES = 480_000  # type: ignore[attr-defined]
-    audio.N_FRAMES = 3000  # type: ignore[attr-defined]
-    audio.FRAMES_PER_SECOND = 100  # type: ignore[attr-defined]
-    audio.log_mel_spectrogram = lambda samples, n_mels, padding: FakeMel((samples, n_mels, padding))  # type: ignore[attr-defined]
-    audio.pad_or_trim = lambda mel, length, *, axis: FakeMel((*mel.steps, ("trim", length, axis)))  # type: ignore[attr-defined]
-    tokenizer.LANGUAGES = {"en": "english", "zh": "chinese", "yue": "cantonese"}  # type: ignore[attr-defined]
-    tokenizer.TO_LANGUAGE_CODE = {"chinese": "zh", "mandarin": "zh"}  # type: ignore[attr-defined]
+    vars(transcribe_module)["ModelHolder"] = ModelHolder
+    vars(audio)["SAMPLE_RATE"] = 16_000
+    vars(audio)["N_SAMPLES"] = 480_000
+    vars(audio)["N_FRAMES"] = 3000
+    vars(audio)["FRAMES_PER_SECOND"] = 100
+
+    def log_mel_spectrogram(samples: object, n_mels: int, padding: int) -> FakeMel:
+        return FakeMel((samples, n_mels, padding))
+
+    def pad_or_trim(mel: FakeMel, length: int, *, axis: int) -> FakeMel:
+        return FakeMel((*mel.steps, ("trim", length, axis)))
+
+    vars(audio)["log_mel_spectrogram"] = log_mel_spectrogram
+    vars(audio)["pad_or_trim"] = pad_or_trim
+    vars(tokenizer)["LANGUAGES"] = {"en": "english", "zh": "chinese", "yue": "cantonese"}
+    vars(tokenizer)["TO_LANGUAGE_CODE"] = {"chinese": "zh", "mandarin": "zh"}
     core = ModuleType("mlx.core")
-    core.set_cache_limit = mx.set_cache_limit  # type: ignore[attr-defined]
-    core.clear_cache = mx.clear_cache  # type: ignore[attr-defined]
-    core.float16 = mx.float16  # type: ignore[attr-defined]
-    core.get_peak_memory = lambda: 42  # type: ignore[attr-defined]
+    vars(core)["set_cache_limit"] = mx.set_cache_limit
+    vars(core)["clear_cache"] = mx.clear_cache
+    vars(core)["float16"] = mx.float16
+    vars(core)["get_peak_memory"] = lambda: 42
     mlx = ModuleType("mlx")
-    mlx.core = core  # type: ignore[attr-defined]
+    vars(mlx)["core"] = core
     for name, module in (
         ("mlx", mlx),
         ("mlx.core", core),
@@ -594,7 +601,7 @@ def test_the_worker_decodes_runs_with_their_language_and_no_zh_prompt(
 ) -> None:
     detections = [{"zh": 0.8, "en": 0.2}, {"zh": 0.1, "en": 0.9}, {"zh": 0.7, "en": 0.3}]
 
-    def detect(mel: Any) -> tuple[None, dict[str, float]]:
+    def detect(mel: object) -> tuple[None, dict[str, float]]:
         return None, detections.pop(0)
 
     monkeypatch.setattr(fake.model, "detect_language", detect)

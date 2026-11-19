@@ -1,4 +1,7 @@
+import io
 import urllib.error
+import wave
+from email.message import Message
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +13,7 @@ from evals.diarization import Turn, read_rttm
 from evals.recordings_data import (
     SAMPLE_RATE,
     AscendUtterance,
+    CorpusIndex,
     RefUtterance,
     ami_alignment,
     ami_meeting_id,
@@ -29,8 +33,18 @@ from evals.recordings_data import (
 )
 
 
-def ascend(session, speaker, line, start, duration, text="x", id=None):
-    return AscendUtterance(id or f"{session}-{speaker}-{line}", session, speaker, line, start, duration, "zh", text)
+def ascend(
+    session: int,
+    speaker: int,
+    line: int,
+    start: float,
+    duration: float,
+    text: str = "x",
+    utterance_id: str | None = None,
+) -> AscendUtterance:
+    return AscendUtterance(
+        utterance_id or f"{session}-{speaker}-{line}", session, speaker, line, start, duration, "zh", text
+    )
 
 
 def test_parse_ascend_name_reads_session_speaker_line_offset_and_duration() -> None:
@@ -40,7 +54,7 @@ def test_parse_ascend_name_reads_session_speaker_line_offset_and_duration() -> N
 
 
 @pytest.mark.parametrize("name", ["ses1_spk17_L3825_16.5740.wav", "utt_0001.wav", "ses1_spk17_L3_1.0_2.0.mp3"])
-def test_parse_ascend_name_rejects_other_shapes(name) -> None:
+def test_parse_ascend_name_rejects_other_shapes(name: str) -> None:
     with pytest.raises(ConfigError, match="unexpected ASCEND file name"):
         parse_ascend_name(name)
 
@@ -49,7 +63,9 @@ def test_offsets_pass_with_cross_speaker_overlap_but_not_with_same_speaker_overl
     fine = [ascend(1, 3, 10, 0.0, 5.0), ascend(1, 3, 12, 6.0, 2.0), ascend(1, 17, 1, 2.0, 9.0)]
     check_ascend_offsets(fine)
     with pytest.raises(ConfigError, match="overlap"):
-        check_ascend_offsets([ascend(1, 3, 10, 0.0, 5.0, id="a"), ascend(1, 3, 12, 4.0, 2.0, id="b")])
+        check_ascend_offsets(
+            [ascend(1, 3, 10, 0.0, 5.0, utterance_id="a"), ascend(1, 3, 12, 4.0, 2.0, utterance_id="b")]
+        )
     with pytest.raises(ConfigError, match="line order"):
         check_ascend_offsets([ascend(1, 3, 12, 0.0, 1.0), ascend(1, 3, 10, 5.0, 1.0)])
 
@@ -90,12 +106,9 @@ def test_clean_text_and_ordered_text() -> None:
     assert ordered_text(utterances) == "first later"
 
 
-def test_wav_round_trip_and_format_check(tmp_path) -> None:
+def test_wav_round_trip_and_format_check(tmp_path: Path) -> None:
     samples = np.array([0, 1, -1, 32767], dtype="<i2")
     assert read_wav(wav_bytes(samples)).tolist() == samples.tolist()
-    import io
-    import wave
-
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as handle:
         handle.setnchannels(2)
@@ -172,8 +185,6 @@ def test_write_recording_lays_out_audio_references_and_index(tmp_path: Path) -> 
     own_turns = write_recording(tmp_path, "m1", audio, utterances, turns=[Turn(0, 4, "Z")])
     assert own_turns.speakers == 1
     assert read_rttm(tmp_path / "m1" / "reference.rttm") == {"m1": [Turn(0.0, 4.0, "Z")]}
-    from evals.recordings_data import CorpusIndex
-
     index = CorpusIndex(corpus="c", source="s", license="l", recordings=(entry, own_turns))
     write_index(tmp_path, index)
     assert load_index(tmp_path) == index
@@ -198,12 +209,12 @@ def test_tier_names_with_spaces_become_valid_rttm_labels_and_an_empty_grid_is_re
 
 
 def test_offsets_that_touch_within_a_millisecond_are_not_an_overlap() -> None:
-    check_ascend_offsets([ascend(1, 3, 1, 0.0, 1.0004, id="a"), ascend(1, 3, 2, 1.0, 1.0, id="b")])
+    check_ascend_offsets([ascend(1, 3, 1, 0.0, 1.0004, utterance_id="a"), ascend(1, 3, 2, 1.0, 1.0, utterance_id="b")])
 
 
 def test_a_failed_download_is_a_clear_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(*_: object, **__: object) -> None:
-        raise urllib.error.HTTPError("https://example.invalid/x", 503, "unavailable", None, None)  # type: ignore[arg-type]
+        raise urllib.error.HTTPError("https://example.invalid/x", 503, "unavailable", Message(), None)
 
     monkeypatch.setattr(recordings_data.urllib.request, "urlopen", refuse)
     with pytest.raises(ConfigError, match="could not download"):

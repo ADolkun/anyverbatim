@@ -42,8 +42,17 @@ class StubOpener:
         return json.loads(data)
 
 
-def client(opener: StubOpener, **kwargs: object) -> OpenAICompatClient:
-    return OpenAICompatClient(base_url=BASE + "/", model="qwen-local", opener=opener, **kwargs)
+def client(
+    opener: StubOpener, *, api_key_env: str | None = None, timeout_s: float = 900.0, response_format: bool = True
+) -> OpenAICompatClient:
+    return OpenAICompatClient(
+        base_url=BASE + "/",
+        model="qwen-local",
+        api_key_env=api_key_env,
+        timeout_s=timeout_s,
+        response_format=response_format,
+        opener=opener,
+    )
 
 
 def test_request_body_and_headers() -> None:

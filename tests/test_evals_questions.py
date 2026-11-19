@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from click.testing import CliRunner
 
@@ -81,7 +82,7 @@ def test_clock_and_anchor_text_cut_to_one_short_sentence() -> None:
     assert len(anchor_text("w" * 200)) == 81
 
 
-def line(start, end, text, **speakers):
+def line(start: float, end: float, text: str, **speakers: str) -> AttributionLine:
     return AttributionLine(start=start, end=end, text=text, speakers=speakers)
 
 
@@ -113,17 +114,16 @@ def test_pick_anchors_needs_agreement_distance_length_and_uniqueness() -> None:
     assert again["B"].start == 90
 
 
-def attribution(**overrides):
-    base = {
-        "id": "d1",
-        "recording": "rec-01",
-        "start": 70.0,
-        "end": 76.0,
-        "speakers": {"n8": "A", "n16": "B"},
-        "lines": LINES,
-        "clip": "clips/d1.wav",
-    }
-    return AttributionDispute(**{**base, **overrides})
+def attribution(lines: tuple[AttributionLine, ...] = LINES) -> AttributionDispute:
+    return AttributionDispute(
+        id="d1",
+        recording="rec-01",
+        start=70.0,
+        end=76.0,
+        speakers={"n8": "A", "n16": "B"},
+        lines=lines,
+        clip="clips/d1.wav",
+    )
 
 
 def test_attribution_question_offers_anchor_lines_and_never_a_speaker_id() -> None:
@@ -143,12 +143,12 @@ def test_attribution_question_offers_anchor_lines_and_never_a_speaker_id() -> No
 
 
 def test_attribution_without_two_anchored_speakers_is_skipped_with_a_reason() -> None:
-    built = build_questions([attribution(lines=LINES[:2])])
+    built = build_questions([attribution(LINES[:2])])
     assert built.questions == ()
     assert built.skipped == (("d1", "fewer than two speakers have an anchor line every candidate agrees on"),)
 
 
-def text_dispute(item, start, group=None, **candidates):
+def text_dispute(item: str, start: float, group: str | None = None, **candidates: str) -> TextDispute:
     return TextDispute(
         id=item,
         recording="rec-01",
@@ -189,7 +189,7 @@ def test_text_options_are_deduplicated_so_the_owner_sees_each_form_once() -> Non
     assert len(built.questions[0].examples[0].options) == 2 + 2
 
 
-def test_questions_contain_no_name_from_the_names_list_and_round_trip(tmp_path) -> None:
+def test_questions_contain_no_name_from_the_names_list_and_round_trip(tmp_path: Path) -> None:
     dispute = TextDispute(
         id="t1",
         recording="rec-01",
@@ -247,7 +247,7 @@ def test_redaction_happens_before_truncation_so_no_name_fragment_shows() -> None
     assert "[name]" in shown or len(shown) <= MAX_ANCHOR_CHARS + 1
 
 
-def test_the_cli_needs_names_or_an_explicit_no_names(tmp_path) -> None:
+def test_the_cli_needs_names_or_an_explicit_no_names(tmp_path: Path) -> None:
     disputes = tmp_path / "d.jsonl"
     disputes.write_text(text_dispute("t1", 5).model_dump_json() + "\n", encoding="utf-8")
     runner = CliRunner()

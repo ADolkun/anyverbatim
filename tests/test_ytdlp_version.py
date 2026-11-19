@@ -8,7 +8,11 @@ from anyverbatim.ytdlp import version
 
 
 def test_installed_matches_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(version, "version", lambda dist: "2026.10.26")
+
+    def installed_version(dist: str) -> str:
+        return "2026.10.26"
+
+    monkeypatch.setattr(version, "version", installed_version)
     found = version.installed()
     assert (found.version, found.released) == ("2026.10.26", date(2026, 10, 26))
     assert found.age_days(today=date(2026, 11, 11)) == 16

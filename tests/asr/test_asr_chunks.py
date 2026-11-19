@@ -50,7 +50,9 @@ def test_long_region_is_force_cut_at_the_quietest_tail_frame() -> None:
     energy[250] = 0.01  # 25.0-25.1 s, inside the 18-30 s tail
     energy[50] = 0.0  # quieter but outside the tail
     chunks = plan_chunks(regions((0.0, 70.0)), 70.0, frame_energy=energy)
-    assert chunks[0] == Chunk(0.0, pytest.approx(25.05), forced_cut=True)
+    assert chunks[0].start == 0.0
+    assert chunks[0].end == pytest.approx(25.05)
+    assert chunks[0].forced_cut
     assert all(chunk.duration <= 30.0 for chunk in chunks)
     assert [chunk.forced_cut for chunk in chunks] == [True, True, False]
     assert all(a.end == b.start for a, b in itertools.pairwise(chunks))

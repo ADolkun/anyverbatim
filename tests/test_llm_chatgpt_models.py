@@ -172,7 +172,11 @@ def test_a_lapsed_sign_in_is_a_login_error(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_an_unauthorized_catalog_request_signs_in_again_once_when_allowed(signed_in: list[str]) -> None:
     answers: list[Route] = [http_error(401), json_response({"models": [entry("gpt-6.2-sol")]})]
-    opener = FakeOpener({f"GET {MODELS_URL}": lambda request: answers.pop(0)(request)})
+
+    def next_answer(request: urllib.request.Request) -> FakeResponse:
+        return answers.pop(0)(request)
+
+    opener = FakeOpener({f"GET {MODELS_URL}": next_answer})
     reauths: list[str] = []
     assert resolve("gpt-sol", opener=opener, reauth=lambda: reauths.append("again")) == "gpt-6.2-sol"
     assert reauths == ["again"]

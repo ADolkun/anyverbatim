@@ -310,7 +310,9 @@ _NEVER_BESIDE_DIGITS = frozenset(NUMERALS) - set("万萬亿億")
 
 def test_p3_no_digit_written_next_to_a_chinese_numeral() -> None:
     def mixes(text: str) -> bool:
-        out, cursor, edges = [], 0, []
+        out: list[str] = []
+        edges: list[int] = []
+        cursor = 0
         for start, end, replacement in conversions(text):
             out.append(text[cursor:start])
             edges.append(len("".join(out)))
