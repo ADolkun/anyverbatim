@@ -1,0 +1,30 @@
+name: bench (temporary)
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  bench:
+    name: bench ${{ matrix.dist }} ${{ matrix.cov }} compile=${{ matrix.compile }} cache=${{ matrix.cache }} #${{ matrix.rep }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { dist: load, cov: --cov, compile: "0", cache: false, rep: 1 }
+          - { dist: worksteal, cov: --cov, compile: "0", cache: false, rep: 1 }
+          - { dist: worksteal, cov: --cov, compile: "0", cache: false, rep: 2 }
+          - { dist: worksteal, cov: --no-cov, compile: "0", cache: false, rep: 1 }
+          - { dist: worksteal, cov: --cov, compile: "1", cache: false, rep: 1 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          enable-cache: ${{ matrix.cache }}
+          save-cache: false
+      - run: uv sync --locked
+        env:
+          UV_COMPILE_BYTECODE: ${{ matrix.compile }}
+      - run: uv run --no-sync pytest -q -n auto --dist ${{ matrix.dist }} ${{ matrix.cov }} -p no:randomly 2>&1 | tail -3
