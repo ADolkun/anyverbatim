@@ -7,8 +7,9 @@ from typing import Any, get_args
 import pytest
 from pydantic import ValidationError
 
-from ytverbatim.auth import chromium
-from ytverbatim.contract import (
+from anyverbatim import legacy
+from anyverbatim.auth import chromium
+from anyverbatim.contract import (
     SCHEMA_PATH,
     SCHEMA_VERSION,
     ContextDocument,
@@ -17,8 +18,8 @@ from ytverbatim.contract import (
     export_schema,
     load_document,
 )
-from ytverbatim.contract.models import Access, RecordingSource, YouTubeSource
-from ytverbatim.errors import ContractError
+from anyverbatim.contract.models import Access, RecordingSource, YouTubeSource
+from anyverbatim.errors import ContractError
 
 Raw = dict[str, Any]
 
@@ -86,7 +87,7 @@ def make_raw() -> Raw:
     ]
     return {
         "schema_version": "2.0",
-        "generator": {"name": "ytverbatim", "version": "0.0.1"},
+        "generator": {"name": "anyverbatim", "version": "0.0.1"},
         "created_at": "2026-01-02T03:04:05+00:00",
         "source": {
             "kind": "youtube",
@@ -199,7 +200,7 @@ def test_checked_in_schema_matches_export() -> None:
     checked_in = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     assert checked_in == export_schema(), (
         "context.v2.schema.json is stale; regenerate it with: uv run python -c "
-        "'import json; from ytverbatim.contract import SCHEMA_PATH, export_schema; "
+        "'import json; from anyverbatim.contract import SCHEMA_PATH, export_schema; "
         'SCHEMA_PATH.write_text(json.dumps(export_schema(), indent=2, ensure_ascii=False) + "\\n", encoding="utf-8")\''
     )
 
@@ -688,7 +689,7 @@ def test_unknown_major_is_refused(version: str) -> None:
     raw["schema_version"] = version
     with pytest.raises(ContractError, match="unsupported") as caught:
         load_document(json.dumps(raw))
-    expected = "upgrade ytverbatim" if version in ("3.0", "10.0") else "produce the document again"
+    expected = "upgrade anyverbatim" if version in ("3.0", "10.0") else "produce the document again"
     assert expected in caught.value.fix
 
 
@@ -751,8 +752,11 @@ def test_a_1_0_document_is_upgraded() -> None:
 def test_a_1_1_document_upgrades_to_exactly_what_2_0_writes() -> None:
     upgraded = load_document(V1_1_FIXTURE)
     assert youtube(upgraded).creator_note is not None
-    assert upgraded == load_document(V2_OF_V1_1)
-    assert dump_document(upgraded) == V2_OF_V1_1.read_text(encoding="utf-8")
+    # An upgrade keeps the generator that wrote the document, which predates the rename.
+    assert upgraded.generator.name == legacy.LEGACY_APP
+    written = load_document(V2_OF_V1_1).model_copy(update={"generator": upgraded.generator})
+    assert upgraded == written
+    assert dump_document(upgraded) == dump_document(written)
 
 
 @pytest.mark.parametrize("fixture", [V1_0_FIXTURE, V1_1_FIXTURE], ids=["1.0", "1.1"])

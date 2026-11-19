@@ -3,8 +3,8 @@ from importlib.metadata import PackageNotFoundError
 
 import pytest
 
-from ytverbatim.errors import DependencyError
-from ytverbatim.ytdlp import version
+from anyverbatim.errors import DependencyError
+from anyverbatim.ytdlp import version
 
 
 def test_installed_matches_metadata(monkeypatch: pytest.MonkeyPatch) -> None:

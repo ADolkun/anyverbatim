@@ -34,11 +34,11 @@ import click
 import numpy as np
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
+from anyverbatim import atomic
+from anyverbatim.errors import AnyverbatimError, ConfigError
 from evals import disk
 from evals.diarization import Turn, write_rttm
 from evals.manifest import eval_dir
-from ytverbatim import atomic
-from ytverbatim.errors import ConfigError, YtverbatimError
 
 SAMPLE_RATE = 16_000
 MIN_FREE_BYTES = 10 * 10**9
@@ -598,7 +598,7 @@ def prepare_alimeeting(staging: Path, corpus_dir: Path, limit: int | None = None
 
 @click.group()
 def main() -> None:
-    """Public recordings eval data under $YTVERBATIM_EVAL_DIR/recordings (default ~/.local/share/ytverbatim/eval)."""
+    """Public recordings eval data under $ANYVERBATIM_EVAL_DIR/recordings (default ~/.local/share/anyverbatim/eval)."""
 
 
 def _fetch(repo: str, name: str, folder: str) -> Path:
@@ -670,7 +670,7 @@ def status() -> None:
 def run() -> None:
     try:
         main(standalone_mode=False)
-    except YtverbatimError as exc:
+    except AnyverbatimError as exc:
         raise SystemExit(f"error: {exc}") from None
     except click.exceptions.Abort:
         raise SystemExit(130) from None

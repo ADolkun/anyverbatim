@@ -1,11 +1,11 @@
 # Signing in
 
-Public videos need no login. Members-only videos, and Premium formats, need your own YouTube session. ytverbatim borrows it from your browser; it never asks for a password.
+Public videos need no login. Members-only videos, and Premium formats, need your own YouTube session. anyverbatim borrows it from your browser; it never asks for a password.
 
 ## How it works
 
-- For each job, ytverbatim reads the cookies of **one Chrome profile you chose**, live from the profile on disk.
-- It keeps only `youtube.com` and `google.com` cookies and writes them to a private snapshot file (mode `0600`, in a `0700` directory under `~/.local/state/ytverbatim/auth/`).
+- For each job, anyverbatim reads the cookies of **one Chrome profile you chose**, live from the profile on disk.
+- It keeps only `youtube.com` and `google.com` cookies and writes them to a private snapshot file (mode `0600`, in a `0700` directory under `~/.local/state/anyverbatim/auth/`).
 - yt-dlp uses that snapshot for the job, and the snapshot is deleted afterwards. Your browser's own cookie database is never written.
 - Cookies never leave your machine except in the requests yt-dlp makes to YouTube itself. They are never logged, printed, or sent anywhere else.
 - By default, videos are tried anonymously first, and cookies are used only when YouTube asks for a login. Cookies are used from the first request for members playlists (`UUMO…`), for channels listed in `auth.cookie_channels`, and with `--policy always`.
@@ -17,24 +17,24 @@ Brave, Chromium, Edge and Vivaldi work the same way: replace `chrome` with the b
 1. List your profiles. Emails are masked unless you pass `--show-emails`:
 
    ```console
-   $ ytverbatim auth profiles
+   $ anyverbatim auth profiles
    Default  'Person 1'  (cookies, last used, a***@example.com)
    Work     'Work'      (cookies, b***@example.com)
-   Use one with: ytverbatim auth use chrome:<DIR>
+   Use one with: anyverbatim auth use chrome:<DIR>
    ```
 
 2. Pick the profile that is signed in to YouTube with the account you want, by its directory name:
 
    ```console
-   $ ytverbatim auth use chrome:Default
+   $ anyverbatim auth use chrome:Default
    ```
 
-   This only checks, offline, that the profile has a cookie database, then saves the choice to `~/.local/state/ytverbatim/auth/source.json`. `ytverbatim auth use none` clears it. The `YTVERBATIM_AUTH` environment variable, or a command's `--auth` option, overrides the saved choice.
+   This only checks, offline, that the profile has a cookie database, then saves the choice to `~/.local/state/anyverbatim/auth/source.json`. `anyverbatim auth use none` clears it. The `ANYVERBATIM_AUTH` environment variable, or a command's `--auth` option, overrides the saved choice.
 
 3. Check that YouTube accepts the login:
 
    ```console
-   $ ytverbatim status --refresh
+   $ anyverbatim status --refresh
    YouTube  chrome:Default   ok, signed in · Premium: unknown · verified 2026-01-01 12:00
    ChatGPT  you@example.com  ok, plan permission, session ready
    LLM      chatgpt:gpt-6.2-sol (newest gpt-sol, medium effort)
@@ -42,24 +42,24 @@ Brave, Chromium, Edge and Vivaldi work the same way: replace `chrome` with the b
 
    The YouTube line takes a snapshot and makes one request (`:ytfav`, your Liked videos list, of which nothing is shown or kept). A good result is cached for an hour; `--refresh` skips the cache and `--json` prints a machine-readable report. Premium shows as `unknown` until a fetch has seen it.
 
-`ytverbatim auth doctor` checks everything at once: ffmpeg and ffprobe, a JavaScript runtime, the yt-dlp version, the source, the snapshot, the login, and any active cooldown.
+`anyverbatim auth doctor` checks everything at once: ffmpeg and ffprobe, a JavaScript runtime, the yt-dlp version, the source, the snapshot, the login, and any active cooldown.
 
 When several profiles have cookies, a bare `chrome` source is refused rather than guessed: guessing could silently pick another Google account.
 
 ## Keychain
 
-Chrome encrypts its cookies with a key stored in the macOS Keychain item "Chrome Safe Storage". The first snapshot makes macOS ask whether `security` may read it. Run `ytverbatim status --refresh` in Terminal, enter your login password, and click **Always Allow**, so later runs do not prompt again. If you click Deny, or nobody answers within two minutes, the state is `keychain_denied`.
+Chrome encrypts its cookies with a key stored in the macOS Keychain item "Chrome Safe Storage". The first snapshot makes macOS ask whether `security` may read it. Run `anyverbatim status --refresh` in Terminal, enter your login password, and click **Always Allow**, so later runs do not prompt again. If you click Deny, or nobody answers within two minutes, the state is `keychain_denied`.
 
 ## Cookie file
 
-If you would rather not let ytverbatim read your browser, export a cookie file instead:
+If you would rather not let anyverbatim read your browser, export a cookie file instead:
 
 1. Open a **new private (incognito) window** and sign in to YouTube there.
 2. Export the `youtube.com` cookies in Netscape `cookies.txt` format with a cookie-export extension you trust.
 3. Close the private window **without signing out**. Signing out would invalidate the exported session.
-4. Run `ytverbatim auth use cookie-file:PATH`.
+4. Run `anyverbatim auth use cookie-file:PATH`.
 
-A file expires much sooner than a live profile. YouTube rotates session cookies regularly, and an exported copy cannot follow the rotation, so expect to re-export when `status` reports `rotated` or `cookie_file_logged_out`. The private window keeps the exported session apart from your everyday browser session, which would otherwise rotate it away. ytverbatim snapshots the file like a browser profile and never writes to it.
+A file expires much sooner than a live profile. YouTube rotates session cookies regularly, and an exported copy cannot follow the rotation, so expect to re-export when `status` reports `rotated` or `cookie_file_logged_out`. The private window keeps the exported session apart from your everyday browser session, which would otherwise rotate it away. anyverbatim snapshots the file like a browser profile and never writes to it.
 
 ## Why live reading is preferred
 
@@ -67,7 +67,7 @@ Chrome is rolling out Device Bound Session Credentials (DBSC), which tie Google 
 
 ## Account safety
 
-ytverbatim keeps your account's footprint small:
+anyverbatim keeps your account's footprint small:
 
 - By default, videos are fetched anonymously first, and your login is used only when YouTube requires it. Members playlists (`UUMO…`), channels in `auth.cookie_channels`, and `--policy always` use it from the start.
 - Batches sleep between requests, and each run has a video cap.
@@ -77,7 +77,7 @@ ytverbatim keeps your account's footprint small:
 
 ## PO token
 
-YouTube sometimes asks for a Proof of Origin (PO) token before serving some formats or subtitles. yt-dlp can get one from an optional provider plugin, such as `bgutil-ytdlp-pot-provider`, that you install yourself into the same environment and run per its own instructions. ytverbatim never installs one or depends on one; the plugin is GPL-licensed. Without it, most videos still work.
+YouTube sometimes asks for a Proof of Origin (PO) token before serving some formats or subtitles. yt-dlp can get one from an optional provider plugin, such as `bgutil-ytdlp-pot-provider`, that you install yourself into the same environment and run per its own instructions. anyverbatim never installs one or depends on one; the plugin is GPL-licensed. Without it, most videos still work.
 
 ## States and fixes
 
@@ -85,7 +85,7 @@ Every auth state has exactly one fix. `status` and `auth doctor` print it next t
 
 ### no_source
 
-No auth source is set, so members-only videos will fail. Run `ytverbatim auth profiles`, then `ytverbatim auth use chrome:<DIR>`.
+No auth source is set, so members-only videos will fail. Run `anyverbatim auth profiles`, then `anyverbatim auth use chrome:<DIR>`.
 
 ### browser_not_found
 
@@ -93,7 +93,7 @@ The browser's data directory does not exist, or the source names an unsupported 
 
 ### profile_not_found
 
-The named profile has no cookie database, or several profiles have cookies and none was named. The message lists the profiles that do. Run `ytverbatim auth use chrome:<DIR>` with one of them.
+The named profile has no cookie database, or several profiles have cookies and none was named. The message lists the profiles that do. Run `anyverbatim auth use chrome:<DIR>` with one of them.
 
 ### cookie_file_invalid
 
@@ -137,7 +137,7 @@ You are signed in, but the account is not a member of the channel, or its member
 
 ### auth_uncertain
 
-The login could not be confirmed, for example because the check request failed for an unrelated reason. Run `ytverbatim status --refresh`; if it fails again, run `ytverbatim auth doctor`.
+The login could not be confirmed, for example because the check request failed for an unrelated reason. Run `anyverbatim status --refresh`; if it fails again, run `anyverbatim auth doctor`.
 
 ### auth_required
 
@@ -149,7 +149,7 @@ yt-dlp needs a JavaScript runtime to solve YouTube's challenges. Install Deno (`
 
 ### ytdlp_stale
 
-The installed yt-dlp is more than 45 days old, and YouTube changes often. Upgrade yt-dlp in the environment ytverbatim runs from.
+The installed yt-dlp is more than 45 days old, and YouTube changes often. Upgrade yt-dlp in the environment anyverbatim runs from.
 
 ### po_token_required
 

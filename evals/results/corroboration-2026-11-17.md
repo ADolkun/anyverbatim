@@ -165,7 +165,7 @@ From a worktree of the corroboration branch, which is not merged: the rules it r
 on it.
 
 ```bash
-export YTVERBATIM_EVAL_DIR=~/.local/share/ytverbatim/eval
+export ANYVERBATIM_EVAL_DIR=~/.local/share/anyverbatim/eval
 uv run python -m evals.run_asr asr --hyp w-prod --files ID,ID,ID,ID            # the four added files
 uv run python -m evals.run_correction base --hyp w-prod --files ID,ID,ID,ID
 uv run python -m evals.run_correction correct --candidate o-gpt61-medium --files ID,ID,ID,ID

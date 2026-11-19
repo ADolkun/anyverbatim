@@ -22,11 +22,11 @@ from chatgpt_fakes import (
     token_payload,
 )
 
-from ytverbatim.errors import ConfigError, LLMOutputError, LLMUnavailableError
-from ytverbatim.llm import chatgpt, chatgpt_auth, chatgpt_http
-from ytverbatim.llm.chatgpt import RESPONSES_URL, ChatGPTClient
-from ytverbatim.llm.chatgpt_auth import TOKEN_URL, ChatGPTAuthError
-from ytverbatim.llm.protocol import LLMRequest, Usage
+from anyverbatim.errors import ConfigError, LLMOutputError, LLMUnavailableError
+from anyverbatim.llm import chatgpt, chatgpt_auth, chatgpt_http
+from anyverbatim.llm.chatgpt import RESPONSES_URL, ChatGPTClient
+from anyverbatim.llm.chatgpt_auth import TOKEN_URL, ChatGPTAuthError
+from anyverbatim.llm.protocol import LLMRequest, Usage
 
 MODEL = "gpt-6.1-sol"
 REQUEST = LLMRequest(system="Be terse.", user="Hi")
@@ -310,7 +310,7 @@ def test_a_read_that_times_out_is_the_deadline(signed_in: list[str]) -> None:
 @pytest.mark.parametrize(
     ("status", "body", "expected", "code"),
     [
-        (401, {"error": {"code": "invalid_token", "message": "secret"}}, "ytverbatim login", "invalid_token"),
+        (401, {"error": {"code": "invalid_token", "message": "secret"}}, "anyverbatim login", "invalid_token"),
         (429, {"error": {"code": "usage_limit_reached"}}, "rate limit", "usage_limit_reached"),
         (503, None, "OpenAI is unavailable", None),
         (501, None, "OpenAI is unavailable", None),
@@ -352,7 +352,7 @@ def test_only_overload_and_gateway_statuses_are_transient(signed_in: list[str], 
 
 def test_a_missing_sign_in_fails_before_any_request() -> None:
     opener = FakeOpener()
-    with pytest.raises(LLMUnavailableError, match="ytverbatim login") as raised:
+    with pytest.raises(LLMUnavailableError, match="anyverbatim login") as raised:
         client(opener).complete(REQUEST)
     assert raised.value.code == "not_signed_in"
     assert opener.requests == []
@@ -710,7 +710,7 @@ def test_a_second_401_is_not_answered_again(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(chatgpt_auth, "access_token", Tokens())
     signed_in: list[str] = []
     opener = responses(http_error(401), http_error(401))
-    with pytest.raises(LLMUnavailableError, match="ytverbatim login"):
+    with pytest.raises(LLMUnavailableError, match="anyverbatim login"):
         reauth_client(opener, lambda: signed_in.append("browser")).complete(REQUEST)
     assert signed_in == ["browser"] and len(opener.requests) == 2
 
@@ -718,7 +718,7 @@ def test_a_second_401_is_not_answered_again(monkeypatch: pytest.MonkeyPatch) -> 
 def test_a_401_without_reauth_keeps_the_login_hint(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(chatgpt_auth, "access_token", Tokens())
     opener = responses(http_error(401))
-    with pytest.raises(LLMUnavailableError, match=r"HTTP 401.*ytverbatim login"):
+    with pytest.raises(LLMUnavailableError, match=r"HTTP 401.*anyverbatim login"):
         reauth_client(opener, None).complete(REQUEST)
     assert len(opener.requests) == 1
 

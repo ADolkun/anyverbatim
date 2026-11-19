@@ -17,8 +17,8 @@ from typing import Annotated, Literal
 import click
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from ytverbatim import atomic
-from ytverbatim.errors import ConfigError, YtverbatimError
+from anyverbatim import atomic
+from anyverbatim.errors import AnyverbatimError, ConfigError
 
 MAX_SENTENCES = 2
 MAX_ANCHOR_CHARS = 80
@@ -380,7 +380,7 @@ def build(disputes: Path, out_dir: Path, names_file: Path | None, no_names: bool
 def run() -> None:
     try:
         main(standalone_mode=False)
-    except YtverbatimError as exc:
+    except AnyverbatimError as exc:
         raise SystemExit(f"error: {exc}") from None
     except click.exceptions.Abort:
         raise SystemExit(130) from None

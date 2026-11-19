@@ -6,22 +6,22 @@ import click
 import pytest
 from click.testing import CliRunner
 
-import ytverbatim
-from ytverbatim.cli import LazyGroup, main
+import anyverbatim
+from anyverbatim.cli import LazyGroup, main
 
 
 def test_version_option() -> None:
     result = CliRunner().invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert result.output.strip() == f"ytverbatim, version {ytverbatim.__version__}"
+    assert result.output.strip() == f"anyverbatim, version {anyverbatim.__version__}"
 
 
 def test_python_dash_m_version() -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "ytverbatim", "--version"], capture_output=True, text=True, check=False
+        [sys.executable, "-m", "anyverbatim", "--version"], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == f"ytverbatim, version {ytverbatim.__version__}"
+    assert result.stdout.strip() == f"anyverbatim, version {anyverbatim.__version__}"
 
 
 @pytest.fixture

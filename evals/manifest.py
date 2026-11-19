@@ -5,11 +5,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from anyverbatim import legacy, paths
+from anyverbatim.errors import ConfigError
 from evals.normalize import Language
-from ytverbatim.errors import ConfigError
 
-EVAL_DIR_ENV = "YTVERBATIM_EVAL_DIR"
-DEFAULT_EVAL_DIR = "~/.local/share/ytverbatim/eval"
+EVAL_DIR_ENV = "ANYVERBATIM_EVAL_DIR"
 MANIFEST_NAME = "manifest.json"
 
 
@@ -80,8 +80,10 @@ class Manifest(_Frozen):
 
 
 def eval_dir() -> Path:
-    """Return ``$YTVERBATIM_EVAL_DIR``, else the default location AGENTS.md documents."""
-    return Path(os.environ.get(EVAL_DIR_ENV) or DEFAULT_EVAL_DIR).expanduser()
+    """Return ``$ANYVERBATIM_EVAL_DIR``, else ``eval`` in the default data home, as AGENTS.md documents."""
+    legacy.check_environment()
+    value = os.environ.get(EVAL_DIR_ENV)
+    return Path(value).expanduser() if value else paths.default_home() / "eval"
 
 
 def load_manifest(directory: Path | None = None) -> Manifest:

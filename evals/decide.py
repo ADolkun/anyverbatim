@@ -13,10 +13,10 @@ Languages are decided separately, so a per-language split happens only when one 
 
 from pydantic import BaseModel, ConfigDict
 
+from anyverbatim.errors import ConfigError
 from evals.normalize import Language
 from evals.report import Report, WinStats
 from evals.screen import LANGUAGES, HypothesisScreen
-from ytverbatim.errors import ConfigError
 
 WIN_LOWER_BOUND = 0.5
 NUMERIC_POINT = 0.5

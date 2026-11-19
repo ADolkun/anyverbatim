@@ -5,10 +5,10 @@ from typing import Any
 import numpy as np
 import pytest
 
-from ytverbatim.asr import registry
-from ytverbatim.asr.engines import qwen3
-from ytverbatim.asr.protocol import AsrContext
-from ytverbatim.errors import ConfigError, DependencyError
+from anyverbatim.asr import registry
+from anyverbatim.asr.engines import qwen3
+from anyverbatim.asr.protocol import AsrContext
+from anyverbatim.errors import ConfigError, DependencyError
 
 RATE = 16_000
 
@@ -162,7 +162,7 @@ def test_transcribing_before_loading_fails_loudly() -> None:
 def test_a_missing_asr_extra_is_a_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "mlx_audio.stt.utils", None)
     definition = registry.get("q-base")
-    with pytest.raises(DependencyError, match="ytverbatim\\[asr\\]"):
+    with pytest.raises(DependencyError, match="anyverbatim\\[asr\\]"):
         qwen3.create(definition.spec, definition.variant).load()
 
 

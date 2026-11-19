@@ -6,13 +6,13 @@ import pytest
 from chatgpt_fakes import EMAIL, PLAN_SCOPES, FakeOpener, Route, http_error, json_response, store_account, token_payload
 from click.testing import CliRunner
 
-import ytverbatim.cli as cli_module
-from ytverbatim.cli import llm as llm_cli
-from ytverbatim.cli import main
-from ytverbatim.cli import run as run_cli
-from ytverbatim.config import LLMOptions, load_options
-from ytverbatim.errors import ConfigError, DependencyError, LLMUnavailableError
-from ytverbatim.llm import (
+import anyverbatim.cli as cli_module
+from anyverbatim.cli import llm as llm_cli
+from anyverbatim.cli import main
+from anyverbatim.cli import run as run_cli
+from anyverbatim.config import LLMOptions, load_options
+from anyverbatim.errors import ConfigError, DependencyError, LLMUnavailableError
+from anyverbatim.llm import (
     ChatGPTClient,
     ClaudeCLIClient,
     OpenAICompatClient,
@@ -23,15 +23,15 @@ from ytverbatim.llm import (
     claude_cli,
     client_from_options,
 )
-from ytverbatim.llm.chatgpt_auth import TOKEN_URL
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.llm.chatgpt_auth import TOKEN_URL
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 
 
 @pytest.fixture
 def config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    path = tmp_path / "ytverbatim" / "config.toml"
+    path = tmp_path / "anyverbatim" / "config.toml"
     path.parent.mkdir()
     return path
 
@@ -163,9 +163,9 @@ def test_check_ready_for_chatgpt_names_login_and_llm_none(
     with pytest.raises(ConfigError, match=detail) as raised:
         check_ready(LLMOptions())
     message = str(raised.value)
-    assert "`ytverbatim login`" in message and "`--llm none`" in message
+    assert "`anyverbatim login`" in message and "`--llm none`" in message
     assert '`LLMOptions(provider="none")`' in message
-    assert "ytverbatim login" in raised.value.fix and "--llm none" in raised.value.fix
+    assert "anyverbatim login" in raised.value.fix and "--llm none" in raised.value.fix
 
 
 def test_check_ready_accepts_a_ready_account_without_a_request(config: Path) -> None:
@@ -212,7 +212,7 @@ def test_check_ready_raises_when_not_interactive_and_signs_in_when_interactive(
     token_endpoint(monkeypatch, http_error(400, {"error": "invalid_grant"}))
     sign_ins = SignIns()
     monkeypatch.setattr(chatgpt_auth, "interactive_login", sign_ins)
-    with pytest.raises(ConfigError, match="ytverbatim login"):
+    with pytest.raises(ConfigError, match="anyverbatim login"):
         check_ready(LLMOptions())
     assert sign_ins.reasons == []
 
@@ -305,7 +305,7 @@ def test_run_and_llm_test_pass_the_terminals_interactivity(
 def test_library_calls_default_to_non_interactive() -> None:
     import inspect
 
-    from ytverbatim import pipeline
+    from anyverbatim import pipeline
 
     for function in (pipeline.process, pipeline.process_many, check_ready, client_from_options):
         assert inspect.signature(function).parameters["interactive"].default is False
@@ -350,7 +350,7 @@ def test_llm_test_stops_before_a_call_when_the_llm_is_not_ready(config: Path, mo
     monkeypatch.setattr(llm_cli, "client_from_options", lambda *_a, **_k: pytest.fail("built a client"))
     result = CliRunner().invoke(main, ["llm", "test"])
     assert result.exit_code == 1
-    assert "not signed in" in result.output and "`ytverbatim login`" in result.output
+    assert "not signed in" in result.output and "`anyverbatim login`" in result.output
 
 
 @pytest.mark.parametrize(

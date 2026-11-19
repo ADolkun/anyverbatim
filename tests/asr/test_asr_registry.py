@@ -3,9 +3,9 @@ import re
 import pytest
 from fake_engine import FakeEngine, definition
 
-from ytverbatim.asr import registry
-from ytverbatim.asr.protocol import EngineDef
-from ytverbatim.errors import ConfigError, DependencyError
+from anyverbatim.asr import registry
+from anyverbatim.asr.protocol import EngineDef
+from anyverbatim.errors import ConfigError, DependencyError
 
 EXPECTED = {"w-prod", "w-vad", "w-vad-lid", "w-runs-lid", "q-base", "q-ctx", "f-aed", "m-4bit"}
 
@@ -15,7 +15,7 @@ def test_every_hypothesis_is_registered_with_a_pinned_revision() -> None:
     for hypothesis_id, entry in registry.HYPOTHESES.items():
         assert entry.spec.id == hypothesis_id
         assert re.fullmatch(r"[0-9a-f]{40}", entry.spec.revision)
-        assert entry.factory.startswith("ytverbatim.asr.engines.")
+        assert entry.factory.startswith("anyverbatim.asr.engines.")
 
 
 def test_whisper_control_decodes_whole_files_and_the_rest_share_the_chunk_plan() -> None:
@@ -45,7 +45,7 @@ def test_build_engine_imports_the_factory_by_dotted_path() -> None:
 
 
 def test_a_missing_adapter_is_a_dependency_error() -> None:
-    missing = EngineDef(definition().spec, "ytverbatim.asr.engines.not_there.create", {})
+    missing = EngineDef(definition().spec, "anyverbatim.asr.engines.not_there.create", {})
     with pytest.raises(DependencyError, match="not_there"):
         registry.build_engine(missing)
     wrong_name = EngineDef(definition().spec, "fake_engine.nope", {})

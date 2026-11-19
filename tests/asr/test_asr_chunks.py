@@ -2,7 +2,7 @@ import itertools
 
 import pytest
 
-from ytverbatim.asr.chunks import Chunk, Region, alignment_windows, plan_chunks
+from anyverbatim.asr.chunks import Chunk, Region, alignment_windows, plan_chunks
 
 
 def regions(*pairs: tuple[float, float]) -> list[Region]:

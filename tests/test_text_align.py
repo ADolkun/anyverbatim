@@ -1,7 +1,7 @@
 import pytest
 
-from ytverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack, Word
-from ytverbatim.text.align import WINDOW_PAD_S, Timeline, align, caption_pieces, caption_timeline, timeline, units
+from anyverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack, Word
+from anyverbatim.text.align import WINDOW_PAD_S, Timeline, align, caption_pieces, caption_timeline, timeline, units
 
 
 def equal_runs(mine: str, theirs: str) -> list[tuple[int, int]]:

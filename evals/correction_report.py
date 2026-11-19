@@ -13,6 +13,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from anyverbatim.errors import ConfigError
 from evals.correction import (
     BASE,
     CANDIDATES,
@@ -60,7 +61,6 @@ from evals.report import FileRow, file_rows, files_table
 from evals.screen import LANGUAGES, SECONDS_PER_HOUR, Span, judge_items
 from evals.session import KEY_FILE, SessionKey, cell_name, load_key, stratum
 from evals.store import REFERENCE, Layout, row_text, rows_by_file, videos
-from ytverbatim.errors import ConfigError
 
 SCREEN_FILE = "screen.json"
 ITEMS_FILE = "items.jsonl"
@@ -515,7 +515,7 @@ def _estimate(value: Estimate | None, spec: str = ".3f") -> str:
 
 
 def _generic_run_dir(candidate_id: str) -> str:
-    return f"correction/runs/{candidate_id} under $YTVERBATIM_EVAL_DIR"
+    return f"correction/runs/{candidate_id} under $ANYVERBATIM_EVAL_DIR"
 
 
 def candidate_table(candidates: Sequence[CandidateScreen]) -> list[str]:

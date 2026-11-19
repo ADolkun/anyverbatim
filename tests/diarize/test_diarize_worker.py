@@ -10,11 +10,11 @@ from pathlib import Path
 import pytest
 from fake_diarizer import CHANNELS, FRAME_S, definition, write_silence
 
-from ytverbatim import mlx_worker, paths, proc
-from ytverbatim.contract.models import Word
-from ytverbatim.diarize import protocol, registry, runner, worker
-from ytverbatim.diarize.attribution import assign
-from ytverbatim.diarize.protocol import (
+from anyverbatim import mlx_worker, paths, proc
+from anyverbatim.contract.models import Word
+from anyverbatim.diarize import protocol, registry, runner, worker
+from anyverbatim.diarize.attribution import assign
+from anyverbatim.diarize.protocol import (
     ERROR_FILE,
     FINGERPRINT_FILE,
     METRICS_FILE,
@@ -25,7 +25,7 @@ from ytverbatim.diarize.protocol import (
     probs_path,
     turns_path,
 )
-from ytverbatim.errors import EngineError, EngineMemoryError, ProcMemoryExceeded
+from anyverbatim.errors import EngineError, EngineMemoryError, ProcMemoryExceeded
 
 HERE = Path(__file__).parent
 GIB = 1 << 30
@@ -208,14 +208,14 @@ def test_the_worker_runs_in_its_output_folder_under_the_asr_lock_and_a_memory_wa
         return proc.ProcResult(1, "", "boom", 0.1)
 
     monkeypatch.setattr(proc, "run", fake_run)
-    monkeypatch.setattr("ytverbatim.mlx_worker.sysmem.physical_memory_bytes", lambda: 24 * GIB)
+    monkeypatch.setattr("anyverbatim.mlx_worker.sysmem.physical_memory_bytes", lambda: 24 * GIB)
     monkeypatch.chdir(tmp_path)
     request = make_request(tmp_path, 2.0).model_copy(update={"out_dir": "out"})
     with pytest.raises(EngineError, match="exited with 1"):
         runner.run_worker(request)
     assert seen["cap"] == 12 * GIB
     assert seen["cwd"] == (tmp_path / "out").resolve()
-    assert seen["argv"][1:4] == ["-P", "-m", "ytverbatim.diarize.worker"]  # type: ignore[index]
+    assert seen["argv"][1:4] == ["-P", "-m", "anyverbatim.diarize.worker"]  # type: ignore[index]
     written = DiarizeRequest.model_validate_json((tmp_path / "out" / REQUEST_FILE).read_text(encoding="utf-8"))
     assert Path(written.out_dir).is_absolute()
     assert all(Path(job.wav).is_absolute() for job in written.files)
@@ -282,10 +282,10 @@ def test_a_real_worker_over_its_cap_is_killed_by_the_watch(tmp_path: Path) -> No
 
 def test_the_parent_imports_neither_mlx_nor_numpy_nor_an_adapter() -> None:
     code = (
-        "import sys, ytverbatim.diarize.runner, ytverbatim.diarize.registry, ytverbatim.diarize.attribution\n"
+        "import sys, anyverbatim.diarize.runner, anyverbatim.diarize.registry, anyverbatim.diarize.attribution\n"
         "heavy = {'mlx', 'mlx_audio', 'numpy'}\n"
         "loaded = {name.split('.')[0] for name in sys.modules} & heavy\n"
-        "loaded |= {name for name in sys.modules if name == 'ytverbatim.diarize.nemotron'}\n"
+        "loaded |= {name for name in sys.modules if name == 'anyverbatim.diarize.nemotron'}\n"
         "print(sorted(loaded))\n"
         "sys.exit(bool(loaded))"
     )

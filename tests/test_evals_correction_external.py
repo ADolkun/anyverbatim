@@ -12,15 +12,15 @@ from chatgpt_fakes import store_account
 from click.testing import CliRunner
 from evals_fixture import EN, ZH, make_eval, whole_file_rows
 
+from anyverbatim.errors import ConfigError
+from anyverbatim.llm import ChatGPTClient, ClaudeCLIClient
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 from evals import correction, run_correction
 from evals.correction import CANDIDATES, build_base, load_base, load_candidate_file
 from evals.correction_report import resolve_candidates
 from evals.manifest import Manifest
 from evals.run_correction import CLIENT_FACTORY_ENV, external_client
 from evals.store import Layout, write_rows
-from ytverbatim.errors import ConfigError
-from ytverbatim.llm import ChatGPTClient, ClaudeCLIClient
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
 
 HYPOTHESIS = "w-prod"
 MEDIUM = CANDIDATES["x-gpt61-medium"]
@@ -36,7 +36,7 @@ class Client:
     id = "fake-transport:whatever"
 
     def complete(self, request):
-        from ytverbatim.llm.protocol import LLMResponse, Usage
+        from anyverbatim.llm.protocol import LLMResponse, Usage
 
         body = request.user.split("SEGMENTS:\\n", 1)[1]
         items, _ = json.JSONDecoder().raw_decode(body)
@@ -74,7 +74,7 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_STATE_HOME", str(home / "state"))
-    monkeypatch.setenv("YTVERBATIM_HOME", str(home / "share"))
+    monkeypatch.setenv("ANYVERBATIM_HOME", str(home / "share"))
     monkeypatch.delenv(CLIENT_FACTORY_ENV, raising=False)
 
 
@@ -125,7 +125,7 @@ def test_the_factory_is_called_with_the_candidates_model_and_effort(
 @pytest.mark.parametrize(
     ("value", "message"),
     [
-        (None, "is not set; set YTVERBATIM_EVAL_CLIENT_FACTORY=package.module:function"),
+        (None, "is not set; set ANYVERBATIM_EVAL_CLIENT_FACTORY=package.module:function"),
         ("", "is not set"),
         ("fake_eval_factory", "is not package.module:function"),
         ("fake_eval_factory:", "is not package.module:function"),
@@ -161,7 +161,7 @@ def test_an_external_candidate_never_falls_back_to_the_claude_cli(
     monkeypatch.setattr(run_correction, "ClaudeCLIClient", lambda **_: pytest.fail("fell back to the Claude CLI"))
     result = CliRunner().invoke(run_correction.main, ["correct", "--candidate", "x-gpt61-medium"])
     assert isinstance(result.exception, ConfigError)
-    assert "YTVERBATIM_EVAL_CLIENT_FACTORY" in str(result.exception)
+    assert "ANYVERBATIM_EVAL_CLIENT_FACTORY" in str(result.exception)
     assert not (correction.run_dir(layout, MEDIUM) / "calls.jsonl").exists()
 
 
@@ -261,7 +261,7 @@ def test_the_native_candidate_needs_a_chatgpt_sign_in_and_no_factory(
     monkeypatch.setattr(run_correction, "ClaudeCLIClient", lambda **_: pytest.fail("fell back to the Claude CLI"))
     result = CliRunner().invoke(run_correction.main, ["correct", "--candidate", "o-gpt61-medium"])
     assert isinstance(result.exception, ConfigError)
-    assert "ytverbatim login" in str(result.exception)
+    assert "anyverbatim login" in str(result.exception)
     assert CLIENT_FACTORY_ENV not in str(result.exception)
     assert not (correction.run_dir(layout, NATIVE) / "calls.jsonl").exists()
 

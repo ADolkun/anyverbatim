@@ -12,10 +12,10 @@ import pytest
 from click.testing import CliRunner
 from pydantic import ValidationError
 
-from ytverbatim import atomic, config, pipeline, proc, speakers, store
-from ytverbatim.asr import registry
-from ytverbatim.asr import runner as asr_runner
-from ytverbatim.asr.models import (
+from anyverbatim import atomic, config, pipeline, proc, speakers, store
+from anyverbatim.asr import registry
+from anyverbatim.asr import runner as asr_runner
+from anyverbatim.asr.models import (
     FINGERPRINT_FILE,
     HYPOTHESES_FILE,
     METRICS_FILE,
@@ -24,20 +24,20 @@ from ytverbatim.asr.models import (
     RunMetrics,
     WorkerRequest,
 )
-from ytverbatim.asr.runner import WorkerResult
-from ytverbatim.cli import main
-from ytverbatim.contract import ContextDocument, RecordingSource, Word, load_document
-from ytverbatim.diarize import attribution
-from ytverbatim.diarize import protocol as diarize_protocol
-from ytverbatim.diarize import registry as diarize_registry
-from ytverbatim.diarize import runner as diarize_runner
-from ytverbatim.diarize.protocol import DiarizeRequest, FileDiarization, Turn
-from ytverbatim.diarize.runner import DiarizeResult
-from ytverbatim.errors import ConfigError, ContractError, DependencyError, EngineError, LLMError, MediaValidationError
-from ytverbatim.index import INDEX_MD
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
-from ytverbatim.mlx_worker import without_wav
-from ytverbatim.pipeline import ProgressEvent, VideoResult, process, process_files
+from anyverbatim.asr.runner import WorkerResult
+from anyverbatim.cli import main
+from anyverbatim.contract import ContextDocument, RecordingSource, Word, load_document
+from anyverbatim.diarize import attribution
+from anyverbatim.diarize import protocol as diarize_protocol
+from anyverbatim.diarize import registry as diarize_registry
+from anyverbatim.diarize import runner as diarize_runner
+from anyverbatim.diarize.protocol import DiarizeRequest, FileDiarization, Turn
+from anyverbatim.diarize.runner import DiarizeResult
+from anyverbatim.errors import ConfigError, ContractError, DependencyError, EngineError, LLMError, MediaValidationError
+from anyverbatim.index import INDEX_MD
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.mlx_worker import without_wav
+from anyverbatim.pipeline import ProgressEvent, VideoResult, process, process_files
 
 NOW = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
 TITLE = "Synthetic weekly sync"
@@ -1127,7 +1127,7 @@ def test_a_rename_refuses_a_document_without_a_record_that_vouches_for_it(
     record.unlink()
     before = untouched(rdir)
     result = speakers_cli(session_kit, rec_id(), "S1=Alice")
-    assert result.exit_code == 1 and "was interrupted; run `ytverbatim run` on it" in result.output
+    assert result.exit_code == 1 and "was interrupted; run `anyverbatim run` on it" in result.output
     assert untouched(rdir) == before and not record.exists()
 
     record.write_bytes(kept)
@@ -1206,7 +1206,7 @@ def test_a_rename_while_a_run_holds_the_source_fails_at_once(
     before = untouched(rdir)
     with store.lock(rdir):
         result = speakers_cli(session_kit, rec_id(), "S1=Alice")
-    assert result.exit_code == 1 and "another ytverbatim run is processing" in result.output
+    assert result.exit_code == 1 and "another anyverbatim run is processing" in result.output
     assert untouched(rdir) == before
 
 

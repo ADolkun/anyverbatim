@@ -3,11 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import proc
-from ytverbatim.acquire import audio
-from ytverbatim.acquire.metadata import info_path
-from ytverbatim.errors import DependencyError, MediaValidationError, YtDlpError
-from ytverbatim.ytdlp.types import Signal, YtDlpResult
+from anyverbatim import proc
+from anyverbatim.acquire import audio
+from anyverbatim.acquire.metadata import info_path
+from anyverbatim.errors import DependencyError, MediaValidationError, YtDlpError
+from anyverbatim.ytdlp.types import Signal, YtDlpResult
 
 VIDEO_ID = "aaaaaaaaaaa"
 

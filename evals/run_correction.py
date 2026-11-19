@@ -2,7 +2,7 @@
 
 Order: ``base --hyp H`` → ``correct --candidate C`` per candidate (then ``cleanup --candidate C`` for a local one) →
 ``screen`` → ``session`` → ``listen`` → ``report`` → ``decide``. Every command is resumable and writes only under
-``$YTVERBATIM_EVAL_DIR`` (``correction/``, and the session under ``ab/``), except ``decide``, which writes the
+``$ANYVERBATIM_EVAL_DIR`` (``correction/``, and the session under ``ab/``), except ``decide``, which writes the
 aggregate ``evals/results/correction-<date>.md``.
 """
 
@@ -16,6 +16,12 @@ from typing import Literal
 
 import click
 
+from anyverbatim import atomic, config
+from anyverbatim.asr import registry
+from anyverbatim.asr.runner import memory_cap_bytes
+from anyverbatim.errors import AnyverbatimError, ConfigError
+from anyverbatim.llm import ClaudeCLIClient, apply_spec, check_ready, claude_cli, client_from_options
+from anyverbatim.llm.protocol import LLMClient, Readiness
 from evals.correction import (
     CANDIDATES,
     SESSION_N,
@@ -58,16 +64,10 @@ from evals.manifest import load_manifest
 from evals.run_asr import RESULTS_DIR, default_hf_cache, layout
 from evals.session import write_session
 from evals.store import Layout, dump_jsonl, now, write_json
-from ytverbatim import atomic, config
-from ytverbatim.asr import registry
-from ytverbatim.asr.runner import memory_cap_bytes
-from ytverbatim.errors import ConfigError, YtverbatimError
-from ytverbatim.llm import ClaudeCLIClient, apply_spec, check_ready, claude_cli, client_from_options
-from ytverbatim.llm.protocol import LLMClient, Readiness
 
 DEFAULT_PUNCTUATION_LLM = "claude-cli:claude-sonnet-5-5"
 JUDGE_SAMPLE = 1500
-CLIENT_FACTORY_ENV = "YTVERBATIM_EVAL_CLIENT_FACTORY"
+CLIENT_FACTORY_ENV = "ANYVERBATIM_EVAL_CLIENT_FACTORY"
 _LOCAL = sorted(c.id for c in CANDIDATES.values() if c.local)
 
 
@@ -93,7 +93,7 @@ def judge_client() -> LLMClient:
 
 
 def external_client(candidate: Candidate) -> LLMClient:
-    """Build the client of an external candidate with ``$YTVERBATIM_EVAL_CLIENT_FACTORY`` (``package.module:function``).
+    """Build an external candidate's client with ``$ANYVERBATIM_EVAL_CLIENT_FACTORY`` (``package.module:function``).
 
     The factory is called as ``factory(model=..., effort=...)`` and must return an `LLMClient`. It owns readiness: a
     factory that cannot reach its model raises, preferably `ConfigError`, instead of returning a client that fails on
@@ -123,7 +123,7 @@ def external_client(candidate: Candidate) -> LLMClient:
 
 
 def native_client(candidate: Candidate, provider: Literal["chatgpt"]) -> LLMClient:
-    """Build a candidate served by one of ytverbatim's own providers, refusing early when it is not ready."""
+    """Build a candidate served by one of anyverbatim's own providers, refusing early when it is not ready."""
     options = config.LLMOptions(provider=provider, model=candidate.model, effort=candidate.effort)
     check_ready(options)
     return client_from_options(options)
@@ -144,7 +144,7 @@ def open_client(store: Layout, candidate: Candidate, cache: Path) -> AbstractCon
 
 @click.group()
 def main() -> None:
-    """Correction-LLM eval (data under $YTVERBATIM_EVAL_DIR/correction)."""
+    """Correction-LLM eval (data under $ANYVERBATIM_EVAL_DIR/correction)."""
 
 
 _files_option = click.option("--files", help="Comma-separated video ids (default: every file in the manifest).")
@@ -152,7 +152,7 @@ _cache_option = click.option(
     "--hf-cache",
     type=click.Path(path_type=Path),
     default=None,
-    help="Candidate weight cache (default: $YTVERBATIM_HOME/hf-candidates). Never the default HF cache.",
+    help="Candidate weight cache (default: $ANYVERBATIM_HOME/hf-candidates). Never the default HF cache.",
 )
 
 
@@ -292,7 +292,7 @@ def listen(name: str) -> None:
 @main.command()
 @click.option("--name", default=SESSION_NAME, show_default=True, help="The session to read the owner's labels from.")
 def report(name: str) -> None:
-    """Aggregate JSON and markdown report under $YTVERBATIM_EVAL_DIR/correction."""
+    """Aggregate JSON and markdown report under $ANYVERBATIM_EVAL_DIR/correction."""
     store, manifest = layout(), load_manifest()
     result = build_report(store, manifest, load_screen(store), name, now())
     if result.correction.human is not None:
@@ -321,7 +321,7 @@ def decide_command(day: str | None) -> None:
 def run() -> None:
     try:
         main(standalone_mode=False)
-    except YtverbatimError as exc:
+    except AnyverbatimError as exc:
         raise SystemExit(f"error: {exc}") from None
     except click.exceptions.Abort:
         raise SystemExit(130) from None

@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import paths, proc
-from ytverbatim.auth import snapshot
-from ytverbatim.auth.snapshot import Snapshot, SnapshotSummary
-from ytverbatim.errors import YtDlpError
-from ytverbatim.ytdlp import jsruntime, version
-from ytverbatim.ytdlp.types import Signal, YtDlpResult
+from anyverbatim import paths, proc
+from anyverbatim.auth import snapshot
+from anyverbatim.auth.snapshot import Snapshot, SnapshotSummary
+from anyverbatim.errors import YtDlpError
+from anyverbatim.ytdlp import jsruntime, version
+from anyverbatim.ytdlp.types import Signal, YtDlpResult
 
 Handler = Callable[[list[str], str], YtDlpResult]
 
@@ -237,13 +237,13 @@ class SessionKit:
 
 @pytest.fixture
 def session_kit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_proc: FakeProc) -> SessionKit:
-    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "YTVERBATIM_HOME", "YTVERBATIM_AUTH"):
+    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "ANYVERBATIM_HOME", "ANYVERBATIM_AUTH"):
         monkeypatch.delenv(name, raising=False)
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     # The pipeline under test runs without an LLM unless a test picks one; the default LLM needs a ChatGPT sign-in.
-    config_file = home / ".config" / "ytverbatim" / "config.toml"
+    config_file = home / ".config" / "anyverbatim" / "config.toml"
     config_file.parent.mkdir(parents=True)
     config_file.write_text('[llm]\nprovider = "none"\n', encoding="utf-8")
     released = date.today() - timedelta(days=10)

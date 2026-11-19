@@ -2,9 +2,9 @@ from collections.abc import Sequence
 
 import pytest
 
-from ytverbatim.errors import DependencyError
-from ytverbatim.proc import ProcResult
-from ytverbatim.ytdlp import jsruntime
+from anyverbatim.errors import DependencyError
+from anyverbatim.proc import ProcResult
+from anyverbatim.ytdlp import jsruntime
 
 
 @pytest.fixture(autouse=True)

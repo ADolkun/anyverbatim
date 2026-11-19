@@ -7,16 +7,16 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import paths, proc
-from ytverbatim.acquire import session
-from ytverbatim.acquire.session import BatchReport, FetchOptions, VideoOutcome, VideoStatus
-from ytverbatim.auth import preflight
-from ytverbatim.auth.source import CookieFileSource
-from ytverbatim.auth.state import AuthState
-from ytverbatim.errors import AuthError, BatchStopError
-from ytverbatim.ytdlp.runner import SLEEP_PRESET
-from ytverbatim.ytdlp.signals import classify
-from ytverbatim.ytdlp.types import Signal, YtDlpRunner
+from anyverbatim import paths, proc
+from anyverbatim.acquire import session
+from anyverbatim.acquire.session import BatchReport, FetchOptions, VideoOutcome, VideoStatus
+from anyverbatim.auth import preflight
+from anyverbatim.auth.source import CookieFileSource
+from anyverbatim.auth.state import AuthState
+from anyverbatim.errors import AuthError, BatchStopError
+from anyverbatim.ytdlp.runner import SLEEP_PRESET
+from anyverbatim.ytdlp.signals import classify
+from anyverbatim.ytdlp.types import Signal, YtDlpRunner
 
 PUBLIC = "pubVideo001"
 PUBLIC_2 = "pubVideo002"

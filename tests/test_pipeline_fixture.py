@@ -19,10 +19,10 @@ from pipeline_fixture import (
     run,
 )
 
-from ytverbatim import proc
-from ytverbatim.asr import runner as asr_runner
-from ytverbatim.store import STAGES_DIR
-from ytverbatim.ytdlp.types import YtDlpResult
+from anyverbatim import proc
+from anyverbatim.asr import runner as asr_runner
+from anyverbatim.store import STAGES_DIR
+from anyverbatim.ytdlp.types import YtDlpResult
 
 EVENTS = {
     MIXED: ["fetch", "asr", "second_opinion", "normalize", "punctuate", "correct", "numeric", "numerals", "write"],

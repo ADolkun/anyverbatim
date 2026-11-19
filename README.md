@@ -1,13 +1,13 @@
-# ytverbatim
+# anyverbatim
 
 Turn YouTube videos and your own recordings (meetings, iPhone Voice Memos) into verified, timestamped transcripts for LLM context.
 
-Language models need transcripts they can cite. `ytverbatim` aims to produce text where every line carries a timestamp, so a quote can be traced back to the exact moment in a video or a meeting. Speech recognition runs locally on Apple Silicon (MLX), with a focus on Mandarin and English.
+Language models need transcripts they can cite. `anyverbatim` aims to produce text where every line carries a timestamp, so a quote can be traced back to the exact moment in a video or a meeting. Speech recognition runs locally on Apple Silicon (MLX), with a focus on Mandarin and English.
 
 - **YouTube** videos, playlists and channels. It works with your own logged-in browser session, so Premium and members-only videos you can already watch are covered.
 - **Local recordings:** audio or video files, folders of them, and iPhone Voice Memos synced to your Mac. Conversations get speaker labels.
 
-**Status: pre-alpha.** `ytverbatim run` turns a source into a transcript with local Whisper and checks numbers against independent readings where there are any (a video's own captions, or an optional second engine). With an LLM (ChatGPT's newest Sol model by default, or one you choose), it also restores missing punctuation and corrects misheard words. An engine evaluation kept mlx-whisper large-v3 as the default ([result](evals/results/asr-2026-11-13.md)). Recordings support is new and is still being checked on real meetings and memos.
+**Status: pre-alpha.** `anyverbatim run` turns a source into a transcript with local Whisper and checks numbers against independent readings where there are any (a video's own captions, or an optional second engine). With an LLM (ChatGPT's newest Sol model by default, or one you choose), it also restores missing punctuation and corrects misheard words. An engine evaluation kept mlx-whisper large-v3 as the default ([result](evals/results/asr-2026-11-13.md)). Recordings support is new and is still being checked on real meetings and memos.
 
 ## Install
 
@@ -16,16 +16,16 @@ Requirements:
 - macOS on Apple Silicon
 - `ffmpeg`, with `ffprobe`
 - For YouTube: a JavaScript runtime for yt-dlp, Deno or Node 22 or newer
-- `curl_cffi` (installed with ytverbatim, MIT): yt-dlp asks for browser impersonation on caption downloads, and without it YouTube rate-limits them (HTTP 429) more often and yt-dlp warns that no impersonate target is available
+- `curl_cffi` (installed with anyverbatim, MIT): yt-dlp asks for browser impersonation on caption downloads, and without it YouTube rate-limits them (HTTP 429) more often and yt-dlp warns that no impersonate target is available
 
-Install the tool with [uv](https://docs.astral.sh/uv/). This puts `ytverbatim` on your `PATH`:
+Install the tool with [uv](https://docs.astral.sh/uv/). This puts `anyverbatim` on your `PATH`:
 
 ```
-uv tool install "ytverbatim[whisper,asr] @ git+https://github.com/ADolkun/ytverbatim"
-uv tool upgrade ytverbatim            # to update later
+uv tool install "anyverbatim[whisper,asr] @ git+https://github.com/ADolkun/anyverbatim"
+uv tool upgrade anyverbatim            # to update later
 ```
 
-There is no PyPI release yet, so the install comes from the repository. That installs the newest `main`; to pin a release, add its tag, as in `…/ytverbatim@v0.1.1`. The part in brackets names two optional extras, which hold the speech engines. `run` checks for the extra it needs before it downloads anything, and its error names the extra that is missing.
+There is no PyPI release yet, so the install comes from the repository. That installs the newest `main`; to pin a release, add its tag, as in `…/anyverbatim@v0.1.1`. The part in brackets names two optional extras, which hold the speech engines. `run` checks for the extra it needs before it downloads anything, and its error names the extra that is missing.
 
 | You want | Extras |
 |---|---|
@@ -34,23 +34,27 @@ There is no PyPI release yet, so the install comes from the repository. That ins
 | The chunked Whisper engines `w-vad`, `w-vad-lid` and `w-runs-lid` (the default for recordings once `[asr] languages` is set), or diarizing YouTube videos with the default engine | `whisper` and `asr` |
 | The other engines (`q-base`, `q-ctx`, `f-aed`, `m-4bit`) | `asr` |
 
-To work on ytverbatim itself, use a checkout and run it through uv:
+To work on anyverbatim itself, use a checkout and run it through uv:
 
 ```
 uv sync --extra whisper --extra asr
-uv run ytverbatim --help
+uv run anyverbatim --help
 ```
+
+### Renamed from ytverbatim
+
+This project was renamed from ytverbatim. If you installed it under the old name, run `uv tool uninstall ytverbatim` and install `anyverbatim` as above. Your transcripts, settings, browser login source and ChatGPT sign-in carry over: the first `anyverbatim` command moves each old directory to its new name (`…/ytverbatim` to `…/anyverbatim` under `~/.local/share`, `~/.config`, `~/.local/state` and `~/Library/Caches`) and says so on stderr. Finished transcripts are not computed again. If both an old and a new directory exist, it stops and asks you to merge or remove one. Rename any `YTVERBATIM_*` variables to `ANYVERBATIM_*`, and update scheduled jobs that call the old command. See [docs/library.md](docs/library.md#breaking-changes) for the library side.
 
 ## Quick start
 
-The commands assume `ytverbatim` is on your `PATH`; from a checkout, write `uv run ytverbatim …`.
+The commands assume `anyverbatim` is on your `PATH`; from a checkout, write `uv run anyverbatim …`.
 
 ```
-ytverbatim login                                     # once, for the default LLM
-ytverbatim run https://www.youtube.com/watch?v=VIDEO_ID
-ytverbatim run meeting.m4a                           # a recording; folders work too
-ytverbatim run memos:new                             # new iPhone Voice Memos
-ytverbatim speakers rec-0123456789abcdef S1=Alice S2=Bob
+anyverbatim login                                     # once, for the default LLM
+anyverbatim run https://www.youtube.com/watch?v=VIDEO_ID
+anyverbatim run meeting.m4a                           # a recording; folders work too
+anyverbatim run memos:new                             # new iPhone Voice Memos
+anyverbatim speakers rec-0123456789abcdef S1=Alice S2=Bob
 ```
 
 No ChatGPT plan? Skip `login` and add `--llm none` to each `run`, or pick another provider (see [LLM](#llm)).
@@ -74,12 +78,12 @@ A run takes one kind of target: YouTube, or local (files, folders and memos, whi
 ## YouTube
 
 ```
-ytverbatim run URL... [--out DIR] [--auth SPEC] [--engine ID] [--source asr|captions] [--correct/--no-correct]
+anyverbatim run URL... [--out DIR] [--auth SPEC] [--engine ID] [--source asr|captions] [--correct/--no-correct]
                       [--chapters auto|none] [--diarize/--no-diarize] [--language CODE] [--glossary TERMS]
                       [--llm SPEC] [--captions/--no-captions] [--force] [--ignore-cooldown]
 ```
 
-Each video (playlists and channels are expanded) gets a folder `<out>/<video id>/` under `~/.local/share/ytverbatim/videos/`. It holds:
+Each video (playlists and channels are expanded) gets a folder `<out>/<video id>/` under `~/.local/share/anyverbatim/videos/`. It holds:
 
 - `context.json`, the versioned [contract](#contract-20)
 - `context.md`, the same transcript as markdown with a timestamped link per paragraph and YouTube chapters as headings
@@ -92,7 +96,7 @@ When YouTube answers with a bot check or a rate limit, the batch stops and a coo
 ## Recordings
 
 ```
-ytverbatim run meeting.m4a standup.mp4 ~/Recordings/2026-11/
+anyverbatim run meeting.m4a standup.mp4 ~/Recordings/2026-11/
 ```
 
 Files and folders (searched recursively) work like YouTube videos, with no download and no cooldown. YouTube-only options (`--auth`, `--source`, `--captions`, `--ignore-cooldown`) are refused for them, and `--quiet` is refused for YouTube.
@@ -100,7 +104,7 @@ Files and folders (searched recursively) work like YouTube videos, with no downl
 **Recording other people needs their consent.** See [Privacy and consent](#privacy-and-responsible-use) before you do.
 
 - **Id.** A recording's id is `rec-` plus 16 hex digits: the first 16 of the SHA-256 of the transcribed audio stream's encoded packets. Renaming the file, editing its tags or remuxing it keeps the id. The same audio twice in a run is transcribed once.
-- **Folder.** `~/.local/share/ytverbatim/recordings/rec-0123456789abcdef/` holds `context.json`, `context.md` and, once you name speakers, `speakers.json`. Your file is only read, never copied or changed.
+- **Folder.** `~/.local/share/anyverbatim/recordings/rec-0123456789abcdef/` holds `context.json`, `context.md` and, once you name speakers, `speakers.json`. Your file is only read, never copied or changed.
 - **`index.md`.** The recordings folder has an `index.md`: every recording by date, title, duration and speakers, newest first, each linking to its `context.md`. It is the one file to hand to another tool.
 - **Reruns.** A recording whose `context.json` is current is skipped. A rerun with other options redoes only the stages they reach. `--force` redoes everything, including paid LLM calls.
 - **Title and date** come from the file's tags, or its name, and never from its modification time.
@@ -110,8 +114,8 @@ Everything else, including the folder layout, the markdown format and the file t
 ## Voice Memos
 
 ```
-ytverbatim memos [--all] [--json]
-ytverbatim run memos:new|latest|all|ID [--quiet] ...
+anyverbatim memos [--all] [--json]
+anyverbatim run memos:new|latest|all|ID [--quiet] ...
 ```
 
 - `memos` lists your memos, newest 20 or `--all`: date, duration, title, status and a short id. Status is `transcribed`, `new`, `not downloaded` or `unsupported`.
@@ -121,10 +125,10 @@ ytverbatim run memos:new|latest|all|ID [--quiet] ...
 Setup:
 
 - Turn on Voice Memos in iCloud settings on the iPhone and the Mac, and open Voice Memos on the Mac once, so memos sync.
-- Give the app you run ytverbatim from Full Disk Access (System Settings → Privacy & Security → Full Disk Access), then restart it. ytverbatim reads a private copy of the Voice Memos database, so nothing is written into Apple's folder; the audio is read in place.
+- Give the app you run anyverbatim from Full Disk Access (System Settings → Privacy & Security → Full Disk Access), then restart it. anyverbatim reads a private copy of the Voice Memos database, so nothing is written into Apple's folder; the audio is read in place.
 - A memo that is not downloaded to this Mac is skipped with a notice. Open it once in Voice Memos to download it.
 
-To transcribe new memos on a schedule, see [Automation](docs/recordings.md#automation): `run memos:new --quiet`, which prints nothing when idle, skips memos another run holds, needs Full Disk Access for the program the job runs, and needs `ytverbatim login` to have run once.
+To transcribe new memos on a schedule, see [Automation](docs/recordings.md#automation): `run memos:new --quiet`, which prints nothing when idle, skips memos another run holds, needs Full Disk Access for the program the job runs, and needs `anyverbatim login` to have run once.
 
 ## How a run works
 
@@ -142,7 +146,7 @@ The stages run in this order:
 
 Every stage is stored under `.stages/` in the source's folder (the numerals stage only when it runs), keyed by what it read. A rerun with other options recomputes only the stages those options reach, an interrupted run resumes, and a source whose `context.json` is current is skipped. `--force` discards the stored stages and recomputes every one, including the paid LLM calls. The 16 kHz WAV is deleted once the transcript and the speaker turns are stored; the compressed audio of a video stays.
 
-**Engines and memory.** The default engine, `w-prod`, is mlx-whisper large-v3. ASR and diarization run in separate worker processes under a memory watch, so a runaway model cannot take down the Mac. The worker is killed if its physical footprint passes `memory_cap_gib` (default: half of physical memory) or if the system's available memory falls below 10%. The batch then stops with a fix for whichever one fired, and the next run resumes from the chunks already finished. On an 8 GiB Mac the default cap of 4 GiB may be too tight for `w-prod`; raise it (at most 90% of physical memory) in `~/.config/ytverbatim/config.toml`:
+**Engines and memory.** The default engine, `w-prod`, is mlx-whisper large-v3. ASR and diarization run in separate worker processes under a memory watch, so a runaway model cannot take down the Mac. The worker is killed if its physical footprint passes `memory_cap_gib` (default: half of physical memory) or if the system's available memory falls below 10%. The batch then stops with a fix for whichever one fired, and the next run resumes from the chunks already finished. On an 8 GiB Mac the default cap of 4 GiB may be too tight for `w-prod`; raise it (at most 90% of physical memory) in `~/.config/anyverbatim/config.toml`:
 
 ```toml
 [asr]
@@ -154,10 +158,10 @@ memory_cap_gib = 8
 Recordings are diarized by default: a local model (Nemotron-3-Diarization, 8-bit, about 107 MB, downloaded once; needs the `asr` extra) finds who speaks when, up to 8 speakers. Paragraphs break at every change of speaker, and `context.md` labels each one `**Speaker 1:**`, `**Speaker 2:**`, … with each speaker's share of the talk time in the header. A recording with one speaker shows no labels. `[diarize] mode` is `"auto"` (recordings only, the default), `"on"` or `"off"`, and `--diarize/--no-diarize` overrides it for one run.
 
 ```
-ytverbatim speakers rec-0123456789abcdef                    # list: id, name, talk time, first line
-ytverbatim speakers rec-0123456789abcdef S1=Alice S2=Bob    # name
-ytverbatim speakers rec-0123456789abcdef S2=                # clear a name
-ytverbatim speakers rec-0123456789abcdef S1=Alice S3=Alice  # merge: one name, one person
+anyverbatim speakers rec-0123456789abcdef                    # list: id, name, talk time, first line
+anyverbatim speakers rec-0123456789abcdef S1=Alice S2=Bob    # name
+anyverbatim speakers rec-0123456789abcdef S2=                # clear a name
+anyverbatim speakers rec-0123456789abcdef S1=Alice S3=Alice  # merge: one name, one person
 ```
 
 Nothing is transcribed again and names are never sent to an LLM. Re-diarizing drops saved names with a warning. Details: [docs/recordings.md](docs/recordings.md#speakers).
@@ -212,21 +216,21 @@ Only figures the [quantity tokenizer](docs/library.md#quantities) reads are rewr
 Punctuation, correction and numeric verdicts use an LLM. The default is the newest Sol model your ChatGPT plan lists, at medium reasoning effort. It needs a ChatGPT plan and one sign-in:
 
 ```
-ytverbatim login           # opens OpenAI's sign-in page and waits for it; --no-browser only prints the URL
-ytverbatim login --switch  # signs in with another account; the current one stays until the new one is verified
-ytverbatim status          # the YouTube login, the ChatGPT sign-in, the LLM in use; no LLM call
-ytverbatim llm test        # one tiny live call to the configured LLM (--provider/--model/--effort override it)
-ytverbatim logout          # revokes the sign-in and removes its tokens from this machine
+anyverbatim login           # opens OpenAI's sign-in page and waits for it; --no-browser only prints the URL
+anyverbatim login --switch  # signs in with another account; the current one stays until the new one is verified
+anyverbatim status          # the YouTube login, the ChatGPT sign-in, the LLM in use; no LLM call
+anyverbatim llm test        # one tiny live call to the configured LLM (--provider/--model/--effort override it)
+anyverbatim logout          # revokes the sign-in and removes its tokens from this machine
 ```
 
 **Which model.** The model name is `gpt-sol` by default, an alias for the newest model of the Sol family.
 
-- At the start of each run ytverbatim reads your plan's model catalog (one request, no quota) and uses the highest listed version, such as gpt-6.2-sol, for every LLM call of that run. Hidden models, models the API does not offer, and other families (`gpt-6.2-sol-mini` is not in `sol`) are never picked.
+- At the start of each run anyverbatim reads your plan's model catalog (one request, no quota) and uses the highest listed version, such as gpt-6.2-sol, for every LLM call of that run. Hidden models, models the API does not offer, and other families (`gpt-6.2-sol-mini` is not in `sol`) are never picked.
 - A name without a version, `gpt-<family>`, does the same for that family: `--llm chatgpt:gpt-astra`, or `model = "gpt-astra"` under `[llm]`.
 - A name with a version (`--llm chatgpt:gpt-6.1-sol`) pins that model and skips the catalog.
 - If the catalog cannot be read or lists no model of the family, the run stops before any download and says how to pin a version. It never falls back to a fixed one.
 - The resolved model is part of each stored result's identity. When a newer model ships, a rerun redoes the LLM stages, and `context.json` records which model corrected the text.
-- `ytverbatim status` shows the model in use.
+- `anyverbatim status` shows the model in use.
 
 **Overloads are retried.** When the LLM's server reports that it is overloaded or failing (`server_is_overloaded`, or HTTP 500, 502, 503 or 504), a call is repeated up to four more times, waiting about 15, 30, 60 and 120 seconds with some jitter, and each retry prints one line. If the fifth attempt fails too, the run fails with the original error and says how many attempts were made; stored batches mean a rerun starts where it stopped. Nothing else is retried: a plan or rate limit (429), a lapsed sign-in, a timeout, a network error and an unusable reply all fail on the first error.
 
@@ -234,12 +238,12 @@ In the [correction evaluation](evals/results/correction-2026-11-13.md) gpt-6.1-s
 
 **The sign-in.**
 
-- It belongs to ytverbatim alone. Its tokens stay in an owner-only file under `~/.local/state/ytverbatim/llm/chatgpt/` and are never printed.
+- It belongs to anyverbatim alone. Its tokens stay in an owner-only file under `~/.local/state/anyverbatim/llm/chatgpt/` and are never printed.
 - It is kept alive automatically: short-lived access tokens are renewed at the first moment OpenAI allows, both before a run starts and before each call, so one sign-in lasts as long as OpenAI keeps renewing it.
-- It stays until you sign out: ytverbatim never signs you out on its own.
-- If OpenAI refuses a renewal, the stored sign-in is kept and its access token is used until 30 seconds before it expires, but it is not renewed again. `ytverbatim status` says a new sign-in is needed, and `ytverbatim login` signs in again with your account preselected.
+- It stays until you sign out: anyverbatim never signs you out on its own.
+- If OpenAI refuses a renewal, the stored sign-in is kept and its access token is used until 30 seconds before it expires, but it is not renewed again. `anyverbatim status` says a new sign-in is needed, and `anyverbatim login` signs in again with your account preselected.
 - When the sign-in is missing, refused or lapsed, an interactive `run` (a terminal on both stdin and stderr) opens the browser to sign in again and then continues. A ChatGPT request refused as unauthorized mid-run does the same, once.
-- A non-interactive run (no terminal, cron, the library) never opens a browser: it stops before any download and tells you to run `ytverbatim login`.
+- A non-interactive run (no terminal, cron, the library) never opens a browser: it stops before any download and tells you to run `anyverbatim login`.
 
 **Choosing another LLM.** `--llm PROVIDER:MODEL` picks the text stages' LLM for one run:
 
@@ -247,7 +251,7 @@ In the [correction evaluation](evals/results/correction-2026-11-13.md) gpt-6.1-s
 - `--llm openai-compat:MODEL`, with `[llm] base_url` set, uses any OpenAI-compatible endpoint, such as a local `mlx_lm.server`.
 - `--llm none` runs without an LLM and keeps everything on your machine.
 
-A provider other than the configured one starts from its own defaults, so a configured `base_url` or `effort` does not get in the way. The LLM's effort and endpoint host are part of its identity, so changing them redoes the LLM stages. To change the default for every run, set it in `~/.config/ytverbatim/config.toml`; `effort` takes low, medium, high, xhigh or max for chatgpt and claude-cli:
+A provider other than the configured one starts from its own defaults, so a configured `base_url` or `effort` does not get in the way. The LLM's effort and endpoint host are part of its identity, so changing them redoes the LLM stages. To change the default for every run, set it in `~/.config/anyverbatim/config.toml`; `effort` takes low, medium, high, xhigh or max for chatgpt and claude-cli:
 
 ```toml
 [llm]
@@ -261,7 +265,7 @@ model = "claude-sonnet-5-5"
 
 ## Privacy and responsible use
 
-**Recording other people.** Get everyone's consent before you record a conversation. In many places recording without it is illegal, and some require every participant's consent. ytverbatim does not check.
+**Recording other people.** Get everyone's consent before you record a conversation. In many places recording without it is illegal, and some require every participant's consent. anyverbatim does not check.
 
 - **Stays on your Mac:** audio, your files, your Voice Memos library, speech recognition and diarization. Your YouTube cookies never leave your machine.
 - **Sent to the LLM provider** (ChatGPT, so OpenAI, by default): transcript text, speaker ids (`S1`, `S2`, …) and glossary terms. For a YouTube video also its tags, and the uploader's pinned note only when `[ytdlp] creator_note = true` (off by default).
@@ -270,29 +274,29 @@ model = "claude-sonnet-5-5"
 
 Whether your ChatGPT plan's data controls apply to this sign-in is unverified; see [docs/recordings.md](docs/recordings.md#privacy-and-consent) for that and the rest.
 
-**YouTube.** Use `ytverbatim` only on content you can already access with your own account. It does not circumvent DRM. You are responsible for complying with YouTube's Terms of Service and with copyright law.
+**YouTube.** Use `anyverbatim` only on content you can already access with your own account. It does not circumvent DRM. You are responsible for complying with YouTube's Terms of Service and with copyright law.
 
 ## Library
 
 ```python
-import ytverbatim
+import anyverbatim
 
-ids = ytverbatim.expand("https://www.youtube.com/playlist?list=...", limit=20)
-result = ytverbatim.process(ids[0], llm=client)  # or process("meeting.m4a", llm=client)
+ids = anyverbatim.expand("https://www.youtube.com/playlist?list=...", limit=20)
+result = anyverbatim.process(ids[0], llm=client)  # or process("meeting.m4a", llm=client)
 document = result.document
 ```
 
-The stable surface is every name in `ytverbatim.__all__`, plus the modules `ytverbatim.errors`, `ytverbatim.contract` and `ytverbatim.config`; everything else is internal. [docs/library.md](docs/library.md) lists it, with the versioning policy and the breaking changes of each release.
+The stable surface is every name in `anyverbatim.__all__`, plus the modules `anyverbatim.errors`, `anyverbatim.contract` and `anyverbatim.config`; everything else is internal. [docs/library.md](docs/library.md) lists it, with the versioning policy and the breaking changes of each release.
 
-`process` takes a YouTube video or a local audio or video file and returns a `Result`: the `document`, the exact `context.json` bytes (`json_bytes`), its `directory`, the `markdown_path`, the `video_path` when the video track was requested, and what was `reused`. It takes any object that satisfies `ytverbatim.LLMClient` as `llm=`. Without one it uses the configured LLM, ChatGPT by default, and raises `ConfigError` until `ytverbatim login` has run once; `process(url, Options(llm=LLMOptions(provider="none")))` runs without an LLM. The library never opens a browser unless you pass `interactive=True`.
+`process` takes a YouTube video or a local audio or video file and returns a `Result`: the `document`, the exact `context.json` bytes (`json_bytes`), its `directory`, the `markdown_path`, the `video_path` when the video track was requested, and what was `reused`. It takes any object that satisfies `anyverbatim.LLMClient` as `llm=`. Without one it uses the configured LLM, ChatGPT by default, and raises `ConfigError` until `anyverbatim login` has run once; `process(url, Options(llm=LLMOptions(provider="none")))` runs without an LLM. The library never opens a browser unless you pass `interactive=True`.
 
-The default engine, `w-prod`, needs `ytverbatim[whisper]`, and the other engines and the diarizer need `ytverbatim[asr]`, so recordings, which are diarized by default, need `ytverbatim[whisper,asr]`. `ytverbatim.check_dependencies(options, source="youtube")` (or `"recording"`) raises `DependencyError` naming the missing extra, and `process` runs the same check before any request.
+The default engine, `w-prod`, needs `anyverbatim[whisper]`, and the other engines and the diarizer need `anyverbatim[asr]`, so recordings, which are diarized by default, need `anyverbatim[whisper,asr]`. `anyverbatim.check_dependencies(options, source="youtube")` (or `"recording"`) raises `DependencyError` naming the missing extra, and `process` runs the same check before any request.
 
 Also in the library, all described in [docs/library.md](docs/library.md): `expand` for playlist and channel ids, the opt-in `video.mp4` track, `quantity_tokens`, and the errors, each with a `fix` and a `stage`.
 
 ## Contract 2.0
 
-`context.json` carries `schema_version` `"2.0"`; the bundled schema, `ytverbatim/contract/context.v2.schema.json`, describes it.
+`context.json` carries `schema_version` `"2.0"`; the bundled schema, `anyverbatim/contract/context.v2.schema.json`, describes it.
 
 - **`source`** says where the transcript came from, as a union on `source.kind`:
   - `"youtube"` holds the video's `id`, `url`, `title`, `channel`, `channel_id`, `upload_date`, `duration_s`, `description`, `language`, `tags`, `creator_note` and `access` (how it was fetched: auth source, cookies, login, Premium, membership, availability, yt-dlp version, warnings).
@@ -302,7 +306,7 @@ Also in the library, all described in [docs/library.md](docs/library.md): `expan
 - **Flags.** `overlapping_speech` marks speech under another speaker; like `timing_interpolated` it stays out of the markdown. `entity_corrected` marks a ticker or acronym the LLM changed, and a Latin-script name it changed: in a Chinese segment any Latin-script word, elsewhere a word with a capital after its first letter or a capitalized word inside a sentence (a name that opens a sentence is not flagged). A change only of case, spaces or punctuation inside the name is not flagged. Its note reads `before → after`, where `before` is the text that stood in its place, Chinese characters included, and is empty for a name inserted into unchanged text. Names written in Chinese are not flagged.
 - **`creator_note`** (added in 1.1) is `{text, author, like_count, published}`, the uploader's own pinned comment (often an erratum), or `None`. It is only filled when `[ytdlp] creator_note = true`, which adds a bounded page of comments to the video's one metadata request. Turning it on for a video fetched without it extracts its metadata once more and rebuilds the document from the stored stages. With the option off, the default, no extra request is made.
 
-**Versions.** Minor versions only add optional fields. `load_document` reads any `2.x` document, dropping the fields a newer minor version adds, and upgrades a 1.0 or 1.1 document in memory (`video` and `access` become a YouTube `source`, with no speakers and its one language as `transcript.languages`). Any other version is refused with `ContractError`, whose `fix` says to upgrade ytverbatim when the document is newer. Readers refuse enum values they do not know, so a new flag kind, `origin` or `source.kind` comes with a new major version, never a minor one.
+**Versions.** Minor versions only add optional fields. `load_document` reads any `2.x` document, dropping the fields a newer minor version adds, and upgrades a 1.0 or 1.1 document in memory (`video` and `access` become a YouTube `source`, with no speakers and its one language as `transcript.languages`). Any other version is refused with `ContractError`, whose `fix` says to upgrade anyverbatim when the document is newer. Readers refuse enum values they do not know, so a new flag kind, `origin` or `source.kind` comes with a new major version, never a minor one.
 
 **Upgrading from contract 1.1.** Every YouTube `context.json` becomes 2.0, and each video's `context.md` is written again. Its text changes only where two segments of a Mandarin transcript meet in Latin script on both sides, which is rare: an English sentence that follows another no longer runs into it ("end.Next" becomes "end. Next"), while a boundary at any Chinese character or punctuation still takes no space. The next `run` or `process` of each video rebuilds only the document from its stored stages: no download, no Whisper run and no LLM call. A reader of `document.video` reads `document.source` (after checking `source.kind == "youtube"`), and `document.access` is now `document.source.access`.
 

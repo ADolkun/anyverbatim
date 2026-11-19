@@ -6,7 +6,7 @@ from typing import Literal
 import opencc
 from whisper_normalizer.english import EnglishTextNormalizer
 
-from ytverbatim.text.numbers import itn as quantities_to_itn
+from anyverbatim.text.numbers import itn as quantities_to_itn
 
 Language = Literal["zh", "en"]
 View = Literal["raw", "itn"]

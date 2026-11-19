@@ -1,10 +1,10 @@
-# Using ytverbatim as a library
+# Using anyverbatim as a library
 
-`ytverbatim` is also a Python library. This page lists what is stable, how it is versioned, and what each release breaks. `tests/test_public_api.py` pins the names, the signatures and the dataclass fields below, and the error attributes an application reads, so a change to them is always deliberate.
+`anyverbatim` is also a Python library. This page lists what is stable, how it is versioned, and what each release breaks. `tests/test_public_api.py` pins the names, the signatures and the dataclass fields below, and the error attributes an application reads, so a change to them is always deliberate.
 
 ## The stable surface
 
-Everything in `ytverbatim.__all__`, plus the modules `ytverbatim.errors`, `ytverbatim.contract` and `ytverbatim.config`. Every other module, function and attribute is internal and may change in any release, a patch included.
+Everything in `anyverbatim.__all__`, plus the modules `anyverbatim.errors`, `anyverbatim.contract` and `anyverbatim.config`. Every other module, function and attribute is internal and may change in any release, a patch included.
 
 | Name | What it is |
 |---|---|
@@ -14,30 +14,30 @@ Everything in `ytverbatim.__all__`, plus the modules `ytverbatim.errors`, `ytver
 | `video_file(video_id, out=None) -> Path \| None` | The validated `video.mp4` of a video, or `None`. It never downloads. |
 | `parse_youtube(text) -> YouTubeRef \| None`, `YouTubeRef`, `RefKind`, `video_url(video_id)` | Classify a YouTube URL or id as a video, playlist or channel. |
 | `check_dependencies(options=None, *, source="youtube") -> None` | Raise `DependencyError` naming the missing extra, before any work. |
-| `load_document`, `ContextDocument` | Read and model `context.json` (contract 2.0); the sub-models are in `ytverbatim.contract`. |
-| `Options`, `AuthOptions`, `YtdlpOptions`, `AsrOptions`, `TextOptions`, `DiarizeOptions`, `LLMOptions` | The options; also in `ytverbatim.config`. |
+| `load_document`, `ContextDocument` | Read and model `context.json` (contract 2.0); the sub-models are in `anyverbatim.contract`. |
+| `Options`, `AuthOptions`, `YtdlpOptions`, `AsrOptions`, `TextOptions`, `DiarizeOptions`, `LLMOptions` | The options; also in `anyverbatim.config`. |
 | `LLMClient`, `LLMRequest`, `LLMResponse`, `Usage` | The protocol an injected LLM implements. |
 | `ProgressEvent` | What the `progress` callback receives: `id`, `stage`, `detail` and `retry`. |
 | `STAGES`, `ProgressStage`, `LLM_STAGES` | The stage names in run order, their type, and the frozenset of stages that may call your `LLMClient`. |
 | `quantity_tokens`, `QToken`, `QKind` | The quantity tokenizer that numeric verification uses. |
 | `SUPPORTED_BROWSERS`, `__version__` | The browsers `--auth` accepts, and the installed version. |
-| `ytverbatim.errors` | Every error class, plus `AuthState` and `Signal`. |
+| `anyverbatim.errors` | Every error class, plus `AuthState` and `Signal`. |
 
-`import ytverbatim` loads nothing heavy: each name is imported on first use.
+`import anyverbatim` loads nothing heavy: each name is imported on first use.
 
 ### `process`
 
-`target` is a YouTube video URL or id, or a path to a local audio or video file (a `PathLike` is always a file). It takes one source: a playlist or channel URL, or a folder, raises `ValueError`, so a caller loops over files itself, and `expand` lists a playlist or channel. `options` defaults to the configured options (`config.toml`). `out` is the output root; by default `~/.local/share/ytverbatim/videos` for a video and `.../recordings` for a recording (both under `$YTVERBATIM_HOME` when it is set).
+`target` is a YouTube video URL or id, or a path to a local audio or video file (a `PathLike` is always a file). It takes one source: a playlist or channel URL, or a folder, raises `ValueError`, so a caller loops over files itself, and `expand` lists a playlist or channel. `options` defaults to the configured options (`config.toml`). `out` is the output root; by default `~/.local/share/anyverbatim/videos` for a video and `.../recordings` for a recording (both under `$ANYVERBATIM_HOME` when it is set).
 
-A recording gets the id `rec-` plus 16 hex digits of the hash of its audio, and a folder of that name holding `context.json`, `context.md` and the stored stages. Its title and recording date come from the file's own tags, and nothing in the library sets them. As `ytverbatim run` does, `process` also rewrites the recordings root's `index.md` and `batch_report.json`. See [docs/recordings.md](recordings.md#the-recording-id).
+A recording gets the id `rec-` plus 16 hex digits of the hash of its audio, and a folder of that name holding `context.json`, `context.md` and the stored stages. Its title and recording date come from the file's own tags, and nothing in the library sets them. As `anyverbatim run` does, `process` also rewrites the recordings root's `index.md` and `batch_report.json`. See [docs/recordings.md](recordings.md#the-recording-id).
 
 `auth`, `captions` and `cookies_first` apply to YouTube only, and `None` means the default (`captions=True`, `cookies_first=False`, the configured auth source). Giving any of them for a file raises `ValueError`.
 
-`llm` is any `LLMClient`. Without one, the configured `[llm]` provider applies, ChatGPT by default, and `process` raises `ConfigError` before any work until `ytverbatim login` has run once. The default model, `gpt-sol`, is resolved at that point to the newest Sol model the ChatGPT plan lists (one catalog request); `LLMOptions(model="gpt-astra")` picks the newest of another family, and a versioned model such as `"gpt-6.1-sol"` pins it with no catalog request. If the catalog cannot be read or lists no model of the family, `ConfigError` is raised with a `fix` that says how to pin a version. `interactive=True` lets the ChatGPT provider open a browser to sign in again, for an application with a person at the screen; the library never does so otherwise.
+`llm` is any `LLMClient`. Without one, the configured `[llm]` provider applies, ChatGPT by default, and `process` raises `ConfigError` before any work until `anyverbatim login` has run once. The default model, `gpt-sol`, is resolved at that point to the newest Sol model the ChatGPT plan lists (one catalog request); `LLMOptions(model="gpt-astra")` picks the newest of another family, and a versioned model such as `"gpt-6.1-sol"` pins it with no catalog request. If the catalog cannot be read or lists no model of the family, `ConfigError` is raised with a `fix` that says how to pin a version. `interactive=True` lets the ChatGPT provider open a browser to sign in again, for an application with a person at the screen; the library never does so otherwise.
 
-To run without an LLM, pass `Options(llm=LLMOptions(provider="none"))` (both from `ytverbatim.config`). The LLM stages are then skipped and `Result.notices` says which. `ytverbatim.process(url, options, llm=client)` takes any object that satisfies `LLMClient`.
+To run without an LLM, pass `Options(llm=LLMOptions(provider="none"))` (both from `anyverbatim.config`). The LLM stages are then skipped and `Result.notices` says which. `anyverbatim.process(url, options, llm=client)` takes any object that satisfies `LLMClient`.
 
-`progress` is called with a `ProgressEvent` as each stage starts. It is also called with `retry=True` when an LLM call of that stage failed transiently and will be repeated; `detail` then reads like `LLM unavailable (server_is_overloaded); retry 1/4 in 17s`. Such an event is not a stage starting, so a consumer that counts stages skips it. `id` is the video or recording id, and `stage` is one of the names below. `ytverbatim.STAGES` lists the stage names in run order (typed as `ytverbatim.ProgressStage`), and `ytverbatim.LLM_STAGES` is the frozenset of those that may call your `LLMClient` (`punctuate`, `correct`, `numeric`); both are API.
+`progress` is called with a `ProgressEvent` as each stage starts. It is also called with `retry=True` when an LLM call of that stage failed transiently and will be repeated; `detail` then reads like `LLM unavailable (server_is_overloaded); retry 1/4 in 17s`. Such an event is not a stage starting, so a consumer that counts stages skips it. `id` is the video or recording id, and `stage` is one of the names below. `anyverbatim.STAGES` lists the stage names in run order (typed as `anyverbatim.ProgressStage`), and `anyverbatim.LLM_STAGES` is the frozenset of those that may call your `LLMClient` (`punctuate`, `correct`, `numeric`); both are API.
 
 | Stage | When |
 |---|---|
@@ -75,15 +75,15 @@ The video track is opt-in, for callers that need frames (screenshots, say). With
 - It is validated like the audio: it decodes and covers at least 90% of the video's duration. A file that fails is downloaded again, and a valid one is reused.
 - A video that is already transcribed is not transcribed again for this. `process` only fetches the missing file, which is one `video` download plus a fresh metadata extraction when the saved one is over an hour old (its signed URLs have expired), made with cookies if the earlier run used them.
 - With the option off, the default, no video is ever requested. A failed video download fails the video.
-- `ytverbatim.video_file(video_id, out=None)` returns the path of the validated file under `out` (default output root), or `None` when it is missing or fails validation. It never downloads. A probe that times out counts as absent; a missing `ffprobe` raises `DependencyError`, and a malformed id `ValueError`.
+- `anyverbatim.video_file(video_id, out=None)` returns the path of the validated file under `out` (default output root), or `None` when it is missing or fails validation. It never downloads. A probe that times out counts as absent; a missing `ffprobe` raises `DependencyError`, and a malformed id `ValueError`.
 
 ### Quantities
 
-`ytverbatim.quantity_tokens(text)` returns the numbers, currency amounts, percentages, tickers, Chinese numerals and spelled-out English numbers in `text` as `ytverbatim.QToken`s in order. It is the tokenizer that numeric verification and the correction guards use.
+`anyverbatim.quantity_tokens(text)` returns the numbers, currency amounts, percentages, tickers, Chinese numerals and spelled-out English numbers in `text` as `anyverbatim.QToken`s in order. It is the tokenizer that numeric verification and the correction guards use.
 
 - `char_start` and `char_end` are half-open offsets into `text`; `surface` is the text matched.
 - `value_itn` is the normalized value two spellings share: `一百五十期` and `150期` are both `150期`, `$1.5B` is `$1500000000`, `twenty-five` is `25`.
-- `kind` is a `ytverbatim.QKind`: `number`, `currency`, `percent`, `ticker` or `cjk_quantity`.
+- `kind` is a `anyverbatim.QKind`: `number`, `currency`, `percent`, `ticker` or `cjk_quantity`.
 
 A Chinese numeral is a quantity when it has two or more numeral characters (`三十`), follows `第` or `百分之`, or has a measure word: a currency, 个, 年, 次, a count classifier such as 家, 种 or 位, a time or measurement unit such as 分钟, 岁 or 公里, or a value unit such as 倍 or 个基点.
 
@@ -96,7 +96,7 @@ A Chinese numeral is a quantity when it has two or more numeral characters (`三
 
 ### Errors
 
-Every error `process` and `expand` raise on purpose subclasses `YtverbatimError`, and carries:
+Every error `process` and `expand` raise on purpose subclasses `AnyverbatimError`, and carries:
 
 - `fix`: a one-line remedy to show the user, or `""` when there is nothing specific to say. It is set for every `BatchStopError`, `AuthError` and `YtDlpError` they raise.
 - `stage`: where the failure happened, or `None` when unknown. While fetching a video it is `info` (the metadata request), `captions`, `audio` or `video`; after the fetch it is the stage that was running (`asr`, `punctuate`, `correct`, ...). A failed video download is `stage == "video"`, and so is every failure of the video-only fetch that a finished document needs when the video track is requested later, so a caller can retry without the video track.
@@ -105,11 +105,11 @@ Every error `process` and `expand` raise on purpose subclasses `YtverbatimError`
 
 `LLMUnavailableError` has a `transient` attribute, `False` by default. A provider sets it for a server-side overload or error that passes by itself (the ChatGPT `server_is_overloaded` and HTTP 500, 502, 503 and 504, for one), and `process` then repeats that LLM call up to four more times, waiting about 15, 30, 60 and 120 seconds with jitter, before it raises the original error with the number of attempts in its message. An `LLMClient` you pass as `llm=` opts in by raising `LLMUnavailableError(..., transient=True)`; every other error, `LLMOutputError` included, is raised on the first attempt. Each retry repeats a call that stored nothing on the provider's side, so only raise it for a failure that leaves the call safe to send again.
 
-`BatchStopError` (`signal`, `until`) means YouTube asked to back off; the cooldown is already written, and every later request refuses until it ends. `process` and `expand` both raise it. `AuthError` carries an `AuthState`, and `YtDlpError` its primary `Signal`; both enums are importable from `ytverbatim.errors`. Bad input raises `ValueError`, and a missing engine extra `DependencyError`.
+`BatchStopError` (`signal`, `until`) means YouTube asked to back off; the cooldown is already written, and every later request refuses until it ends. `process` and `expand` both raise it. `AuthError` carries an `AuthState`, and `YtDlpError` its primary `Signal`; both enums are importable from `anyverbatim.errors`. Bad input raises `ValueError`, and a missing engine extra `DependencyError`.
 
 ### Dependencies
 
-`check_dependencies(options, source="youtube")` checks that the ASR engine the options select for that source (`"youtube"` or `"recording"`) can be imported, plus the diarizer when that source is diarized and the numeric second-opinion engine when one is on, and names the extra that is missing: `whisper` for `w-prod`, the default, and `asr` for the other engines and the diarizer. A recording with `AsrOptions.languages` set defaults to `w-runs-lid`, which needs both extras. A recording also needs both with the default engine, because of its diarizer: `ytverbatim[whisper,asr]`. `process` runs the same check before any request. Nothing is imported or downloaded; an unknown engine is a `ConfigError`, and an unknown source a `ValueError`.
+`check_dependencies(options, source="youtube")` checks that the ASR engine the options select for that source (`"youtube"` or `"recording"`) can be imported, plus the diarizer when that source is diarized and the numeric second-opinion engine when one is on, and names the extra that is missing: `whisper` for `w-prod`, the default, and `asr` for the other engines and the diarizer. A recording with `AsrOptions.languages` set defaults to `w-runs-lid`, which needs both extras. A recording also needs both with the default engine, because of its diarizer: `anyverbatim[whisper,asr]`. `process` runs the same check before any request. Nothing is imported or downloaded; an unknown engine is a `ConfigError`, and an unknown source a `ValueError`.
 
 ### Diarization
 
@@ -123,6 +123,18 @@ Every error `process` and `expand` raise on purpose subclasses `YtverbatimError`
 - The contract version is independent of the package version: it is 2.0 now, and later optional fields become 2.x. See the README's [contract section](../README.md#contract-20).
 
 ## Breaking changes
+
+### Next release: renamed to anyverbatim
+
+The project was renamed from ytverbatim to anyverbatim, since it transcribes recordings as well as YouTube videos. The surface is otherwise unchanged.
+
+1. The import path: the package was renamed from `ytverbatim` to `anyverbatim`, so `from ytverbatim import process` is now `from anyverbatim import process`, and `ytverbatim.errors|contract|config` are `anyverbatim.errors|contract|config`.
+2. The distribution was renamed too: depend on `anyverbatim[whisper,asr] @ git+https://github.com/ADolkun/anyverbatim`, and drop the old ytverbatim requirement.
+3. The base error `YtverbatimError` was renamed to `AnyverbatimError`.
+4. Environment variables were renamed from `YTVERBATIM_*` to `ANYVERBATIM_*` (`ANYVERBATIM_HOME`, `ANYVERBATIM_AUTH`, `ANYVERBATIM_JS_RUNTIMES`). An old variable set without its new counterpart is a `ConfigError` whose `fix` names the new one.
+5. A new document's `generator.name` is `anyverbatim`.
+
+Stored work carries over. On first use, each directory left from before the project was renamed (`~/.local/share/ytverbatim`, `~/.config/ytverbatim`, `~/.local/state/ytverbatim`, `~/Library/Caches/ytverbatim`) is moved to its `anyverbatim` counterpart in one rename, and a notice goes to stderr. If both exist, the call raises `ConfigError` and moves nothing. A move to another filesystem is never copied: it raises `ConfigError` too. A home set with `ANYVERBATIM_HOME` is never moved. Transcripts, diarization and LLM results made before the rename stay current, so the first run after it rebuilds only `context.json` and `context.md`.
 
 ### 0.1.0
 
@@ -146,11 +158,11 @@ If you imported internals, the replacements are:
 | `acquire.audio.WAV_NAME` and inferring the failed stage from progress events | `error.stage == "video"` |
 | `asr.registry.get` and `check_dependencies` | `check_dependencies(options)` |
 | `auth.cooldown.stop_fix`, `auth.fixes.fix_for` | `error.fix`, always set by `process` and `expand` |
-| `auth.state.AuthState`, `ytdlp.types.Signal` | `ytverbatim.errors.AuthState`, `ytverbatim.errors.Signal` |
-| `auth.chromium.SUPPORTED_BROWSERS` | `ytverbatim.SUPPORTED_BROWSERS` |
-| `pipeline.ProgressEvent`, `ytverbatim.llm.LLMClient` and its request types | `ytverbatim.ProgressEvent`, `LLMClient`, `LLMRequest`, `LLMResponse`, `Usage` |
+| `auth.state.AuthState`, `ytdlp.types.Signal` | `anyverbatim.errors.AuthState`, `anyverbatim.errors.Signal` |
+| `auth.chromium.SUPPORTED_BROWSERS` | `anyverbatim.SUPPORTED_BROWSERS` |
+| `pipeline.ProgressEvent`, `anyverbatim.llm.LLMClient` and its request types | `anyverbatim.ProgressEvent`, `LLMClient`, `LLMRequest`, `LLMResponse`, `Usage` |
 | `pipeline.VideoResult`, `BatchReport`, `VideoOutcome` in a test double | a fake `process` that returns a `Result` |
 
 ## Not in the library yet
 
-Voice Memos listing, speaker renaming (`ytverbatim speakers`), folder expansion, a recording type with caller-given metadata, and batch reports stay CLI features. They can be added without breaking the surface.
+Voice Memos listing, speaker renaming (`anyverbatim speakers`), folder expansion, a recording type with caller-given metadata, and batch reports stay CLI features. They can be added without breaking the surface.

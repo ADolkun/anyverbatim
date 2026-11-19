@@ -3,9 +3,9 @@
 Run with ``make live-smoke``. Output goes to the terminal only and must never be committed.
 
 Environment:
-- ``YTVERBATIM_SMOKE_PUBLIC_ID``: a public video (default: yt-dlp's own test video).
-- ``YTVERBATIM_SMOKE_MEMBERS_ID``: a members-only video; its check is skipped when unset.
-- ``YTVERBATIM_AUTH`` (or the saved source): enables the cookie snapshot plus ``:ytfav`` check.
+- ``ANYVERBATIM_SMOKE_PUBLIC_ID``: a public video (default: yt-dlp's own test video).
+- ``ANYVERBATIM_SMOKE_MEMBERS_ID``: a members-only video; its check is skipped when unset.
+- ``ANYVERBATIM_AUTH`` (or the saved source): enables the cookie snapshot plus ``:ytfav`` check.
 """
 
 from __future__ import annotations
@@ -17,15 +17,15 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ytverbatim.auth.snapshot import cookie_snapshot
-from ytverbatim.auth.source import resolve_source
-from ytverbatim.errors import YtDlpError, YtverbatimError
-from ytverbatim.ids import video_url
-from ytverbatim.ytdlp.runner import SubprocessRunner, redact
-from ytverbatim.ytdlp.types import Signal
+from anyverbatim.auth.snapshot import cookie_snapshot
+from anyverbatim.auth.source import resolve_source
+from anyverbatim.errors import AnyverbatimError, YtDlpError
+from anyverbatim.ids import video_url
+from anyverbatim.ytdlp.runner import SubprocessRunner, redact
+from anyverbatim.ytdlp.types import Signal
 
-PUBLIC_ENV = "YTVERBATIM_SMOKE_PUBLIC_ID"
-MEMBERS_ENV = "YTVERBATIM_SMOKE_MEMBERS_ID"
+PUBLIC_ENV = "ANYVERBATIM_SMOKE_PUBLIC_ID"
+MEMBERS_ENV = "ANYVERBATIM_SMOKE_MEMBERS_ID"
 # yt-dlp's own primary test video; it replaced BaW_jenozKc, which YouTube now reports as unavailable.
 DEFAULT_PUBLIC_ID = "YE7VzlLtp-4"
 TIMEOUT_S = 180.0
@@ -123,7 +123,7 @@ def main() -> int:
     for name, check in CHECKS:
         try:
             outcome = check()
-        except (YtverbatimError, ValueError) as exc:
+        except (AnyverbatimError, ValueError) as exc:
             first_line = str(exc).strip().splitlines()[:1] or [type(exc).__name__]
             outcome = _fail(redact(first_line[0]))
         failed = failed or outcome.status == "FAIL"

@@ -6,8 +6,8 @@ from typing import Any
 import numpy as np
 import pytest
 
-from ytverbatim.diarize import nemotron, registry
-from ytverbatim.errors import ConfigError, DependencyError, EngineError
+from anyverbatim.diarize import nemotron, registry
+from anyverbatim.errors import ConfigError, DependencyError, EngineError
 
 RATE = 16_000
 
@@ -93,7 +93,7 @@ def test_diarize_before_load_is_a_programming_error() -> None:
 def test_a_missing_mlx_audio_names_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "mlx_audio.vad", None)
     definition = registry.get("d-nemotron-8bit")
-    with pytest.raises(DependencyError, match=r"ytverbatim\[asr\]"):
+    with pytest.raises(DependencyError, match=r"anyverbatim\[asr\]"):
         nemotron.create(definition.spec, definition.variant).load()
 
 

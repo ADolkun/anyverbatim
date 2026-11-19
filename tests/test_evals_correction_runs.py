@@ -12,6 +12,23 @@ import pytest
 from click.testing import CliRunner
 from evals_fixture import EN, ZH, make_eval, whole_file_rows
 
+from anyverbatim import paths, pipeline, stages
+from anyverbatim.acquire.metadata import trim_info
+from anyverbatim.contract.models import Flag
+from anyverbatim.errors import (
+    ConfigError,
+    EngineError,
+    EngineMemoryError,
+    LLMOutputError,
+    LLMUnavailableError,
+    ProcMemoryExceeded,
+)
+from anyverbatim.llm import ClaudeCLIClient
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Readiness, Usage
+from anyverbatim.mlx_worker import mlx_lock
+from anyverbatim.text import correct as correct_module
+from anyverbatim.text import punctuate as punctuate_module
+from anyverbatim.text.correct import CorrectionContext, CorrectionResult
 from evals import correction, disk, run_correction
 from evals.correction import (
     CANDIDATES,
@@ -30,23 +47,6 @@ from evals.correction import (
 )
 from evals.manifest import Manifest
 from evals.store import Layout, write_rows
-from ytverbatim import paths, pipeline, stages
-from ytverbatim.acquire.metadata import trim_info
-from ytverbatim.contract.models import Flag
-from ytverbatim.errors import (
-    ConfigError,
-    EngineError,
-    EngineMemoryError,
-    LLMOutputError,
-    LLMUnavailableError,
-    ProcMemoryExceeded,
-)
-from ytverbatim.llm import ClaudeCLIClient
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Readiness, Usage
-from ytverbatim.mlx_worker import mlx_lock
-from ytverbatim.text import correct as correct_module
-from ytverbatim.text import punctuate as punctuate_module
-from ytverbatim.text.correct import CorrectionContext, CorrectionResult
 
 GB = 1_000_000_000
 HYPOTHESIS = "w-prod"
@@ -62,7 +62,7 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_STATE_HOME", str(home / "state"))
-    monkeypatch.setenv("YTVERBATIM_HOME", str(home / "share"))
+    monkeypatch.setenv("ANYVERBATIM_HOME", str(home / "share"))
 
 
 def segments(request: LLMRequest) -> list[dict[str, Any]]:

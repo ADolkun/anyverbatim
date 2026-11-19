@@ -1,4 +1,4 @@
-from ytverbatim.acquire import creator_note
+from anyverbatim.acquire import creator_note
 
 PINNED = {
     "is_pinned": True,

@@ -17,12 +17,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from anyverbatim import proc
+from anyverbatim.errors import ConfigError, MediaValidationError
 from evals.judge import EMPTY_READING
 from evals.manifest import Manifest
 from evals.session import DECISIONS_FILE, SPANS_FILE, ShownSpan, load_shown
 from evals.store import Layout, now
-from ytverbatim import proc
-from ytverbatim.errors import ConfigError, MediaValidationError
 
 AFPLAY = "/usr/bin/afplay"
 SECONDS_PER_SPAN = 6
@@ -129,7 +129,7 @@ def listen(
     if skipped:
         echo(f"{len(skipped)} skipped spans come back after the {len(fresh)} new ones.")
     decided = 0
-    with tempfile.TemporaryDirectory(prefix="ytverbatim-ab-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="anyverbatim-ab-") as scratch:
         while queue:
             span = queue.popleft()
             clip = Path(scratch) / f"{span.id}.wav"

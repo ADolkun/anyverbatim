@@ -5,6 +5,8 @@ import pytest
 from click.testing import CliRunner
 from recordings_fixture import FakeWorker, make_meeting, make_owner, pieces, silent, spoken, wav_seconds_of
 
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import ConfigError
 from evals import disputes
 from evals.diarization import Turn, write_rttm
 from evals.disputes import (
@@ -34,8 +36,6 @@ from evals.questions import (
 from evals.recordings_corpus import Item, asr_layout, load_items
 from evals.recordings_data import OWNER
 from evals.run_recordings_asr import run_corpus
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import ConfigError
 
 
 def word(text: str, start: float, end: float) -> Word:

@@ -4,16 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import paths
-from ytverbatim.auth import source
-from ytverbatim.auth.source import BrowserSource, CookieFileSource
-from ytverbatim.auth.state import AuthState
-from ytverbatim.errors import AuthError
+from anyverbatim import paths
+from anyverbatim.auth import source
+from anyverbatim.auth.source import BrowserSource, CookieFileSource
+from anyverbatim.auth.state import AuthState
+from anyverbatim.errors import AuthError
 
 
 @pytest.fixture(autouse=True)
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "YTVERBATIM_HOME", source.ENV_VAR):
+    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "ANYVERBATIM_HOME", source.ENV_VAR):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     return tmp_path

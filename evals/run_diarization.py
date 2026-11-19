@@ -2,11 +2,11 @@
 
 Runs one diarizer over prepared recordings (``evals.recordings_data``), then scores each at collar 0 and collar 0.25
 with overlap scored, WDER with and without smoothing, speaker-count error, real-time factor and peak footprint. Every
-recording is resumable and everything is written under ``$YTVERBATIM_EVAL_DIR/recordings/runs/diarization/<id>/``.
+recording is resumable and everything is written under ``$ANYVERBATIM_EVAL_DIR/recordings/runs/diarization/<id>/``.
 
 Two backends:
 
-- ``ProductionBackend`` drives ``ytverbatim.diarize``, so the Nemotron ids run through the same worker the pipeline
+- ``ProductionBackend`` drives ``anyverbatim.diarize``, so the Nemotron ids run through the same worker the pipeline
   uses;
 - ``ExternalBackend`` runs any command that writes an RTTM, for pyannote in its throwaway uv project.
 
@@ -34,6 +34,17 @@ from typing import Protocol, cast
 import click
 from pydantic import BaseModel, ConfigDict
 
+from anyverbatim import atomic, proc
+from anyverbatim.contract.models import Word
+from anyverbatim.diarize import registry as diarize_registry
+from anyverbatim.diarize import runner as diarize_runner
+from anyverbatim.diarize.attribution import assign
+from anyverbatim.diarize.protocol import Diarization as StoredDiarization
+from anyverbatim.diarize.protocol import DiarizeRequest, read_file_diarization
+from anyverbatim.diarize.protocol import FileJob as DiarizeFileJob
+from anyverbatim.diarize.protocol import load as load_diarization
+from anyverbatim.diarize.runner import DiarizeResult
+from anyverbatim.errors import AnyverbatimError, ConfigError, EngineError
 from evals.diarization import (
     COLLARS_S,
     DerScore,
@@ -51,17 +62,6 @@ from evals.diarization import (
     write_rttm,
 )
 from evals.recordings_data import OWNER, WORDS_FILE, CorpusIndex, load_index, load_owner, recordings_dir
-from ytverbatim import atomic, proc
-from ytverbatim.contract.models import Word
-from ytverbatim.diarize import registry as diarize_registry
-from ytverbatim.diarize import runner as diarize_runner
-from ytverbatim.diarize.attribution import assign
-from ytverbatim.diarize.protocol import Diarization as StoredDiarization
-from ytverbatim.diarize.protocol import DiarizeRequest, read_file_diarization
-from ytverbatim.diarize.protocol import FileJob as DiarizeFileJob
-from ytverbatim.diarize.protocol import load as load_diarization
-from ytverbatim.diarize.runner import DiarizeResult
-from ytverbatim.errors import ConfigError, EngineError, YtverbatimError
 
 PRIMARY_CORPORA = ("ami", "alimeeting")
 CORPORA = (*PRIMARY_CORPORA, "ascend", OWNER)
@@ -426,7 +426,7 @@ def _resume[S: (RecordingScore, OwnerScore)](
 
 
 class ProductionBackend:
-    """Run a registered diarizer through the worker of ``ytverbatim.diarize``, one file per request."""
+    """Run a registered diarizer through the worker of ``anyverbatim.diarize``, one file per request."""
 
     def __init__(
         self, diarizer_id: str, worker: Callable[[DiarizeRequest], DiarizeResult] = diarize_runner.run_worker
@@ -499,7 +499,7 @@ class ExternalBackend:
         self._command = list(command)
 
     def diarize(self, recording: Recording, out_dir: Path) -> Run:
-        from ytverbatim.mlx_worker import default_memory_cap_bytes, mlx_lock
+        from anyverbatim.mlx_worker import default_memory_cap_bytes, mlx_lock
 
         out_dir.mkdir(parents=True, exist_ok=True)
         rttm = out_dir / "output.rttm"
@@ -538,7 +538,7 @@ def make_backend(diarizer: str, external_command: str | None) -> Backend:
 
 @click.group()
 def main() -> None:
-    """Diarization selection eval (data under $YTVERBATIM_EVAL_DIR/recordings)."""
+    """Diarization selection eval (data under $ANYVERBATIM_EVAL_DIR/recordings)."""
 
 
 @main.command()
@@ -617,7 +617,7 @@ def summary(diarizer: str) -> None:
 def run_cli() -> None:
     try:
         main(standalone_mode=False)
-    except YtverbatimError as exc:
+    except AnyverbatimError as exc:
         raise SystemExit(f"error: {exc}") from None
     except click.exceptions.Abort:
         raise SystemExit(130) from None

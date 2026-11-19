@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import ConfigError, EngineError
 from evals.diarization import Turn
 from evals.recordings_data import CorpusIndex, RefUtterance, wav_bytes, write_index, write_recording
 from evals.run_diarization import (
@@ -25,8 +27,6 @@ from evals.run_diarization import (
     score_recording,
     summarize,
 )
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import ConfigError, EngineError
 
 SECONDS = 40
 REFERENCE = [RefUtterance(0, 10, "A", "one"), RefUtterance(10, 20, "B", "two"), RefUtterance(20, 30, "A", "three")]
@@ -242,12 +242,12 @@ def test_external_rttm_with_the_wrong_uri_is_never_read_as_no_speech(tmp_path: P
 
 
 def test_production_backend_reads_what_the_real_diarize_worker_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Contract check against ytverbatim.diarize with a fake model: no weights, no subprocess."""
-    from ytverbatim.diarize import registry as diarize_registry
-    from ytverbatim.diarize import worker
-    from ytverbatim.diarize.protocol import DiarizeRequest, RawDiarization
-    from ytverbatim.diarize.protocol import Turn as RawTurn
-    from ytverbatim.diarize.runner import DiarizeResult
+    """Contract check against anyverbatim.diarize with a fake model: no weights, no subprocess."""
+    from anyverbatim.diarize import registry as diarize_registry
+    from anyverbatim.diarize import worker
+    from anyverbatim.diarize.protocol import DiarizeRequest, RawDiarization
+    from anyverbatim.diarize.protocol import Turn as RawTurn
+    from anyverbatim.diarize.runner import DiarizeResult
 
     class FakeModel:
         def load(self) -> None:

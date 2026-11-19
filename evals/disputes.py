@@ -26,6 +26,10 @@ from pathlib import Path
 
 import click
 
+from anyverbatim import atomic
+from anyverbatim.asr.models import ChunkHypothesis
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import AnyverbatimError, ConfigError
 from evals.consensus import find_disputes
 from evals.diarization import Turn, align_labels, disagreement_runs, read_rttm
 from evals.questions import MAX_EXAMPLES, AttributionDispute, AttributionLine, TextDispute
@@ -34,10 +38,6 @@ from evals.recordings_data import CLIPS, OWNER, SAMPLE_RATE, WORDS_FILE, recordi
 from evals.run_diarization import load_words
 from evals.run_recordings_asr import E2_HYPOTHESES
 from evals.store import hypothesis_units
-from ytverbatim import atomic
-from ytverbatim.asr.models import ChunkHypothesis
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import ConfigError, YtverbatimError
 
 DISPUTES_FILE = "disputes.jsonl"
 DEFAULT_LIMIT = 6
@@ -247,7 +247,7 @@ def write_disputes(path: Path, disputes: Sequence[TextDispute | AttributionDispu
 
 @click.group()
 def main() -> None:
-    """Disputes for the owner questions (data under $YTVERBATIM_EVAL_DIR/recordings)."""
+    """Disputes for the owner questions (data under $ANYVERBATIM_EVAL_DIR/recordings)."""
 
 
 @main.command()
@@ -303,7 +303,7 @@ def build(
 def run() -> None:
     try:
         main(standalone_mode=False)
-    except YtverbatimError as exc:
+    except AnyverbatimError as exc:
         raise SystemExit(f"error: {exc}") from None
     except click.exceptions.Abort:
         raise SystemExit(130) from None

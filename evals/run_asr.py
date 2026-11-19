@@ -2,7 +2,7 @@
 
 Order: ``vad`` → ``asr --hyp H`` (per hypothesis, then ``cleanup --hyp H``) → ``captions`` → ``screen`` →
 ``session`` → ``listen`` → ``report`` → ``decide``. Every command is resumable and writes only under
-``$YTVERBATIM_EVAL_DIR``, except ``decide``, which writes the aggregate ``evals/results/asr-<date>.md``.
+``$ANYVERBATIM_EVAL_DIR``, except ``decide``, which writes the aggregate ``evals/results/asr-<date>.md``.
 """
 
 import json
@@ -15,6 +15,19 @@ from pathlib import Path
 
 import click
 
+from anyverbatim import atomic, config, paths
+from anyverbatim.acquire.captions import CaptionKind, parse_json3
+from anyverbatim.acquire.metadata import trim_info
+from anyverbatim.asr import registry
+from anyverbatim.asr.chunks import DEFAULT_MAX_CHUNK_S, Region, alignment_windows, plan_chunks
+from anyverbatim.asr.context import context_from_metadata
+from anyverbatim.asr.models import ChunkHypothesis, FileJob, WorkerRequest
+from anyverbatim.asr.protocol import EngineDef
+from anyverbatim.asr.runner import WorkerResult, memory_cap_bytes, run_worker
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import AnyverbatimError, ConfigError
+from anyverbatim.llm import ClaudeCLIClient
+from anyverbatim.mlx_worker import mlx_lock
 from evals import disk
 from evals.decide import decide, render_decision
 from evals.judge import JUDGE_MODEL, PROMPT_VERSION, load_verdicts, run_judge
@@ -51,19 +64,6 @@ from evals.store import (
     write_json,
     write_rows,
 )
-from ytverbatim import atomic, config, paths
-from ytverbatim.acquire.captions import CaptionKind, parse_json3
-from ytverbatim.acquire.metadata import trim_info
-from ytverbatim.asr import registry
-from ytverbatim.asr.chunks import DEFAULT_MAX_CHUNK_S, Region, alignment_windows, plan_chunks
-from ytverbatim.asr.context import context_from_metadata
-from ytverbatim.asr.models import ChunkHypothesis, FileJob, WorkerRequest
-from ytverbatim.asr.protocol import EngineDef
-from ytverbatim.asr.runner import WorkerResult, memory_cap_bytes, run_worker
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import ConfigError, YtverbatimError
-from ytverbatim.llm import ClaudeCLIClient
-from ytverbatim.mlx_worker import mlx_lock
 
 # E2/E3: the per-chunk language-ID hypotheses choose within this set and must not be handed the uploader language,
 # which would override detection.
@@ -85,15 +85,15 @@ def layout() -> Layout:
 
 def _vad_regions(wav: Path) -> tuple[list[Region], float, list[float]]:
     # The audio and VAD modules need numpy and MLX from the asr extra; only this command uses them.
-    from ytverbatim.asr.audio import frame_energy, load_wav
-    from ytverbatim.asr.vad import speech_regions
+    from anyverbatim.asr.audio import frame_energy, load_wav
+    from anyverbatim.asr.vad import speech_regions
 
     audio = load_wav(wav)
     return speech_regions(audio), audio.duration, frame_energy(audio)
 
 
 def plan_file(store: Layout, video: Video, regions: Regions = _vad_regions) -> Plan:
-    from ytverbatim.asr.vad import DEFAULT_VAD_PARAMS, SILERO_REVISION
+    from anyverbatim.asr.vad import DEFAULT_VAD_PARAMS, SILERO_REVISION
 
     speech, duration, energy = regions(store.wav(video))
     chunks = plan_chunks(speech, duration, max_chunk_s=DEFAULT_MAX_CHUNK_S, frame_energy=energy)
@@ -272,7 +272,7 @@ def _files(value: str | None) -> list[str]:
 
 @click.group()
 def main() -> None:
-    """ASR selection eval (data under $YTVERBATIM_EVAL_DIR)."""
+    """ASR selection eval (data under $ANYVERBATIM_EVAL_DIR)."""
 
 
 _files_option = click.option("--files", help="Comma-separated video ids (default: every file in the manifest).")
@@ -280,7 +280,7 @@ _cache_option = click.option(
     "--hf-cache",
     type=click.Path(path_type=Path),
     default=None,
-    help="Candidate weight cache (default: $YTVERBATIM_HOME/hf-candidates). Never the default HF cache.",
+    help="Candidate weight cache (default: $ANYVERBATIM_HOME/hf-candidates). Never the default HF cache.",
 )
 
 
@@ -411,7 +411,7 @@ def listen(name: str) -> None:
 @main.command()
 @click.option("--session", "session_name", default="main", show_default=True)
 def report(session_name: str) -> None:
-    """Aggregate JSON and markdown report under $YTVERBATIM_EVAL_DIR/report."""
+    """Aggregate JSON and markdown report under $ANYVERBATIM_EVAL_DIR/report."""
     store, manifest = layout(), load_manifest()
     result = build_report(store, manifest, load_screen(store), session_name, now())
     write_json(store.report / REPORT_JSON, result)
@@ -436,7 +436,7 @@ def decide_command(day: str | None) -> None:
 def run() -> None:
     try:
         main(standalone_mode=False)
-    except YtverbatimError as exc:
+    except AnyverbatimError as exc:
         raise SystemExit(f"error: {exc}") from None
     except click.exceptions.Abort:
         raise SystemExit(130) from None

@@ -4,8 +4,8 @@ from typing import Any
 
 import pytest
 
+from anyverbatim.errors import ConfigError
 from evals.manifest import EVAL_DIR_ENV, eval_dir, load_manifest
-from ytverbatim.errors import ConfigError
 
 
 def video(video_id: str, language: str, access: str = "public", **extra: Any) -> dict[str, Any]:
@@ -105,9 +105,9 @@ def test_unknown_language_is_rejected(tmp_path: Path) -> None:
 def test_eval_dir_defaults_to_the_documented_location(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv(EVAL_DIR_ENV, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert eval_dir() == tmp_path / ".local" / "share" / "ytverbatim" / "eval"
+    assert eval_dir() == tmp_path / ".local" / "share" / "anyverbatim" / "eval"
     monkeypatch.setenv(EVAL_DIR_ENV, "")
-    assert eval_dir() == tmp_path / ".local" / "share" / "ytverbatim" / "eval"
+    assert eval_dir() == tmp_path / ".local" / "share" / "anyverbatim" / "eval"
 
 
 def test_a_missing_manifest_names_the_directory_and_the_variable(

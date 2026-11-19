@@ -3,12 +3,12 @@ from pathlib import Path
 
 import pytest
 
-import ytverbatim
-from ytverbatim import paths
-from ytverbatim.acquire import video
-from ytverbatim.acquire.metadata import info_path
-from ytverbatim.errors import MediaValidationError, YtDlpError
-from ytverbatim.ytdlp.types import Signal, YtDlpResult
+import anyverbatim
+from anyverbatim import paths
+from anyverbatim.acquire import video
+from anyverbatim.acquire.metadata import info_path
+from anyverbatim.errors import MediaValidationError, YtDlpError
+from anyverbatim.ytdlp.types import Signal, YtDlpResult
 
 VIDEO_ID = "aaaaaaaaaaa"
 
@@ -139,7 +139,7 @@ def test_403_with_fresh_info_is_not_re_extracted(fakes, tmp_path: Path) -> None:
 
 
 def test_video_file_returns_a_whole_file(tmp_path: Path, fake_proc, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("YTVERBATIM_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ANYVERBATIM_HOME", str(tmp_path / "home"))
     vdir = paths.video_dir(VIDEO_ID)
     vdir.mkdir(parents=True)
     info_path(vdir).write_text('{"id": "aaaaaaaaaaa", "duration": 600}', encoding="utf-8")
@@ -173,5 +173,5 @@ def test_video_file_without_saved_metadata_is_absent(tmp_path: Path, fake_proc) 
 
 
 def test_video_file_is_exported_lazily_from_the_package() -> None:
-    assert "video_file" in ytverbatim.__all__
-    assert ytverbatim.video_file is video.video_file
+    assert "video_file" in anyverbatim.__all__
+    assert anyverbatim.video_file is video.video_file

@@ -33,6 +33,10 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
+from anyverbatim import atomic
+from anyverbatim.asr.models import ChunkHypothesis
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import ConfigError
 from evals.consensus import TimedUnit
 from evals.metrics import (
     MIN_INCIDENT_UNITS,
@@ -47,10 +51,6 @@ from evals.normalize import View, join_units, to_units
 from evals.recordings_corpus import FOLDER_CORPORA, Item, Metric
 from evals.recordings_data import WORDS_FILE, RefUtterance, ordered_text
 from evals.store import hypothesis_units, row_text, row_units
-from ytverbatim import atomic
-from ytverbatim.asr.models import ChunkHypothesis
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import ConfigError
 
 WINDOW_TARGET_S = 30.0
 # A cut in a shorter pause could split a phrase the two sides time slightly differently.

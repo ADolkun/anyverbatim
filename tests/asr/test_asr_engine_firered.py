@@ -5,9 +5,9 @@ from typing import Any
 import numpy as np
 import pytest
 
-from ytverbatim.asr import registry
-from ytverbatim.asr.engines import firered
-from ytverbatim.errors import ConfigError, EngineError
+from anyverbatim.asr import registry
+from anyverbatim.asr.engines import firered
+from anyverbatim.errors import ConfigError, EngineError
 
 SPEC = registry.get("f-aed").spec
 

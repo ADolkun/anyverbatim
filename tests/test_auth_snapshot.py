@@ -10,12 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import paths, proc
-from ytverbatim.auth import _snapshot_child as child
-from ytverbatim.auth import chromium, cookiefile, snapshot
-from ytverbatim.auth.source import BrowserSource, CookieFileSource
-from ytverbatim.auth.state import AuthState
-from ytverbatim.errors import AuthError, ProcTimeout, YtverbatimError
+from anyverbatim import paths, proc
+from anyverbatim.auth import _snapshot_child as child
+from anyverbatim.auth import chromium, cookiefile, snapshot
+from anyverbatim.auth.source import BrowserSource, CookieFileSource
+from anyverbatim.auth.state import AuthState
+from anyverbatim.errors import AnyverbatimError, AuthError, ProcTimeout
 
 SECRET = "synthetic-login-secret"
 FUTURE = 4_000_000_000
@@ -24,7 +24,7 @@ PAST = 1_000_000_000
 
 @pytest.fixture(autouse=True)
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "YTVERBATIM_HOME"):
+    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "ANYVERBATIM_HOME"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     return tmp_path
@@ -293,7 +293,7 @@ def test_browser_snapshot_runs_child_and_deletes_file(monkeypatch: pytest.Monkey
 
     assert not snap.path.exists()
     assert fake.argv == [
-        sys.executable, "-P", "-m", "ytverbatim.auth._snapshot_child", "--browser", "chrome", "--out", str(snap.path),
+        sys.executable, "-P", "-m", "anyverbatim.auth._snapshot_child", "--browser", "chrome", "--out", str(snap.path),
         "--profile", "Default",
     ]  # fmt: skip
     assert fake.timeout_s == 7
@@ -328,7 +328,7 @@ def test_child_error_state_is_raised(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize("stdout", ["", "not json", json.dumps({"ok": False, "state": None, "detail": "boom"})])
 def test_unexpected_child_output_fails_loud(monkeypatch: pytest.MonkeyPatch, stdout: str) -> None:
     monkeypatch.setattr(proc, "run", FakeRun(stdout, write=False))
-    with pytest.raises(YtverbatimError), snapshot.cookie_snapshot(BrowserSource("chrome")):
+    with pytest.raises(AnyverbatimError), snapshot.cookie_snapshot(BrowserSource("chrome")):
         pass
 
 

@@ -1,6 +1,6 @@
 import pytest
 
-from ytverbatim.text.guards import EntityChange, check_fix, check_numeric_fix, name_changes, symbol_changes
+from anyverbatim.text.guards import EntityChange, check_fix, check_numeric_fix, name_changes, symbol_changes
 
 
 def rejected_by(original: str, fixed: str) -> str | None:

@@ -8,10 +8,10 @@ from email.message import Message
 
 import pytest
 
-from ytverbatim.errors import ConfigError, LLMOutputError, LLMUnavailableError
-from ytverbatim.llm import openai_compat
-from ytverbatim.llm.openai_compat import OpenAICompatClient
-from ytverbatim.llm.protocol import LLMRequest, Usage
+from anyverbatim.errors import ConfigError, LLMOutputError, LLMUnavailableError
+from anyverbatim.llm import openai_compat
+from anyverbatim.llm.openai_compat import OpenAICompatClient
+from anyverbatim.llm.protocol import LLMRequest, Usage
 
 BASE = "http://127.0.0.1:8080/v1"
 

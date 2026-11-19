@@ -12,12 +12,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from anyverbatim.asr import registry
+from anyverbatim.errors import ConfigError
 from evals.manifest import Manifest
 from evals.normalize import Language
 from evals.screen import Span, SpanReading, collect_spans
 from evals.store import Layout, dump_jsonl, incomplete_files, now, write_json
-from ytverbatim.asr import registry
-from ytverbatim.errors import ConfigError
 
 DEFAULT_N = 150
 NUMERIC_SHARE = 0.4

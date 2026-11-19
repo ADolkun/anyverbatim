@@ -9,7 +9,7 @@ import numpy as np
 from numpy.typing import NDArray
 from pydantic import JsonValue
 
-from ytverbatim.diarize.protocol import DiarizerDef, DiarizerSpec, RawDiarization, Turn
+from anyverbatim.diarize.protocol import DiarizerDef, DiarizerSpec, RawDiarization, Turn
 
 RATE = 16_000
 CHANNELS = 8

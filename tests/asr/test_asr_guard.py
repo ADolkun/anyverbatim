@@ -9,14 +9,14 @@ from numpy.typing import NDArray
 from pydantic import JsonValue
 from scripted_engine import LOOP_TEXT, ScriptedEngine, WindowedEngine, looping, said, sound, spaced, timed, windowed
 
-from ytverbatim.asr import worker
-from ytverbatim.asr.chunks import Chunk
-from ytverbatim.asr.guard import MIN_REDECODE_S, QualityGuard, Trigger, triggers
-from ytverbatim.asr.models import HYPOTHESES_FILE, AnomalySpan, ChunkHypothesis, FileJob, WorkerRequest
-from ytverbatim.asr.protocol import AsrContext, ChunkInput, EngineDef, EngineSpec, GuardedChunk, RawChunk, Window
-from ytverbatim.asr.quality import COMPRESSION_RATIO_THRESHOLD, compression_ratio
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import EngineError
+from anyverbatim.asr import worker
+from anyverbatim.asr.chunks import Chunk
+from anyverbatim.asr.guard import MIN_REDECODE_S, QualityGuard, Trigger, triggers
+from anyverbatim.asr.models import HYPOTHESES_FILE, AnomalySpan, ChunkHypothesis, FileJob, WorkerRequest
+from anyverbatim.asr.protocol import AsrContext, ChunkInput, EngineDef, EngineSpec, GuardedChunk, RawChunk, Window
+from anyverbatim.asr.quality import COMPRESSION_RATIO_THRESHOLD, compression_ratio
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import EngineError
 
 DURATION = 10.0
 # Compresses past Whisper's 2.4 when repeated four times, yet is too few repeats for the repetition detectors.

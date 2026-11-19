@@ -6,6 +6,12 @@ import pytest
 from click.testing import CliRunner
 from evals_fixture import CHUNKS, EN, SECONDS, ZH, chunk_rows, make_eval
 
+from anyverbatim.asr import registry
+from anyverbatim.asr.chunks import Region
+from anyverbatim.asr.models import RunMetrics, WorkerRequest
+from anyverbatim.asr.protocol import EngineDef, EngineSpec
+from anyverbatim.asr.runner import WorkerResult
+from anyverbatim.errors import ConfigError
 from evals import disk, run_asr
 from evals.store import (
     CAPTION_HYPOTHESIS,
@@ -16,12 +22,6 @@ from evals.store import (
     rows_by_file,
     write_rows,
 )
-from ytverbatim.asr import registry
-from ytverbatim.asr.chunks import Region
-from ytverbatim.asr.models import RunMetrics, WorkerRequest
-from ytverbatim.asr.protocol import EngineDef, EngineSpec
-from ytverbatim.asr.runner import WorkerResult
-from ytverbatim.errors import ConfigError
 
 HERE = Path(__file__).parent
 GB = 1_000_000_000
@@ -33,7 +33,7 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
-    monkeypatch.setenv("YTVERBATIM_HOME", str(home / "share"))
+    monkeypatch.setenv("ANYVERBATIM_HOME", str(home / "share"))
     monkeypatch.setenv("PYTHONPATH", str(HERE / "asr"))
 
 

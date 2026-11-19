@@ -11,9 +11,9 @@ from typing import Any
 
 import pytest
 
-from ytverbatim import proc, sysmem
-from ytverbatim.errors import DependencyError, ProcMemoryExceeded, ProcTimeout
-from ytverbatim.sysmem import Footprint
+from anyverbatim import proc, sysmem
+from anyverbatim.errors import DependencyError, ProcMemoryExceeded, ProcTimeout
+from anyverbatim.sysmem import Footprint
 
 MIB = 1 << 20
 
@@ -132,8 +132,8 @@ def test_timeout_kills_the_child(script: Path, tmp_path: Path) -> None:
 
 
 def test_missing_binary_is_a_dependency_error() -> None:
-    with pytest.raises(DependencyError, match="ytverbatim-no-such-binary"):
-        proc.run(["ytverbatim-no-such-binary"], timeout_s=5)
+    with pytest.raises(DependencyError, match="anyverbatim-no-such-binary"):
+        proc.run(["anyverbatim-no-such-binary"], timeout_s=5)
 
 
 def test_non_executable_file_is_a_dependency_error(tmp_path: Path) -> None:
@@ -405,8 +405,8 @@ def test_a_watch_that_cannot_read_memory_stops_the_child_and_fails_loud(script: 
 def test_background_reports_a_missing_binary(tmp_path: Path) -> None:
     watch = proc.MemoryWatch(1 << 40, available_percent=_plenty)
     with (
-        pytest.raises(DependencyError, match="ytverbatim-no-such-binary"),
-        proc.background(["ytverbatim-no-such-binary"], log=tmp_path / "log", memory_watch=watch),
+        pytest.raises(DependencyError, match="anyverbatim-no-such-binary"),
+        proc.background(["anyverbatim-no-such-binary"], log=tmp_path / "log", memory_watch=watch),
     ):
         pass
 

@@ -18,9 +18,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ytverbatim import atomic
-from ytverbatim.errors import LLMOutputError
-from ytverbatim.llm import LLMClient, LLMRequest, LLMResponse, complete_json
+from anyverbatim import atomic
+from anyverbatim.errors import LLMOutputError
+from anyverbatim.llm import LLMClient, LLMRequest, LLMResponse, complete_json
 
 log = logging.getLogger(__name__)
 

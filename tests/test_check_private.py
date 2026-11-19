@@ -32,7 +32,7 @@ def test_flags_private_lines(line: str) -> None:
         "/Users/you/project",
         "/Users/example/project",
         "/home/user/.config",
-        "see ~/.local/share/ytverbatim/eval",
+        "see ~/.local/share/anyverbatim/eval",
         "The SAPISID cookie is never logged",
         "MY_SSID=1",
         "ordinary prose",

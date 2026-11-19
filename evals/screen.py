@@ -10,6 +10,9 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, ConfigDict
 
+from anyverbatim.asr import registry
+from anyverbatim.asr.models import ChunkHypothesis
+from anyverbatim.errors import ConfigError
 from evals.consensus import Dispute, TimedUnit, find_disputes, is_acronym, window_units
 from evals.judge import JudgeItem, Verdict, make_item
 from evals.manifest import Manifest, Video
@@ -36,9 +39,6 @@ from evals.store import (
     row_text,
     rows_by_file,
 )
-from ytverbatim.asr import registry
-from ytverbatim.asr.models import ChunkHypothesis
-from ytverbatim.errors import ConfigError
 
 DISPUTE_VIEW: View = "raw"
 CONTROLS = ("w-prod", "w-vad")

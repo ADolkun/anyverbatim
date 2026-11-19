@@ -45,18 +45,18 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from evals.recordings_scoring import Interval, PairedResult, WindowScore, words_from_rows
-from ytverbatim.asr.guard import triggers
-from ytverbatim.asr.models import ChunkHypothesis
-from ytverbatim.asr.protocol import RawChunk
-from ytverbatim.asr.quality import (
+from anyverbatim.asr.guard import triggers
+from anyverbatim.asr.models import ChunkHypothesis
+from anyverbatim.asr.protocol import RawChunk
+from anyverbatim.asr.quality import (
     Unit,
     cross_segment_repetitions,
     is_cjk_text,
     normalize_for_repetition,
     repetition_spans,
 )
-from ytverbatim.contract.models import Word
+from anyverbatim.contract.models import Word
+from evals.recordings_scoring import Interval, PairedResult, WindowScore, words_from_rows
 
 WINDOW_S = 30.0
 MERGE_GAP_S = 5.0

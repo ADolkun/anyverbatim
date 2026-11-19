@@ -3,9 +3,9 @@ from collections.abc import Sequence
 
 import pytest
 
-from ytverbatim.contract import Word
-from ytverbatim.text import segment as seg
-from ytverbatim.text.segment import Token
+from anyverbatim.contract import Word
+from anyverbatim.text import segment as seg
+from anyverbatim.text.segment import Token
 
 
 def chunk_level(text: str, language: str, *, seconds: float | None = None) -> list[str]:

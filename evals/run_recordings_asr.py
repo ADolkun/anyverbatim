@@ -27,6 +27,11 @@ from typing import Any
 
 import click
 
+from anyverbatim import config
+from anyverbatim.asr import registry
+from anyverbatim.asr.models import ChunkHypothesis, RunMetrics, WorkerRequest
+from anyverbatim.asr.runner import WorkerResult, memory_cap_bytes, run_worker
+from anyverbatim.errors import AnyverbatimError, ConfigError
 from evals.normalize import View
 from evals.recordings_corpus import (
     ALIMEETING,
@@ -63,11 +68,6 @@ from evals.recordings_scoring import (
     write_words_for,
 )
 from evals.store import Layout
-from ytverbatim import config
-from ytverbatim.asr import registry
-from ytverbatim.asr.models import ChunkHypothesis, RunMetrics, WorkerRequest
-from ytverbatim.asr.runner import WorkerResult, memory_cap_bytes, run_worker
-from ytverbatim.errors import ConfigError, YtverbatimError
 
 E2_HYPOTHESES = ("w-prod", "w-vad", "w-vad-lid", "w-runs-lid")
 UTTERANCE_BATCH = 50
@@ -203,7 +203,7 @@ _view_option = click.option(
 
 @click.group()
 def main() -> None:
-    """Language policy and meeting ASR eval (data under $YTVERBATIM_EVAL_DIR/recordings)."""
+    """Language policy and meeting ASR eval (data under $ANYVERBATIM_EVAL_DIR/recordings)."""
 
 
 @main.command()
@@ -372,7 +372,7 @@ def rescore(hypothesis: str, corpus: str, recordings: str, before: Path, view: V
 def run_cli() -> None:
     try:
         main(standalone_mode=False)
-    except YtverbatimError as exc:
+    except AnyverbatimError as exc:
         raise SystemExit(f"error: {exc}") from None
     except click.exceptions.Abort:
         raise SystemExit(130) from None

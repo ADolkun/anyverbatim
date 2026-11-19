@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim import paths, proc
-from ytverbatim.errors import ConfigError, DependencyError, LLMOutputError, LLMUnavailableError, ProcTimeout
-from ytverbatim.llm import claude_cli
-from ytverbatim.llm.claude_cli import ClaudeCLIClient
-from ytverbatim.llm.protocol import LLMRequest, Usage
+from anyverbatim import paths, proc
+from anyverbatim.errors import ConfigError, DependencyError, LLMOutputError, LLMUnavailableError, ProcTimeout
+from anyverbatim.llm import claude_cli
+from anyverbatim.llm.claude_cli import ClaudeCLIClient
+from anyverbatim.llm.protocol import LLMRequest, Usage
 
 FAKE_CLAUDE = "/opt/fake/bin/claude"
 SYSTEM_FLAG = "--system-prompt-file="

@@ -5,14 +5,14 @@ from pathlib import Path
 
 import pytest
 
-import ytverbatim
-from ytverbatim import config, paths
-from ytverbatim.acquire import session
-from ytverbatim.auth import snapshot
-from ytverbatim.auth.cooldown import read_cooldown, start_cooldown, utcnow
-from ytverbatim.auth.state import AuthState
-from ytverbatim.errors import AuthError, BatchStopError, YtDlpError
-from ytverbatim.ytdlp.types import Signal
+import anyverbatim
+from anyverbatim import config, paths
+from anyverbatim.acquire import session
+from anyverbatim.auth import snapshot
+from anyverbatim.auth.cooldown import read_cooldown, start_cooldown, utcnow
+from anyverbatim.auth.state import AuthState
+from anyverbatim.errors import AuthError, BatchStopError, YtDlpError
+from anyverbatim.ytdlp.types import Signal
 
 LIST_URL = "https://www.youtube.com/playlist?list=PLsynthetic"
 MEMBERS_URL = "https://www.youtube.com/playlist?list=UUMOxxxxxxxxxxxxxxxxxxxxxx"
@@ -32,8 +32,8 @@ def options(**auth: object) -> config.Options:
 
 
 def test_it_is_part_of_the_library_surface() -> None:
-    assert ytverbatim.expand is session.expand
-    assert "expand" in ytverbatim.__all__
+    assert anyverbatim.expand is session.expand
+    assert "expand" in anyverbatim.__all__
 
 
 def test_a_video_costs_no_request_even_during_a_cooldown(session_kit, yt) -> None:

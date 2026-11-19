@@ -1,6 +1,6 @@
 import pytest
 
-from ytverbatim.ids import (
+from anyverbatim.ids import (
     RefKind,
     YouTubeRef,
     extract_video_id,

@@ -1,9 +1,9 @@
 """Correction-LLM eval runs: one shared base per file, then one run of the production correction per candidate.
 
-The base is the input hypothesis after the same normalize and punctuate stages `ytverbatim run` applies. Every
+The base is the input hypothesis after the same normalize and punctuate stages `anyverbatim run` applies. Every
 candidate corrects exactly that text through `correct_segments`, with the context and word confidences the pipeline
 would pass. Outputs record the versions and the base they were made from, and a mismatch refuses instead of mixing
-configurations. Everything is written under ``$YTVERBATIM_EVAL_DIR/correction``.
+configurations. Everything is written under ``$ANYVERBATIM_EVAL_DIR/correction``.
 """
 
 import contextlib
@@ -24,6 +24,29 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rapidfuzz.distance import Levenshtein
 
+from anyverbatim import config, pipeline, proc, stages
+from anyverbatim.acquire.metadata import VideoMetadata, trim_info
+from anyverbatim.asr import registry
+from anyverbatim.asr.models import ChunkHypothesis
+from anyverbatim.contract.models import Edit, Flag, LLMUsage, Word
+from anyverbatim.errors import (
+    ConfigError,
+    DependencyError,
+    EngineError,
+    EngineMemoryError,
+    LLMOutputError,
+    ProcMemoryExceeded,
+)
+from anyverbatim.llm import OpenAICompatClient, openai_compat
+from anyverbatim.llm.protocol import LLMClient, LLMRequest, LLMResponse, Readiness, Usage
+from anyverbatim.mlx_worker import default_memory_cap_bytes, memory_fix, mlx_lock
+from anyverbatim.stages import Stretch
+from anyverbatim.store import digest
+from anyverbatim.text import clean, guards, numbers
+from anyverbatim.text import correct as correct_module
+from anyverbatim.text import punctuate as punctuate_module
+from anyverbatim.text.correct import Rejection, correct_segments
+from anyverbatim.text.punctuate import needs_punctuation, punctuate
 from evals import disk
 from evals.consensus import TimedUnit
 from evals.manifest import Manifest, Video
@@ -42,29 +65,6 @@ from evals.store import (
     videos,
     write_json,
 )
-from ytverbatim import config, pipeline, proc, stages
-from ytverbatim.acquire.metadata import VideoMetadata, trim_info
-from ytverbatim.asr import registry
-from ytverbatim.asr.models import ChunkHypothesis
-from ytverbatim.contract.models import Edit, Flag, LLMUsage, Word
-from ytverbatim.errors import (
-    ConfigError,
-    DependencyError,
-    EngineError,
-    EngineMemoryError,
-    LLMOutputError,
-    ProcMemoryExceeded,
-)
-from ytverbatim.llm import OpenAICompatClient, openai_compat
-from ytverbatim.llm.protocol import LLMClient, LLMRequest, LLMResponse, Readiness, Usage
-from ytverbatim.mlx_worker import default_memory_cap_bytes, memory_fix, mlx_lock
-from ytverbatim.stages import Stretch
-from ytverbatim.store import digest
-from ytverbatim.text import clean, guards, numbers
-from ytverbatim.text import correct as correct_module
-from ytverbatim.text import punctuate as punctuate_module
-from ytverbatim.text.correct import Rejection, correct_segments
-from ytverbatim.text.punctuate import needs_punctuation, punctuate
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CALLS_FILE = "calls.jsonl"
@@ -108,7 +108,7 @@ class Candidate:
 
     By default a Claude CLI model id. With ``revision``, a Hugging Face repo served locally. With ``effort``, a model
     labelled ``model`` that an external client factory serves at that reasoning effort, or, with ``provider`` too, a
-    model that provider of ytverbatim's own serves at that effort.
+    model that provider of anyverbatim's own serves at that effort.
     """
 
     id: str

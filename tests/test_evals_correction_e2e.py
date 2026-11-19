@@ -11,14 +11,14 @@ import pytest
 from click.testing import CliRunner, Result
 from evals_fixture import EN, ZH, FakeJudge, chunk_rows, make_eval, whole_file_rows
 
+from anyverbatim.errors import ConfigError
+from anyverbatim.llm import claude_cli
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Readiness, Usage
 from evals import correction, correction_metrics, listen, run_correction
 from evals.correction import CANDIDATES, Failure
 from evals.correction_report import SCREEN_FILE, CorrectionScreen
 from evals.session import KEY_FILE, ShownSpan, load_key, load_shown
 from evals.store import REFERENCE, Layout, write_json, write_rows
-from ytverbatim.errors import ConfigError
-from ytverbatim.llm import claude_cli
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Readiness, Usage
 
 HYPOTHESIS = "w-prod"
 ZH_TEXTS = ("我们看这个公司的适应率", "然后卖出了一百股", "看NVDA的财报", "大家好")
@@ -59,7 +59,7 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_STATE_HOME", str(home / "state"))
-    monkeypatch.setenv("YTVERBATIM_HOME", str(home / "share"))
+    monkeypatch.setenv("ANYVERBATIM_HOME", str(home / "share"))
 
 
 def segments(request: LLMRequest) -> list[dict[str, Any]]:

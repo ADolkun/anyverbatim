@@ -5,11 +5,11 @@ from typing import Any
 import numpy as np
 import pytest
 
-from ytverbatim.asr import vad
-from ytverbatim.asr.audio import Audio
-from ytverbatim.asr.chunks import Region
-from ytverbatim.asr.vad import SILERO_REPO, SILERO_REVISION, VadParams, speech_regions
-from ytverbatim.errors import DependencyError
+from anyverbatim.asr import vad
+from anyverbatim.asr.audio import Audio
+from anyverbatim.asr.chunks import Region
+from anyverbatim.asr.vad import SILERO_REPO, SILERO_REVISION, VadParams, speech_regions
+from anyverbatim.errors import DependencyError
 
 
 class FakeModel:
@@ -75,5 +75,5 @@ def test_revision_is_a_full_commit_sha() -> None:
 def test_missing_extra_names_the_install(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "mlx_audio", None)
     monkeypatch.setitem(sys.modules, "mlx_audio.vad", None)
-    with pytest.raises(DependencyError, match=r"install ytverbatim\[asr\]"):
+    with pytest.raises(DependencyError, match=r"install anyverbatim\[asr\]"):
         speech_regions(Audio(np.zeros(16_000, dtype=np.int16)))

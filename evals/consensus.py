@@ -10,8 +10,8 @@ from dataclasses import dataclass
 
 from rapidfuzz.distance import Levenshtein
 
+from anyverbatim.text.numbers import quantity_tokens
 from evals.normalize import Language, View, english_normalizer, join_units, to_units
-from ytverbatim.text.numbers import quantity_tokens
 
 CONTEXT_UNITS: Mapping[Language, int] = {"zh": 40, "en": 12}
 MERGE_GAP_UNITS = 1

@@ -1,6 +1,6 @@
 import pytest
 
-from ytverbatim.asr.quality import (
+from anyverbatim.asr.quality import (
     Anomaly,
     NonlexicalRun,
     Unit,
@@ -15,7 +15,7 @@ from ytverbatim.asr.quality import (
     repetition_spans,
     word_timing_collapses,
 )
-from ytverbatim.contract.models import Word
+from anyverbatim.contract.models import Word
 
 
 def record(start: float, end: float, text: str) -> Unit:

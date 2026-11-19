@@ -23,16 +23,16 @@ from test_pipeline_files import (  # noqa: F401
 )
 from voicememos_fakes import Row, make_library
 
-from ytverbatim import pipeline
-from ytverbatim.acquire import local, voicememos
-from ytverbatim.acquire.voicememos import MemoCache, select
-from ytverbatim.asr import runner as asr_runner
-from ytverbatim.asr.models import WorkerRequest
-from ytverbatim.asr.runner import WorkerResult
-from ytverbatim.cli import main
-from ytverbatim.contract import RecordingSource, load_document
-from ytverbatim.errors import DependencyError, MediaValidationError
-from ytverbatim.store import lock as video_lock
+from anyverbatim import pipeline
+from anyverbatim.acquire import local, voicememos
+from anyverbatim.acquire.voicememos import MemoCache, select
+from anyverbatim.asr import runner as asr_runner
+from anyverbatim.asr.models import WorkerRequest
+from anyverbatim.asr.runner import WorkerResult
+from anyverbatim.cli import main
+from anyverbatim.contract import RecordingSource, load_document
+from anyverbatim.errors import DependencyError, MediaValidationError
+from anyverbatim.store import lock as video_lock
 
 SECRET = "Quarterly layoffs"
 NEWEST, MIDDLE, OLDEST = 1_760_000_000, 1_750_000_000, 1_740_000_000
@@ -229,7 +229,7 @@ def test_an_unknown_or_empty_prefix_is_refused_with_a_fix(
     library(tmp_path, monkeypatch, [memo_row("ABCD1111", "alpha")], media)
     unknown = cli(session_kit, "memos:zzzz")
     assert unknown.exit_code == 1 and "no Voice Memo has an id starting with 'zzzz'" in unknown.output
-    assert "Fix: `ytverbatim memos --all` lists every memo with its id" in unknown.output
+    assert "Fix: `anyverbatim memos --all` lists every memo with its id" in unknown.output
     empty = cli(session_kit, "memos:")
     assert empty.exit_code == 1 and "memos: needs new, latest, all" in empty.output and "Fix:" in empty.output
     assert not worker.calls
@@ -481,7 +481,7 @@ def test_no_title_file_name_memo_title_or_speaker_name_reaches_the_llm_but_the_g
     # "we met 5 people today" is one voice, "and then we left" another.
     diarizer.turns = [(0, 4, 0), (5, 8, 3)]
     # A second opinion that hears "50" disputes the "5", so a numeric verdict is asked for too.
-    config_file = session_kit.home / ".config" / "ytverbatim" / "config.toml"
+    config_file = session_kit.home / ".config" / "anyverbatim" / "config.toml"
     config_file.write_text(config_file.read_text() + '[text]\nnumeric_second_opinion = "w-vad"\n')
     monkeypatch.setattr(asr_runner, "run_worker", SecondOpinionWorker())
     llm = FakeLLM()

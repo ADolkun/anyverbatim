@@ -6,8 +6,8 @@ import sys
 
 import pytest
 
-from ytverbatim import sysmem
-from ytverbatim.errors import DependencyError
+from anyverbatim import sysmem
+from anyverbatim.errors import DependencyError
 
 
 def test_footprint_counts_pages_the_process_touched() -> None:

@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim.auth import chromium, snapshot, source
-from ytverbatim.auth.snapshot import Snapshot, SnapshotSummary
-from ytverbatim.auth.source import CookieSource
-from ytverbatim.errors import AuthError, YtDlpError
-from ytverbatim.ytdlp import jsruntime, version
-from ytverbatim.ytdlp.types import Signal, YtDlpResult
+from anyverbatim.auth import chromium, snapshot, source
+from anyverbatim.auth.snapshot import Snapshot, SnapshotSummary
+from anyverbatim.auth.source import CookieSource
+from anyverbatim.errors import AuthError, YtDlpError
+from anyverbatim.ytdlp import jsruntime, version
+from anyverbatim.ytdlp.types import Signal, YtDlpResult
 
 PROFILES = {
     "Default": {"name": "Person 1", "user_name": "alice@example.com"},
@@ -75,7 +75,7 @@ class Kit:
 
 @pytest.fixture(autouse=True)
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "YTVERBATIM_HOME", source.ENV_VAR, jsruntime.ENV_OVERRIDE):
+    for name in ("XDG_CONFIG_HOME", "XDG_STATE_HOME", "ANYVERBATIM_HOME", source.ENV_VAR, jsruntime.ENV_OVERRIDE):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     root = chromium.browser_root("chrome")

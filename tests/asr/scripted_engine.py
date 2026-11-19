@@ -6,8 +6,8 @@ import numpy as np
 from numpy.typing import NDArray
 from pydantic import JsonValue
 
-from ytverbatim.asr.protocol import AsrContext, EngineSpec, RawChunk, Window
-from ytverbatim.contract.models import Word
+from anyverbatim.asr.protocol import AsrContext, EngineSpec, RawChunk, Window
+from anyverbatim.contract.models import Word
 
 LOOP_TEXT = " ".join(["repeat risk"] * 10)
 

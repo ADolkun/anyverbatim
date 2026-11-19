@@ -7,6 +7,8 @@ import pytest
 from pydantic import ValidationError
 from recordings_fixture import make_owner, spoken
 
+from anyverbatim.contract.models import Word
+from anyverbatim.errors import ConfigError
 from evals import disputes
 from evals.diarization import Turn
 from evals.recordings_corpus import load_items
@@ -24,8 +26,6 @@ from evals.run_diarization import (
     score_recording,
     summarize,
 )
-from ytverbatim.contract.models import Word
-from ytverbatim.errors import ConfigError
 
 
 class FakeBackend:

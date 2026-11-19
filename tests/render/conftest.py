@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 
-from ytverbatim.contract import (
+from anyverbatim.contract import (
     Access,
     Chapter,
     ContextDocument,
@@ -155,7 +155,7 @@ def make_doc() -> Callable[..., ContextDocument]:
         return ContextDocument.model_validate(
             {
                 "schema_version": "2.0",
-                "generator": Generator(name="ytverbatim", version="0.0.1"),
+                "generator": Generator(name="anyverbatim", version="0.0.1"),
                 "created_at": "2026-01-02T03:04:05+00:00",
                 "source": described,
                 "transcript": Transcript.model_validate(

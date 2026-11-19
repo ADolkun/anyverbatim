@@ -1,7 +1,7 @@
 [project]
-name = "ytverbatim"
+name = "anyverbatim"
 version = "0.1.1"
-description = "Verified, timestamped YouTube transcripts for LLM context, with local ASR on Apple Silicon."
+description = "Verified, timestamped transcripts for LLM context from YouTube videos and your own recordings, with local ASR on Apple Silicon."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -36,11 +36,11 @@ asr = ["mlx-audio[stt]==0.6.5"]
 whisper = ["mlx-whisper==0.4.3"]
 
 [project.urls]
-Homepage = "https://github.com/ADolkun/ytverbatim"
-Repository = "https://github.com/ADolkun/ytverbatim"
+Homepage = "https://github.com/ADolkun/anyverbatim"
+Repository = "https://github.com/ADolkun/anyverbatim"
 
 [project.scripts]
-ytverbatim = "ytverbatim.cli:main"
+anyverbatim = "anyverbatim.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.13.7,<0.14.0"]
@@ -110,7 +110,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["ytverbatim"]
+known-first-party = ["anyverbatim"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "pep257"

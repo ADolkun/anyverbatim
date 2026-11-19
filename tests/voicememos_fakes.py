@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from ytverbatim.acquire import voicememos
+from anyverbatim.acquire import voicememos
 
 APPLE_EPOCH = 978307200
 ALL_COLUMNS = (

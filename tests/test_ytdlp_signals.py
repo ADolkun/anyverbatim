@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim.ytdlp.signals import LineKind, classify, js_challenge_failed, line_kind
-from ytverbatim.ytdlp.types import Signal
+from anyverbatim.ytdlp.signals import LineKind, classify, js_challenge_failed, line_kind
+from anyverbatim.ytdlp.types import Signal
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ytdlp"
 VID = "BaW_jenozKc"

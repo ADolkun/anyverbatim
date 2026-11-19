@@ -7,10 +7,10 @@ import pytest
 from chatgpt_fakes import EMAIL, store_account
 from click.testing import CliRunner
 
-from ytverbatim.cli import main
-from ytverbatim.cli import session as cli_session
-from ytverbatim.config import LLMOptions
-from ytverbatim.llm import chatgpt_auth
+from anyverbatim.cli import main
+from anyverbatim.cli import session as cli_session
+from anyverbatim.config import LLMOptions
+from anyverbatim.llm import chatgpt_auth
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +48,7 @@ def test_login_when_already_signed_in_opens_nothing(monkeypatch: pytest.MonkeyPa
     result = CliRunner().invoke(main, ["login"])
     assert result.exit_code == 0, result.output
     assert result.output.startswith(f"Already signed in as {EMAIL} (")
-    assert "`ytverbatim login --switch` to use another account" in result.output
+    assert "`anyverbatim login --switch` to use another account" in result.output
     assert "access-1" not in result.output
 
 

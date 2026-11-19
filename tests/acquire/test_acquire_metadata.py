@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from ytverbatim.acquire import metadata
-from ytverbatim.acquire.creator_note import CreatorNote
-from ytverbatim.errors import UnavailableError, YtDlpError
-from ytverbatim.ytdlp.types import Signal
+from anyverbatim.acquire import metadata
+from anyverbatim.acquire.creator_note import CreatorNote
+from anyverbatim.errors import UnavailableError, YtDlpError
+from anyverbatim.ytdlp.types import Signal
 
 VIDEO_ID = "aaaaaaaaaaa"
 

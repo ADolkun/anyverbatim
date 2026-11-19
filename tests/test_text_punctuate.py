@@ -6,11 +6,11 @@ from typing import Any
 
 import pytest
 
-from ytverbatim.contract.models import LLMUsage
-from ytverbatim.errors import LLMOutputError
-from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
-from ytverbatim.text import punctuate as punctuate_module
-from ytverbatim.text.punctuate import PunctuationResult, guard_violation, needs_punctuation, punctuate
+from anyverbatim.contract.models import LLMUsage
+from anyverbatim.errors import LLMOutputError
+from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.text import punctuate as punctuate_module
+from anyverbatim.text.punctuate import PunctuationResult, guard_violation, needs_punctuation, punctuate
 
 CLIENT_ID = "fake:punctuator"
 ZH_BARE = "大家好欢迎回来今天我们聊聊个股的估值问题" * 5

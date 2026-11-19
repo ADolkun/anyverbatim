@@ -15,9 +15,9 @@ from typing import Literal
 
 import jiwer
 
+from anyverbatim.text.numbers import QKind, QToken, quantity_tokens
 from evals.consensus import TimedUnit
 from evals.normalize import Language, View, canonical, english_normalizer, normalize, script_counts, to_units
-from ytverbatim.text.numbers import QKind, QToken, quantity_tokens
 
 Interval = tuple[float, float]
 

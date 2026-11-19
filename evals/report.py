@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 
 from pydantic import BaseModel, ConfigDict
 
+from anyverbatim.errors import ConfigError
 from evals.listen import LoggedDecision, read_decisions
 from evals.manifest import Manifest
 from evals.metrics import weighted_wilson
@@ -16,7 +17,6 @@ from evals.normalize import Language
 from evals.screen import LANGUAGES, Quality, Rate, ScreenResult, screen_table
 from evals.session import KEY_FILE, KeyEntry, SessionKey, load_key, load_shown
 from evals.store import REFERENCE, Layout, rows_by_file
-from ytverbatim.errors import ConfigError
 
 SCREEN_FILE = "screen.json"
 REPORT_JSON = "report.json"

@@ -7,11 +7,11 @@ from email.message import Message
 import pytest
 from chatgpt_fakes import FakeOpener, FakeResponse, Route, http_error, json_response
 
-from ytverbatim.config import LLMOptions
-from ytverbatim.errors import ConfigError
-from ytverbatim.llm import ChatGPTClient, chatgpt, chatgpt_auth, client_from_options
-from ytverbatim.llm.chatgpt_models import MODELS_URL, is_alias, resolve
-from ytverbatim.llm.protocol import LLMRequest
+from anyverbatim.config import LLMOptions
+from anyverbatim.errors import ConfigError
+from anyverbatim.llm import ChatGPTClient, chatgpt, chatgpt_auth, client_from_options
+from anyverbatim.llm.chatgpt_models import MODELS_URL, is_alias, resolve
+from anyverbatim.llm.protocol import LLMRequest
 
 SECRET = "base-instructions-that-must-never-be-printed"
 
@@ -155,7 +155,7 @@ def test_a_rejected_sign_in_says_to_log_in_or_pin() -> None:
     opener = FakeOpener({f"GET {MODELS_URL}": http_error(401, {"error": "invalid_token"})})
     with pytest.raises(ConfigError, match="rejected the ChatGPT sign-in") as raised:
         resolve("gpt-sol", opener=opener)
-    assert raised.value.fix.startswith("run `ytverbatim login`, or pin a version")
+    assert raised.value.fix.startswith("run `anyverbatim login`, or pin a version")
 
 
 def test_a_lapsed_sign_in_is_a_login_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,7 +165,7 @@ def test_a_lapsed_sign_in_is_a_login_error(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(chatgpt_auth, "access_token", access_token)
     with pytest.raises(ConfigError, match="not signed in to ChatGPT") as raised:
         resolve("gpt-sol", opener=FakeOpener())
-    assert raised.value.fix.startswith("run `ytverbatim login`")
+    assert raised.value.fix.startswith("run `anyverbatim login`")
 
 
 def test_an_unauthorized_catalog_request_signs_in_again_once_when_allowed(signed_in: list[str]) -> None:
