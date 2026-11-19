@@ -18,7 +18,7 @@ VERSION = "numbers-v3"
 
 QKind = Literal["number", "currency", "percent", "ticker", "cjk_quantity"]
 
-_NUMERALS = "〇零一二两兩三四五六七八九十百千万萬亿億廿卅"
+NUMERALS = "〇零一二两兩三四五六七八九十百千万萬亿億廿卅"
 
 # Longest alternatives first so 美元 wins over 元 and 个月 over 个.
 _CURRENCY_WORDS = (
@@ -50,10 +50,10 @@ _CURRENCY_WORDS = (
 # Units that state a value rather than count things: 三个百分点 is a change of three points, not three objects.
 _VALUE_UNITS = ("个百分点", "个基点", "基点", "倍", "成")
 _CALENDAR_UNITS = ("月", "日", "号", "点钟", "点")
-_QUARTER_NAMES = ("季度", "季")
+QUARTER_NAMES = ("季度", "季")
 # 分 (十分 "very", scores), 部 (三部曲), 手 (二手), 线 (二线城市), 方 (六方会谈), 届, 大 and 国 are left out on purpose:
 # after a numeral they are more often part of a word or a name than a count.
-_COUNT_CLASSIFIERS = (
+COUNT_CLASSIFIERS = (
     "个月",
     "个",
     "股",
@@ -108,7 +108,7 @@ _COUNT_CLASSIFIERS = (
     "升",
     "度",
 )
-_MEASURE_WORDS = (*_CURRENCY_WORDS, *_VALUE_UNITS, *_CALENDAR_UNITS, *_QUARTER_NAMES, *_COUNT_CLASSIFIERS)
+_MEASURE_WORDS = (*_CURRENCY_WORDS, *_VALUE_UNITS, *_CALENDAR_UNITS, *QUARTER_NAMES, *COUNT_CLASSIFIERS)
 
 
 # Words whose numeral characters do not state a quantity. They are matched before numeral runs, so a
@@ -252,33 +252,41 @@ _NUMBER = rf"(?:{_DIGIT}+(?:,{_DIGIT}{{3}}(?!{_DIGIT}))*(?:\.{_DIGIT}+)?|\.{_DIG
 _NO_ALNUM_BEFORE = r"(?<![A-Za-z0-9])"
 _NO_ALNUM_AFTER = r"(?![A-Za-z0-9])"
 
-_RUN = rf"(?:(?!百分之)[{_NUMERALS}])"
+_RUN = rf"(?:(?!百分之)[{NUMERALS}])"
 
 _TOKEN = re.compile(
     "|".join(
         (
             rf"(?P<idiom>{'|'.join(_IDIOM_PATTERNS)}|{_alternation(_IDIOMS)})",
             # 百分之 on its own is a percent; 三分之一 and 千分之五 are fractions.
-            rf"(?P<fraction>(?!百分之)(?P<denominator>[{_NUMERALS}]+)分之(?P<numerator>[{_NUMERALS}]+))",
+            rf"(?P<fraction>(?!百分之)(?P<denominator>[{NUMERALS}]+)分之(?P<numerator>[{NUMERALS}]+))",
             # A percent takes no measure word: the 支 of 百分之六十支持 starts the next word.
             # A run never takes the 百 of a following 百分之: 百分之五百分之五 is two percents.
-            rf"(?P<cjk>(?P<pct>百分之)?(?P<ord>第)?(?P<run>{_RUN}+(?:点{_RUN}+)?)"
-            rf"(?(pct)|(?P<unit>{_alternation((*_MEASURE_WORDS, '%'))})?))",
+            (
+                rf"(?P<cjk>(?P<pct>百分之)?(?P<ord>第)?(?P<run>{_RUN}+(?:点{_RUN}+)?)"
+                rf"(?(pct)|(?P<unit>{_alternation((*_MEASURE_WORDS, '%'))})?))"
+            ),
             rf"(?P<cashtag>\$[A-Z]{{1,6}}(?:\.[A-Z]{{1,2}})?{_NO_ALNUM_AFTER})",
-            rf"(?P<exchange>(?i:\b(?:NYSE|NASDAQ|AMEX|NYSEARCA|NYSEAMERICAN|BATS|OTC|OTCQX|OTCQB))\s*:\s*"
-            rf"[A-Z]{{1,5}}(?:\.[A-Z])?{_NO_ALNUM_AFTER})",
+            (
+                rf"(?P<exchange>(?i:\b(?:NYSE|NASDAQ|AMEX|NYSEARCA|NYSEAMERICAN|BATS|OTC|OTCQX|OTCQB))\s*:\s*"
+                rf"[A-Z]{{1,5}}(?:\.[A-Z])?{_NO_ALNUM_AFTER})"
+            ),
             r"(?P<share_class>(?<![A-Za-z0-9])[A-Z](?=股))",
             rf"(?P<numeric_ticker>{_NO_ALNUM_BEFORE}\d{{2,}}\.[A-Z]{{2,}}{_NO_ALNUM_AFTER})",
             rf"(?P<symbol>{_NO_ALNUM_BEFORE}[A-Z][A-Z0-9]+(?:\.[A-Z]+)?{_NO_ALNUM_AFTER})",
             # A date (2024/10/01) is not a fraction, so neither side of the slash may continue it.
             rf"(?P<digit_fraction>(?<![A-Za-z0-9０-９/])(?P<over>{_DIGIT}+)/(?P<under>{_DIGIT}+)(?![A-Za-z0-9０-９/]))",
-            rf"(?P<number>{_NO_ALNUM_BEFORE}(?P<sign>[-+−])?(?P<currency>[$¥€£])?(?P<sign2>[-+−])?"
-            rf"(?P<digits>{_NUMBER})"
-            r"(?P<en_magnitude>\s?(?i:thousand|million|billion|trillion)\b|(?:BN|MN|TN|MM|bn|mn|tn|[Kk]|M|B|T)(?![A-Za-z0-9]))?"
-            r"(?:(?P<percent> ?[%％]|\s?(?i:percent)\b)|(?P<dollars>\s?(?i:dollars?)\b)"
-            rf"|(?P<magnitude>[百千][万亿萬億]*|[万亿萬億]+)?(?P<measure>{_alternation(_MEASURE_WORDS)})?))",
-            rf"(?P<spelled>(?<![A-Za-z0-9-])(?i:{_EN_NUMBER_WORD})(?:(?:[ -]|\s+and\s+)(?i:{_EN_NUMBER_WORD}))*"
-            r"(?![A-Za-z0-9-]))(?P<spelled_unit>\s+(?i:percent|dollars?)\b)?",
+            (
+                rf"(?P<number>{_NO_ALNUM_BEFORE}(?P<sign>[-+−])?(?P<currency>[$¥€£])?(?P<sign2>[-+−])?"
+                rf"(?P<digits>{_NUMBER})"
+                r"(?P<en_magnitude>\s?(?i:thousand|million|billion|trillion)\b|(?:BN|MN|TN|MM|bn|mn|tn|[Kk]|M|B|T)(?![A-Za-z0-9]))?"
+                r"(?:(?P<percent> ?[%％]|\s?(?i:percent)\b)|(?P<dollars>\s?(?i:dollars?)\b)"
+                rf"|(?P<magnitude>[百千][万亿萬億]*|[万亿萬億]+)?(?P<measure>{_alternation(_MEASURE_WORDS)})?))"
+            ),
+            (
+                rf"(?P<spelled>(?<![A-Za-z0-9-])(?i:{_EN_NUMBER_WORD})(?:(?:[ -]|\s+and\s+)(?i:{_EN_NUMBER_WORD}))*"
+                r"(?![A-Za-z0-9-]))(?P<spelled_unit>\s+(?i:percent|dollars?)\b)?"
+            ),
         )
     )
 )
@@ -320,7 +328,7 @@ _ZERO_MINUTE = re.compile("[零〇][一二三四五六七八九]")
 # Words that make X点 a clock time.
 TIMES_OF_DAY = ("上午", "下午", "晚上", "早上", "凌晨", "中午", "傍晚", "夜里")
 # A lone numeral joined to a figure by one of these is that range's other end: the 三 of 三到五个.
-_RANGE_LINKS = frozenset("到至～~-—、")
+RANGE_LINKS = frozenset("到至～~-—、")
 _LINKABLE = frozenset("一二两三四五六七八九十")
 # Only these make a range whose start shares its end's 万 or 亿; 、 lists figures as often as it spans them.
 _SCALE_LINKS = frozenset("到至～~-—")
@@ -330,7 +338,7 @@ _LEAD_AND_PLACE = re.compile("[1-9一二两三四五六七八九](?:[百千]|000
 _FRACTION = re.compile(rf"([{''.join(_DIGIT_VALUE)}]+)([万亿]*)")
 
 
-def _magnitude_exponent(magnitudes: str) -> int:
+def magnitude_exponent(magnitudes: str) -> int:
     return sum(_MAGNITUDE[ch] for ch in magnitudes)
 
 
@@ -392,14 +400,14 @@ def _integer_value(integer: str) -> str | None:
         # cn2an's speaking mode has no unit below 亿, so the trailing digit of 一亿五 is placed here: 千万, or 千亿
         # after 万亿.
         head = _cn2an_value(shorthand["head"])
-        lower_unit = Decimal(10) ** (_magnitude_exponent(shorthand["unit"]) - 1)
+        lower_unit = Decimal(10) ** (magnitude_exponent(shorthand["unit"]) - 1)
         value = None if head is None else head + int(_DIGIT_VALUE[shorthand["digit"]]) * lower_unit
     elif group := _YI_GROUP.fullmatch(integer):
         # 零 inside the group (一亿五千零三) leaves its place uncertain.
         if _ZEROS & set(group["group"]):
             return None
         head, part = _cn2an_value(group["head"]), _integer_value(group["group"])
-        place = Decimal(10) ** (_magnitude_exponent(group["unit"]) - _MAGNITUDE["万"])
+        place = Decimal(10) ** (magnitude_exponent(group["unit"]) - _MAGNITUDE["万"])
         value = None if head is None or part is None or Decimal(part) >= place else head + Decimal(part) * place
     else:
         value = _cn2an_value(integer)
@@ -417,7 +425,7 @@ def _cjk_value(integer: str, fraction: str) -> str | None:
     if parts is None:
         return None
     decimals = "".join(_DIGIT_VALUE[ch] for ch in parts.group(1))
-    scale = _magnitude_exponent(parts.group(2))
+    scale = magnitude_exponent(parts.group(2))
     return _plain(Decimal(f"{whole}.{decimals}") * Decimal(10) ** scale)
 
 
@@ -426,7 +434,7 @@ def _top_magnitude(numerals: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class _Quantity:
+class Quantity:
     """A token with the parts of it that a numeral rewrite needs.
 
     ``prefix`` is 百分之 or 第, ``run`` the span of the numeral or digit run (a digit token's magnitude included),
@@ -452,7 +460,7 @@ def _normalized(numerals: str) -> str:
 
 def _cjk_quantity(
     text: str, start: int, prefix: str, run: tuple[int, int], unit: str, *, lone: bool = False
-) -> _Quantity | None:
+) -> Quantity | None:
     """Read one Chinese numeral token; `lone` admits a single bare numeral (a clock's minutes, a range's end)."""
     surface_run = text[run[0] : run[1]]
     numeral_count = sum(1 for ch in surface_run if ch != "点")
@@ -480,7 +488,7 @@ def _cjk_quantity(
     kind: QKind = "percent" if prefix == "百分之" else "currency" if unit in _CURRENCY_WORDS else "cjk_quantity"
     token = QToken(start, end, surface, itn, kind)
     symbol = "$" if unit in _USD_WORDS else ""
-    return _Quantity(token, prefix, run, unit, None if rough else value, _top_magnitude(numerals), symbol)
+    return Quantity(token, prefix, run, unit, None if rough else value, _top_magnitude(numerals), symbol)
 
 
 def _is_approximation(text: str, prefix: str, run: tuple[int, int], numerals: str, unit: str) -> bool:
@@ -517,7 +525,7 @@ def _ji_after(text: str, end: int) -> bool:
     return text[end : end + 1] == "几" and text[end : end + 2] != "几乎"
 
 
-def _fraction(match: re.Match[str]) -> _Quantity:
+def _fraction(match: re.Match[str]) -> Quantity:
     """Read a fraction as over/under in digits, so 三分之一 and 1/3 agree; it never gets a run value."""
     if match.group("fraction") is not None:
         parts = [_with_leading_one(_normalized(match.group(name))) for name in ("numerator", "denominator")]
@@ -538,7 +546,7 @@ def _per_unit_split(text: str, match: re.Match[str]) -> int | None:
     After 百 or 千 the shorthand reading stays: 一百一 is 110.
     """
     unit = match.group("unit") or ""
-    if match.group("pct") or match.group("ord") or unit not in _COUNT_CLASSIFIERS:
+    if match.group("pct") or match.group("ord") or unit not in COUNT_CLASSIFIERS:
         return None
     start, end = match.span("run")
     rest = text[start : end - 1].translate(_VARIANT_NUMERALS)
@@ -574,7 +582,7 @@ def _zero_minutes(text: str, start: int, dot: int, end: int) -> bool:
     return text[end : end + 1] == "分" or text[:start].endswith(TIMES_OF_DAY)
 
 
-def _cjk_quantities(text: str, match: re.Match[str]) -> list[_Quantity]:
+def _cjk_quantities(text: str, match: re.Match[str]) -> list[Quantity]:
     prefix = match.group("pct") or match.group("ord") or ""
     unit = match.group("unit") or ""
     run = match.span("run")
@@ -595,11 +603,11 @@ def _cjk_quantities(text: str, match: re.Match[str]) -> list[_Quantity]:
     return [] if quantity is None else [quantity]
 
 
-def _number_quantity(match: re.Match[str]) -> _Quantity:
+def _number_quantity(match: re.Match[str]) -> Quantity:
     digits = _ascii_digits(match.group("digits"))
     magnitude, percent = match.group("magnitude") or "", match.group("percent")
     en_magnitude = (match.group("en_magnitude") or "").strip().casefold()
-    exponent = _magnitude_exponent(magnitude) + _EN_MAGNITUDE.get(en_magnitude, 0)
+    exponent = magnitude_exponent(magnitude) + _EN_MAGNITUDE.get(en_magnitude, 0)
     if exponent:
         digits = _plain(Decimal(digits) * Decimal(10) ** exponent)
     sign = (match.group("sign") or match.group("sign2") or "").replace("−", "-")
@@ -623,7 +631,7 @@ def _number_quantity(match: re.Match[str]) -> _Quantity:
         itn = _ROUGH + itn
     kind: QKind = "percent" if percent else "currency" if symbol or shown in _CURRENCY_WORDS else "number"
     run_end = match.end("magnitude") if magnitude else match.end("digits")
-    return _Quantity(
+    return Quantity(
         QToken(match.start(), match.end(), match.group(0), itn, kind),
         "",
         (match.start("digits"), run_end),
@@ -742,11 +750,11 @@ def quantity_tokens(text: str) -> list[QToken]:
     convert (``twenty-five`` is ``25``). The start of a range shares the 万 or 亿 and the currency sign of its end:
     ``两到3亿美元`` and ``2到3亿美元`` both read ``$200000000`` and ``$300000000``.
     """
-    return [quantity.token for quantity in _quantities(text)]
+    return [quantity.token for quantity in quantities(text)]
 
 
-def _quantities(text: str) -> list[_Quantity]:
-    found: list[_Quantity] = []
+def quantities(text: str) -> list[Quantity]:
+    found: list[Quantity] = []
     lone: list[tuple[int, int]] = []
     for match in _TOKEN.finditer(text):
         if match.group("idiom") is not None:
@@ -771,7 +779,7 @@ def _quantities(text: str) -> list[_Quantity]:
     return _with_range_ends(text, found, lone)
 
 
-def _with_range_ends(text: str, found: list[_Quantity], lone: list[tuple[int, int]]) -> list[_Quantity]:
+def _with_range_ends(text: str, found: list[Quantity], lone: list[tuple[int, int]]) -> list[Quantity]:
     """Add each lone numeral that a range link joins to a figure: 三到五个 is 3 to 5个, and 三到五到七个 chains.
 
     Only a figure with a value anchors a range, so 第三到五 (an ordinal) and 几到五 stay as they are. Neither does a
@@ -812,11 +820,11 @@ def _with_range_ends(text: str, found: list[_Quantity], lone: list[tuple[int, in
     while added:
         added = False
         for start, end in list(lone):
-            right = anchors.get(("start", end + 1)) if text[end : end + 1] in _RANGE_LINKS else None
+            right = anchors.get(("start", end + 1)) if text[end : end + 1] in RANGE_LINKS else None
             as_soon_as = text[start] == "一" and text[end : end + 1] == "到" and text[start - 1 : start] != "从"
             if right in _CALENDAR_UNITS and as_soon_as:
                 right = None
-            left = text[start - 1 : start] in _RANGE_LINKS and ("end", start - 1) in anchors
+            left = text[start - 1 : start] in RANGE_LINKS and ("end", start - 1) in anchors
             quantity = (
                 _cjk_quantity(text, start, "", (start, end), "", lone=True) if left or right is not None else None
             )
@@ -837,12 +845,12 @@ class _RangeScale:
     and a 百 or 千 before that magnitude (三百万, 300万, 3千万).
     """
 
-    end: _Quantity
+    end: Quantity
     magnitude: int
     compound: bool
 
 
-def _range_scale(text: str, quantity: _Quantity) -> _RangeScale | None:
+def _range_scale(text: str, quantity: Quantity) -> _RangeScale | None:
     """Return what this figure lends the start of a range it ends, or None if it lends nothing.
 
     A figure lends the 万, 亿 or 万亿 it ends in (五万, 3.5亿, 三点五万), never one inside it (一万五).
@@ -853,10 +861,10 @@ def _range_scale(text: str, quantity: _Quantity) -> _RangeScale | None:
     trailing = _TRAILING_MAGNITUDE.search(run)
     if trailing is None:
         return None
-    return _RangeScale(quantity, _magnitude_exponent(trailing[0]), _LEAD_AND_PLACE.fullmatch(run) is not None)
+    return _RangeScale(quantity, magnitude_exponent(trailing[0]), _LEAD_AND_PLACE.fullmatch(run) is not None)
 
 
-def _scaled_start(text: str, quantity: _Quantity, scales: dict[int, _RangeScale]) -> _Quantity | None:
+def _scaled_start(text: str, quantity: Quantity, scales: dict[int, _RangeScale]) -> Quantity | None:
     """Read a range start in the magnitude of the end a range link joins it to, or None if it shares none.
 
     A start shares the scale only when it has none of its own (no 万 or 亿, prefix or unit) and stays below the end in
@@ -893,8 +901,8 @@ def _scaled_start(text: str, quantity: _Quantity, scales: dict[int, _RangeScale]
     return replace(quantity, token=replace(token, value_itn=itn, kind=kind), value=in_end_unit)
 
 
-def _bare(token: QToken) -> _Quantity:
-    return _Quantity(token, "", (token.char_start, token.char_end), "", None, "")
+def _bare(token: QToken) -> Quantity:
+    return Quantity(token, "", (token.char_start, token.char_end), "", None, "")
 
 
 def _fused_symbol(text: str, end: int) -> QToken | None:

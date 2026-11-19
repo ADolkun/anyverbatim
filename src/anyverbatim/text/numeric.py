@@ -221,7 +221,7 @@ class _Span:
             if known is None:
                 seen[token.value_itn] = _Option(reading.text, token, anchored)
             elif anchored and not known.anchored:
-                seen[token.value_itn] = _Option(known.surface, known.token, True)
+                seen[token.value_itn] = _Option(known.surface, known.token, anchored=True)
         return list(seen.values())
 
 
@@ -352,11 +352,11 @@ def second_opinion_request(
 
 def _chunks(ranges: list[tuple[float, float]], max_chunk_s: float, timeline: Timeline) -> tuple[Chunk, ...]:
     merged: list[tuple[float, float]] = []
-    for start, end in ranges:
-        if merged and start - merged[-1][1] <= MERGE_GAP_S and max(end, merged[-1][1]) - merged[-1][0] <= max_chunk_s:
+    for begin, end in ranges:
+        if merged and begin - merged[-1][1] <= MERGE_GAP_S and max(end, merged[-1][1]) - merged[-1][0] <= max_chunk_s:
             merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
             continue
-        start = max(start, merged[-1][1]) if merged else start
+        start = max(begin, merged[-1][1]) if merged else begin
         if end > start:
             merged.append((start, end))
     chunks: list[Chunk] = []

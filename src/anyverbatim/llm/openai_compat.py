@@ -24,7 +24,8 @@ Opener = Callable[[urllib.request.Request, float], bytes]
 
 
 def urlopen(request: urllib.request.Request, timeout_s: float) -> bytes:
-    with urllib.request.urlopen(request, timeout=timeout_s) as response:
+    # Every request is built from a base_url that `_require_safe_transport` limited to http(s).
+    with urllib.request.urlopen(request, timeout=timeout_s) as response:  # noqa: S310
         body: bytes = response.read()
         return body
 
@@ -79,7 +80,7 @@ class OpenAICompatClient:
         return body
 
     def complete(self, request: LLMRequest) -> LLMResponse:
-        http_request = urllib.request.Request(
+        http_request = urllib.request.Request(  # noqa: S310 - the constructor limited base_url to http(s)
             f"{self._base_url}/chat/completions",
             data=json.dumps(self.body(request), ensure_ascii=False).encode(),
             headers=_headers(self._api_key_env),
@@ -106,21 +107,25 @@ def readiness(
 ) -> Readiness:
     """`GET {base_url}/models`: the server answers and accepts the key. Sends no generation."""
     if not base_url:
-        return Readiness(False, "no [llm] base_url configured")
+        return Readiness(ready=False, detail="no [llm] base_url configured")
     try:
         _require_safe_transport(base_url, api_key_env)
-        request = urllib.request.Request(f"{base_url.rstrip('/')}/models", headers=_headers(api_key_env), method="GET")
+        url = f"{base_url.rstrip('/')}/models"
+        request = urllib.request.Request(url, headers=_headers(api_key_env), method="GET")  # noqa: S310 - checked above
         _send(opener, request, timeout_s, PROVIDER)
     except (ConfigError, LLMUnavailableError) as exc:
-        return Readiness(False, str(exc))
-    return Readiness(True, f"{base_url} answered /models")
+        return Readiness(ready=False, detail=str(exc))
+    return Readiness(ready=True, detail=f"{base_url} answered /models")
 
 
 def _require_safe_transport(base_url: str, api_key_env: str | None) -> None:
-    """Refuse to send a bearer key in clear text anywhere but this machine."""
+    """Refuse any URL but http(s), and a bearer key in clear text anywhere but this machine."""
+    parts = urllib.parse.urlsplit(base_url)
+    # urllib also opens file: and other schemes; a base_url is user config, so anything else would read local files.
+    if parts.scheme not in {"http", "https"} or not parts.hostname:
+        raise ConfigError(f"[llm] base_url {base_url} must be an http or https URL")
     if api_key_env is None:
         return
-    parts = urllib.parse.urlsplit(base_url)
     if parts.scheme == "https" or (parts.scheme == "http" and _is_loopback(parts.hostname)):
         return
     raise ConfigError(
@@ -159,7 +164,8 @@ def _send(opener: Opener, request: urllib.request.Request, timeout_s: float, lab
     try:
         return opener(request, timeout_s)
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")[:_BODY_PREVIEW].strip()
+        with exc:
+            detail = exc.read().decode("utf-8", "replace")[:_BODY_PREVIEW].strip()
         raise LLMUnavailableError(
             f"{label}: HTTP {exc.code} from {request.full_url}: {detail}", transient=exc.code in TRANSIENT_HTTP_STATUS
         ) from exc

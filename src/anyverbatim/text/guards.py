@@ -271,7 +271,7 @@ def name_changes(
     characters: Opcodes | None = None
     changes: list[EntityChange] = []
     for words in _changed_runs(ops, new, symbols):
-        if not any(_name_like(w, final, zh) for w in words):
+        if not any(_name_like(w, final, zh=zh) for w in words):
             continue
         start, end = words[0].start(), words[-1].end()
         if characters is None:
@@ -364,7 +364,7 @@ def _edge_letters(text: str, *, at_end: bool) -> int:
     return sum(1 for _ in takewhile(str.isalnum, reversed(text) if at_end else text))
 
 
-def _name_like(word: re.Match[str], text: str, zh: bool) -> bool:
+def _name_like(word: re.Match[str], text: str, *, zh: bool) -> bool:
     if zh:
         return True
     surface = word[0]

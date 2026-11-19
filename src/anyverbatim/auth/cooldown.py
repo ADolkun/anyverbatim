@@ -49,12 +49,13 @@ def read_cooldown() -> Cooldown | None:
         raw: object = json.loads(paths.cooldown_file().read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
+    # Any malformed file is a ValueError, which every caller catches; a TypeError would escape them.
     if not isinstance(raw, dict):
-        raise ValueError("cooldown.json is not an object")
+        raise ValueError("cooldown.json is not an object")  # noqa: TRY004
     fields = cast("dict[str, object]", raw)
     until_raw, signal_raw, hours = fields.get("until"), fields.get("signal"), fields.get("hours")
     if not isinstance(until_raw, str) or not isinstance(signal_raw, str):
-        raise ValueError("cooldown.json needs 'until' and 'signal' strings")
+        raise ValueError("cooldown.json needs 'until' and 'signal' strings")  # noqa: TRY004
     if not isinstance(hours, int | float) or isinstance(hours, bool) or hours <= 0:
         raise ValueError("cooldown.json needs a positive 'hours' number")
     until = datetime.fromisoformat(until_raw)
@@ -147,7 +148,7 @@ class GuardedRunner:
         try:
             result = self._inner.run(args, cookies=cookies, timeout_s=timeout_s, label=label)
         except YtDlpError as exc:
-            self.seen.append(Seen(label, False, exc.primary, exc.secondary, ()))
+            self.seen.append(Seen(label, ok=False, primary=exc.primary, secondary=exc.secondary, warnings=()))
             if (signal := stop_signal(label, exc.primary, exc.secondary)) is not None:
                 cooldown = self._start(signal)
                 raise BatchStopError(cooldown.signal, cooldown.until) from None
@@ -155,7 +156,9 @@ class GuardedRunner:
                 # `from None`: the original's message holds the debug lines, which echo argv.
                 raise _without_debug(exc) from None
             raise
-        self.seen.append(Seen(label, True, result.primary, result.secondary, result.warnings))
+        self.seen.append(
+            Seen(label, ok=True, primary=result.primary, secondary=result.secondary, warnings=result.warnings)
+        )
         if (signal := stop_signal(label, result.primary, result.secondary)) is not None:
             self._start(signal)
         return result

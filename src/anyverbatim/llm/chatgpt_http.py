@@ -154,7 +154,10 @@ def _socket(response: http.client.HTTPResponse) -> socket.socket | None:
     # by the deadline, so its absence is an error, never a silently weaker deadline.
     found = getattr(getattr(response.fp, "raw", None), "_sock", None)
     if not isinstance(found, socket.socket):
-        raise RuntimeError("http.client keeps no reachable socket; the chatgpt stream deadline cannot be enforced")
+        # http.client's internals changed, which is no caller's type error.
+        raise RuntimeError(  # noqa: TRY004
+            "http.client keeps no reachable socket; the chatgpt stream deadline cannot be enforced"
+        )
     return found
 
 

@@ -51,7 +51,7 @@ def move_into_place(old: Path, new: Path) -> Path:
     if not os.path.lexists(old):
         return new
     try:
-        os.rename(old, new)
+        old.rename(new)
     except FileNotFoundError:
         if os.path.lexists(new) and not os.path.lexists(old):
             return new
@@ -60,7 +60,7 @@ def move_into_place(old: Path, new: Path) -> Path:
         if os.path.lexists(new) and os.path.lexists(old):
             raise _both_exist(old, new) from exc
         raise _move_failed(old, new, exc.strerror or str(exc)) from exc
-    print(f"{APP}: moved {old} to {new} ({LEGACY_APP} was renamed to {APP})", file=sys.stderr)
+    sys.stderr.write(f"{APP}: moved {old} to {new} ({LEGACY_APP} was renamed to {APP})\n")
     return new
 
 

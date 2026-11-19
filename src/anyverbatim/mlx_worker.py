@@ -336,23 +336,23 @@ def run_child[R: Request](
     """Entry point of a worker child: read the request, run it, and leave a typed `error.json` if that raises."""
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) != 1:
-        print(f"usage: python -P -m {module} REQUEST.json", file=sys.stderr)
+        sys.stderr.write(f"usage: python -P -m {module} REQUEST.json\n")
         return EXIT_BAD_REQUEST
     try:
         request = parse(Path(args[0]).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        print(f"invalid {noun} request: {exc}", file=sys.stderr)
+        sys.stderr.write(f"invalid {noun} request: {exc}\n")
         return EXIT_BAD_REQUEST
     if request.hf_hub_cache is not None:
         # huggingface_hub reads this when it is first imported, which only happens inside an adapter.
         os.environ["HF_HUB_CACHE"] = request.hf_hub_cache
     try:
         run_request(request)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any failure must reach the parent as a typed error.json
         error = WorkerError(type=type(exc).__name__, message=str(exc), traceback=traceback.format_exc())
         out = Path(request.out_dir)
         out.mkdir(parents=True, exist_ok=True)
         atomic.write_json(out / ERROR_FILE, error.model_dump(mode="json"))
-        print(f"{error.type}: {error.message}", file=sys.stderr)
+        sys.stderr.write(f"{error.type}: {error.message}\n")
         return EXIT_FAILED
     return 0

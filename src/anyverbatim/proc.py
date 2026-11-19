@@ -85,10 +85,11 @@ def _watched(
         remaining = deadline - time.monotonic()
         try:
             stdout, stderr = child.communicate(pending, timeout=max(0.0, min(watch.poll_s, remaining)))
-            return stdout, stderr
         except subprocess.TimeoutExpired:
             if remaining <= watch.poll_s:
                 raise
+        else:
+            return stdout, stderr
         # A retried communicate() keeps writing the first call's input and refuses to be handed it again.
         pending = None
         _, breach = _check(child, command, watch)
@@ -140,7 +141,7 @@ class Background:
                         return
                 if self._stop.wait(self._watch.poll_s):
                     return
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - kept for `_close` to raise in the owning thread
             # A watch that cannot read memory must not leave the child running unwatched.
             self._error = exc
             with self._lock:
@@ -207,11 +208,12 @@ def background(
     try:
         yield handle
     except BaseException as exc:
-        error = handle._close(term_grace_s)
+        # `_close` is private to this module: only the context manager that made the handle may end it.
+        error = handle._close(term_grace_s)  # noqa: SLF001
         if error is not None:
             raise error from exc
         raise
-    error = handle._close(term_grace_s)
+    error = handle._close(term_grace_s)  # noqa: SLF001
     if error is not None:
         raise error
 

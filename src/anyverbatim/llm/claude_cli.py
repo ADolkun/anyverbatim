@@ -253,21 +253,23 @@ def readiness(*, timeout_s: float = _AUTH_STATUS_TIMEOUT_S) -> Readiness:
             [executable, "auth", "status"], timeout_s=timeout_s, env=child_env(), cwd=paths.llm_workdir("claude")
         )
     except (DependencyError, ProcTimeout) as exc:
-        return Readiness(False, str(exc))
+        return Readiness(ready=False, detail=str(exc))
     try:
         status = as_object(json.loads(result.stdout))
     except ValueError:
-        return Readiness(False, f"`claude auth status` printed unreadable output (exit {result.returncode})")
+        return Readiness(
+            ready=False, detail=f"`claude auth status` printed unreadable output (exit {result.returncode})"
+        )
     # Only these three keys are read; email, org and the rest of the status never leave this function.
     method = status.get("authMethod")
     provider = status.get("apiProvider")
     if status.get("loggedIn") is not True:
-        return Readiness(False, "not logged in; run `claude auth login` with your claude.ai account")
+        return Readiness(ready=False, detail="not logged in; run `claude auth login` with your claude.ai account")
     if method != "claude.ai":
-        return Readiness(False, f"logged in through {method!r}, not a claude.ai subscription")
+        return Readiness(ready=False, detail=f"logged in through {method!r}, not a claude.ai subscription")
     if provider != "firstParty":
-        return Readiness(False, f"API provider is {provider!r}, not firstParty")
-    return Readiness(True, "logged in through claude.ai (firstParty)")
+        return Readiness(ready=False, detail=f"API provider is {provider!r}, not firstParty")
+    return Readiness(ready=True, detail="logged in through claude.ai (firstParty)")
 
 
 def executable() -> str:

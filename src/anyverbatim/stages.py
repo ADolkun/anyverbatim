@@ -16,7 +16,7 @@ import difflib
 import itertools
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated, Literal, NamedTuple
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
@@ -1005,7 +1005,7 @@ def _creator_note(note: CreatorNote | None) -> ContractCreatorNote | None:
 
 def _upload_date(raw: str | None) -> date | None:
     try:
-        return datetime.strptime(raw, "%Y%m%d").date() if raw else None
+        return datetime.strptime(raw, "%Y%m%d").replace(tzinfo=UTC).date() if raw else None
     except ValueError:
         return None
 
@@ -1044,8 +1044,8 @@ def _quality(source: Transcribed, segments: Sequence[Segment], warnings: Sequenc
 def _covered_seconds(spans: Collection[tuple[float, float]]) -> float:
     total = 0.0
     reach = 0.0
-    for start, end in sorted(spans):
-        start = max(start, reach)
+    for begin, end in sorted(spans):
+        start = max(begin, reach)
         if end > start:
             total += end - start
             reach = end

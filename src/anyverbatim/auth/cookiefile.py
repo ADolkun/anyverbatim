@@ -87,19 +87,19 @@ def read_cookie_file(path: Path) -> list[CookieEntry]:
 
 
 def render(entries: list[CookieEntry]) -> str:
-    lines = [HEADER, ""]
-    for entry in entries:
-        lines.append(
-            "\t".join(
-                (
-                    f"{_HTTPONLY_PREFIX if entry.http_only else ''}{entry.domain}",
-                    "TRUE" if entry.domain.startswith(".") else "FALSE",
-                    entry.path,
-                    "TRUE" if entry.secure else "FALSE",
-                    str(entry.expires or 0),
-                    entry.name,
-                    entry.value,
-                )
-            )
-        )
+    lines = [HEADER, "", *(_line(entry) for entry in entries)]
     return "\n".join(lines) + "\n"
+
+
+def _line(entry: CookieEntry) -> str:
+    return "\t".join(
+        (
+            f"{_HTTPONLY_PREFIX if entry.http_only else ''}{entry.domain}",
+            "TRUE" if entry.domain.startswith(".") else "FALSE",
+            entry.path,
+            "TRUE" if entry.secure else "FALSE",
+            str(entry.expires or 0),
+            entry.name,
+            entry.value,
+        )
+    )

@@ -6,11 +6,11 @@
 import importlib
 import math
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast, override
 
 from pydantic import JsonValue
 
-from anyverbatim.asr.protocol import AsrContext, EngineSpec, RawChunk
+from anyverbatim.asr.protocol import AsrContext, Engine, EngineSpec, RawChunk
 from anyverbatim.errors import ConfigError, DependencyError
 
 if TYPE_CHECKING:
@@ -50,11 +50,11 @@ class _Output(Protocol):
 
 
 class _Model(Protocol):
-    def generate(self, audio: Any, **kwargs: Any) -> _Output: ...
+    def generate(self, audio: object, **kwargs: object) -> _Output: ...
 
 
 class _Loader(Protocol):
-    def load(self, model_path: str, **kwargs: Any) -> _Model: ...
+    def load(self, model_path: str, **kwargs: object) -> _Model: ...
 
 
 def max_tokens_for(seconds: float) -> int:
@@ -62,12 +62,13 @@ def max_tokens_for(seconds: float) -> int:
     return max(_MIN_TOKENS, math.ceil(_TOKENS_PER_SECOND * seconds))
 
 
-class Qwen3Engine:
+class Qwen3Engine(Engine):
     def __init__(self, spec: EngineSpec, *, use_context: bool) -> None:
         self._spec = spec
         self._use_context = use_context
         self._model: _Model | None = None
 
+    @override
     def load(self) -> None:
         try:
             utils = importlib.import_module("mlx_audio.stt.utils")
@@ -76,6 +77,7 @@ class Qwen3Engine:
         # The download honors HF_HUB_CACHE, which the worker exports before anything imports huggingface_hub.
         self._model = cast(_Loader, utils).load(self._spec.repo, revision=self._spec.revision)
 
+    @override
     def transcribe(self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None) -> RawChunk:
         if self._model is None:
             raise RuntimeError("Qwen3Engine.transcribe called before load()")

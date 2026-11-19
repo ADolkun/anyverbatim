@@ -10,9 +10,18 @@ from pathlib import Path
 from anyverbatim import mlx_worker, sysmem
 from anyverbatim.asr.models import HYPOTHESES_FILE, METRICS_FILE, RunMetrics, WorkerRequest
 from anyverbatim.errors import ConfigError
-from anyverbatim.mlx_worker import CAP_SETTING, without_wav
-from anyverbatim.mlx_worker import follow_moved_audio as follow_moved_audio
-from anyverbatim.mlx_worker import stored_fingerprint as stored_fingerprint
+from anyverbatim.mlx_worker import CAP_SETTING, follow_moved_audio, stored_fingerprint, without_wav
+
+__all__ = [
+    "MAX_MEMORY_CAP_FRACTION",
+    "WORKER_MODULE",
+    "WorkerResult",
+    "finished",
+    "follow_moved_audio",
+    "memory_cap_bytes",
+    "run_worker",
+    "stored_fingerprint",
+]
 
 WORKER_MODULE = "anyverbatim.asr.worker"
 # With the 10% available-memory floor, a cap above 90% of RAM can never fire before the floor does, so it would be a

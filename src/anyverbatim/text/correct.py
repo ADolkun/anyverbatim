@@ -42,7 +42,7 @@ BATCH_CHARS = 1800
 # Mean per-word probability below which a sentence gets the second, low-confidence pass.
 SECOND_PASS_MIN_CONFIDENCE = 0.5
 STAGE = "correction"
-SECOND_PASS_STAGE = "correction_low_confidence"
+SECOND_PASS_STAGE = "correction_low_confidence"  # noqa: S105 - a correction pass, not a password
 
 _CREATOR_NOTE_MAX_CHARS = 600
 # A batch where every sentence changes echoes about its input size back; the claude CLI also counts thinking here.
@@ -74,9 +74,9 @@ _SECOND_PASS_SYSTEM = (
     + "Return ONLY the segments you actually changed."
 )
 _CONVERSATION = "The segments are turns of a conversation: each carries `speaker`, the id of the person saying it. "
-_FIRST_PASS_ASK = "Fix clear ASR mis-recognitions in these segments. "
+_FIRST_PASS_ASK = "Fix clear ASR mis-recognitions in these segments. "  # noqa: S105 - a correction pass, not a password
 _SECOND_PASS_ASK = (
-    "These ASR segments came from LOW-CONFIDENCE audio and are likely to "
+    "These ASR segments came from LOW-CONFIDENCE audio and are likely to "  # noqa: S105 - a correction pass, not a password
     "contain mis-recognitions. Re-check each one carefully and fix only "
     "clear errors. "
 )
@@ -218,7 +218,7 @@ class _Run:
 
     def correct_batch(self, indices: list[int], pass_: Pass) -> None:
         self.batches += 1
-        system = _SYSTEM if pass_ == "first" else _SECOND_PASS_SYSTEM
+        system = _SYSTEM if pass_ == "first" else _SECOND_PASS_SYSTEM  # noqa: S105 - a correction pass, not a password
         if self._speakers and any(self._speakers[i] is not None for i in indices):
             system += _CONVERSATION
         user = self._prompt(indices, pass_)
@@ -248,7 +248,7 @@ class _Run:
         items = [self._item(i) for i in indices]
         glossary = self._context.glossary
         return (
-            (_FIRST_PASS_ASK if pass_ == "first" else _SECOND_PASS_ASK)
+            (_FIRST_PASS_ASK if pass_ == "first" else _SECOND_PASS_ASK)  # noqa: S105 - a correction pass, not a password
             + self._language_line
             + (f"Prefer these domain terms when relevant: {', '.join(glossary)}. " if glossary else "")
             + _creator_note_hint(self._context.creator_note)
@@ -274,7 +274,7 @@ class _Run:
             else:
                 self.meter.merge(checkpoint.usage)
                 return checkpoint.reply
-        stage = STAGE if pass_ == "first" else SECOND_PASS_STAGE
+        stage = STAGE if pass_ == "first" else SECOND_PASS_STAGE  # noqa: S105 - a correction pass, not a password
         request = LLMRequest(system=system, user=user, max_output_tokens=_MAX_OUTPUT_TOKENS, temperature=0.0)
         batch = UsageMeter()
         try:

@@ -1,5 +1,5 @@
 import importlib
-from typing import Any, Protocol, cast
+from typing import Protocol, cast
 
 from anyverbatim.asr.audio import SAMPLE_RATE, Audio
 from anyverbatim.asr.chunks import DEFAULT_VAD_PARAMS, SILERO_REPO, SILERO_REVISION, Region, VadParams
@@ -9,7 +9,7 @@ __all__ = ["DEFAULT_VAD_PARAMS", "SILERO_REPO", "SILERO_REVISION", "VadParams", 
 
 
 class _SileroModel(Protocol):
-    def get_speech_timestamps(self, audio: Any, **kwargs: Any) -> list[dict[str, float]]: ...
+    def get_speech_timestamps(self, audio: object, **kwargs: object) -> list[dict[str, float]]: ...
 
 
 def speech_regions(audio: Audio, params: VadParams = DEFAULT_VAD_PARAMS) -> list[Region]:

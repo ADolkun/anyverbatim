@@ -53,7 +53,7 @@ class CaptureLogger:
         if found := _EXTRACTED.search(message):
             self.decrypt_failures = int(found.group(2))
 
-    def warning(self, message: str, *, once: bool = False, only_once: bool = False) -> None:
+    def warning(self, message: str, *, once: bool = False, only_once: bool = False) -> None:  # noqa: ARG002 - yt-dlp's logger API
         self._record(message)
 
     def error(self, message: str) -> None:
@@ -106,7 +106,9 @@ def run_snapshot(browser: str, profile: str | None, out: Path, extract: Extracto
 
 
 def _ytdlp_extract(browser: str, profile: str, logger: CaptureLogger) -> Iterable[http.cookiejar.Cookie]:
-    from yt_dlp.cookies import extract_cookies_from_browser
+    # Imported only when a snapshot runs, since importing yt_dlp loads its whole extractor tree; it ships no stubs.
+    # pyrefly: ignore[untyped-import]
+    from yt_dlp.cookies import extract_cookies_from_browser  # noqa: PLC0415
 
     jar: Iterable[http.cookiejar.Cookie] = extract_cookies_from_browser(browser, profile, logger=logger)
     return jar
@@ -125,7 +127,7 @@ def main(argv: Sequence[str] | None = None, extract: Extractor = _ytdlp_extract)
         result = run_snapshot(browser, profile, out, extract)
     except AuthError as exc:
         result = {"ok": False, "state": exc.state.value, "detail": exc.detail}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - the parent learns of any failure only through this JSON line
         result = {"ok": False, "state": None, "detail": redact(f"{type(exc).__name__}: {exc}")}
     sys.stdout.write(json.dumps(result) + "\n")
     return 0 if result["ok"] is True else 1
