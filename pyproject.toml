@@ -48,8 +48,11 @@ build-backend = "uv_build"
 dev = [
     "numpy",
     "pyrefly>=1.5.0",
-    "pytest",
+    "pytest>=9.2",
+    "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.17.5",
+    "zizmor>=1.32.0",
 ]
 eval = [
     "jiwer>=4.0",
@@ -62,6 +65,8 @@ eval = [
 local-llm = ["mlx-lm==0.32.2"]
 
 [tool.uv]
+# CI's setup-uv installs the newest uv that satisfies this.
+required-version = ">=0.13.9"
 default-groups = ["dev", "eval"]
 # MLX only runs on Apple Silicon macOS.
 environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
@@ -144,3 +149,14 @@ pythonpath = [".", "scripts"]
 addopts = "-p no:cacheprovider"
 strict = true
 filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["anyverbatim"]
+branch = true
+# sys.monitoring: about a third faster than the C tracer on this suite.
+core = "sysmon"
+
+[tool.coverage.report]
+fail_under = 96
+show_missing = true
+skip_covered = true
