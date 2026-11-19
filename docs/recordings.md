@@ -346,6 +346,8 @@ What the job needs:
 - **A backlog cleared by hand.** The first `memos:new` transcribes every memo you have, which can take hours. Run it once yourself first.
 - **iCloud downloads.** Memos that are not downloaded yet are skipped and picked up by a later run once Voice Memos has downloaded them.
 
+A server overload from the LLM does not fail the job at once. The call is repeated up to four more times with backoff, about 3 to 4 minutes in all, and the retries print nothing under `--quiet`. If the LLM is still failing after that, the memo ends with an error as usual, and the next run resumes from the batches already stored. A plan usage limit, a lapsed sign-in, a timeout or a network error is not retried.
+
 Runs may overlap. A memo that another run is transcribing is skipped as busy, and the exit code stays 0. ASR is heavy, so do not schedule jobs close together.
 
 ### cron
@@ -428,5 +430,6 @@ Set these in `~/.config/ytverbatim/config.toml`. A command-line option wins for 
 | `ffmpeg cannot decode any audio stream` | Convert the file to `m4a` or `wav` with ffmpeg and pass that. |
 | `install ytverbatim[…]` | Install the extra it names. Recordings need `whisper` and `asr`. |
 | `numbers not cross-checked: recordings have no captions` | Expected for recordings. Check the flagged numbers in the footnotes yourself. |
+| `gave up after 5 attempts` with `server_is_overloaded` | The LLM's server stayed overloaded through every retry. Run the same command again later; batches already done are reused. |
 | Speaker names disappeared | You re-diarized, or something changed how words were attributed. Set them again with `ytverbatim speakers`. |
 | `is no longer at the path it was read from` | The audio is needed again. Pass the file again. |

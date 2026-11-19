@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from ytverbatim.contract.models import LLMUsage
 from ytverbatim.errors import LLMError
 from ytverbatim.llm.protocol import LLMClient, LLMRequest, LLMResponse, Usage
+from ytverbatim.llm.retry import RetryingClient
 
 
 @dataclass
@@ -41,7 +42,12 @@ class UsageMeter:
             tally.output_tokens = _add(tally.output_tokens, usage.output_tokens)
 
     def metered(self, stage: str, client: LLMClient) -> LLMClient:
-        """`client`, with every call that got a reply recorded under `stage`, including a reply it then rejected."""
+        """`client`, with every call that got a reply recorded under `stage`, including a reply it then rejected.
+
+        A retrying client is metered beneath its retries, so a reply that came with a failed attempt is counted too.
+        """
+        if isinstance(client, RetryingClient):
+            return client.around(lambda inner: _MeteredClient(inner, stage, self))
         return _MeteredClient(client, stage, self)
 
     def summary(self) -> tuple[LLMUsage, ...]:

@@ -228,6 +228,8 @@ ytverbatim logout          # revokes the sign-in and removes its tokens from thi
 - The resolved model is part of each stored result's identity. When a newer model ships, a rerun redoes the LLM stages, and `context.json` records which model corrected the text.
 - `ytverbatim status` shows the model in use.
 
+**Overloads are retried.** When the LLM's server reports that it is overloaded or failing (`server_is_overloaded`, or HTTP 500, 502, 503 or 504), a call is repeated up to four more times, waiting about 15, 30, 60 and 120 seconds with some jitter, and each retry prints one line. If the fifth attempt fails too, the run fails with the original error and says how many attempts were made; stored batches mean a rerun starts where it stopped. Nothing else is retried: a plan or rate limit (429), a lapsed sign-in, a timeout, a network error and an unusable reply all fail on the first error.
+
 In the [correction evaluation](evals/results/correction-2026-11-13.md) gpt-6.1-sol led the screen, removing about 57.6 net errors per hour against 42.7 for Claude Sonnet, at a fix precision of 0.929. Medium effort matched high (57.6 against 57.8 net errors removed per hour, with overlapping intervals) in about 0.6 times the time, so medium is the default.
 
 **The sign-in.**

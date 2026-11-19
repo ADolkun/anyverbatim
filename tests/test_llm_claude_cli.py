@@ -314,6 +314,33 @@ def test_api_error_raises_with_category_and_status(fake: FakeProc) -> None:
         ClaudeCLIClient(model="nope").complete(REQUEST)
 
 
+@pytest.mark.parametrize(
+    ("error", "status", "transient"),
+    [
+        ("server_error", 500, True),
+        ("unknown", 529, True),
+        ("server_error", None, True),
+        ("unknown", 503, True),
+        ("invalid_request", 400, False),
+        ("model_not_found", 404, False),
+        ("unknown", None, False),
+    ],
+)
+def test_only_server_side_failures_are_transient(
+    fake: FakeProc, error: str, status: int | None, transient: bool
+) -> None:
+    fake.stdout = stream(
+        init_message(),
+        assistant(error=error, api_error_status=status),
+        result_message(is_error=True, terminal_reason="api_error", api_error_status=status, result="busy"),
+    )
+    fake.returncode = 1
+    with pytest.raises(LLMUnavailableError) as raised:
+        ClaudeCLIClient(model="haiku").complete(REQUEST)
+    assert raised.value.transient is transient
+    assert ("No retry was attempted" in str(raised.value)) is not transient
+
+
 def test_auth_failure_names_the_fix(fake: FakeProc) -> None:
     fake.stdout = stream(init_message(), assistant(error="authentication_failed"), result_message(is_error=True))
     fake.returncode = 1

@@ -17,6 +17,7 @@ from ytverbatim import paths, proc
 from ytverbatim.errors import ConfigError, DependencyError, LLMOutputError, LLMUnavailableError, ProcTimeout
 from ytverbatim.llm.jsonio import as_object
 from ytverbatim.llm.protocol import LLMRequest, LLMResponse, Readiness, Usage
+from ytverbatim.llm.retry import TRANSIENT_HTTP_STATUS
 
 PROVIDER = "claude-cli"
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -55,6 +56,8 @@ _AUTH_STATUS_TIMEOUT_S = 10.0
 _AUTH_ERRORS = frozenset({"authentication_failed", "oauth_org_not_allowed", "account_on_hold", "billing_error"})
 _AUTH_HTTP = frozenset({401, 403})
 _RATE_LIMIT_HTTP = 429
+# 529 is Anthropic's `overloaded_error`.
+_TRANSIENT_HTTP = TRANSIENT_HTTP_STATUS | {529}
 _TAIL = 500
 _FULL_MODEL_PREFIX = "claude-"
 
@@ -306,7 +309,9 @@ def _raise_for_failure(client_id: str, run: ClaudeRun, returncode: int, usage: U
     detail = result.get("result")
     message = f": {detail[:_TAIL]}" if isinstance(detail, str) and detail else ""
     http = f", HTTP {status}" if isinstance(status, int) else ""
-    raise LLMUnavailableError(f"{client_id}: call failed ({category}{http}){message}. No retry was attempted.")
+    transient = error == "server_error" or status in _TRANSIENT_HTTP
+    tail = "" if transient else " No retry was attempted."
+    raise LLMUnavailableError(f"{client_id}: call failed ({category}{http}){message}.{tail}", transient=transient)
 
 
 def _usage(result: Mapping[str, object]) -> Usage | None:
