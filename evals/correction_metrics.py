@@ -289,7 +289,7 @@ def _percentile_interval(draws: list[float], confidence: float) -> tuple[float, 
 def _bootstrap_mean(
     values: Sequence[int], seed: int, resamples: int, confidence: float = DEFAULT_CONFIDENCE
 ) -> tuple[float, float]:
-    rng = random.Random(seed)  # noqa: S311  # seeded, reproducible sampling
+    rng = random.Random(seed)
     n = len(values)
     draws = [sum(rng.choices(values, k=n)) / n for _ in range(resamples)]
     return _percentile_interval(draws, confidence)
@@ -425,7 +425,7 @@ def _stratified_mean_interval(
     for a in answers:
         strata.setdefault((a.language, a.stratum), []).append(a)
     cells = [strata[key] for key in sorted(strata)]
-    rng = random.Random(seed)  # noqa: S311  # seeded, reproducible sampling
+    rng = random.Random(seed)
     draws: list[float] = []
     for _ in range(resamples):
         weight = signed = 0.0

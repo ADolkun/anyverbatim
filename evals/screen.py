@@ -386,7 +386,7 @@ def automatic_metrics(layout: Layout, manifest: Manifest, hypotheses: Sequence[s
 def judge_items(spans: Sequence[Span], sample: int, seed: int) -> list[JudgeItem]:
     """Draw a seeded uniform sample of the spans a listener could tell apart, with readings shuffled per span."""
     candidates = [s for s in spans if not s.format_only]
-    chosen = random.Random(seed).sample(candidates, min(sample, len(candidates)))  # noqa: S311  # seeded, reproducible sampling
+    chosen = random.Random(seed).sample(candidates, min(sample, len(candidates)))
     return [make_item(s.id, s.left, s.right, s.distinct, seed) for s in sorted(chosen, key=lambda s: s.id)]
 
 

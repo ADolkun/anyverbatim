@@ -263,7 +263,7 @@ def build_questions(
     disputes: Sequence[TextDispute | AttributionDispute], names: Sequence[str] = (), seed: int = 0
 ) -> Built:
     """Turn disputes into questions: one per policy group first, then single items in recording and time order."""
-    rng = random.Random(seed)  # noqa: S311  # seeded, reproducible sampling
+    rng = random.Random(seed)
     singles: list[tuple[str, str, str, _Item]] = []
     grouped: dict[str, list[tuple[str, str, _Item]]] = defaultdict(list)
     skipped: list[tuple[str, str]] = []

@@ -352,7 +352,7 @@ def paired_bootstrap(
         raise ValueError("the reference has no units")
     n = len(a)
     every = range(n)
-    rng = random.Random(seed)  # noqa: S311  # seeded, reproducible sampling
+    rng = random.Random(seed)
     differences = []
     for _ in range(resamples):
         picks = rng.choices(every, k=n)
