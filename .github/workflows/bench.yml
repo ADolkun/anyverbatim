@@ -4,18 +4,16 @@ permissions:
   contents: read
 jobs:
   bench:
-    name: bench ${{ matrix.dist }} ${{ matrix.cov }} compile=${{ matrix.compile }} cache=${{ matrix.cache }} #${{ matrix.rep }}
+    name: bench ${{ matrix.dist }} ${{ matrix.cov }} compile=${{ matrix.compile }} cache=${{ matrix.cache }} n=${{ matrix.n }}
     runs-on: macos-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { dist: load, cov: --cov, compile: "0", cache: false, rep: 1 }
-          - { dist: worksteal, cov: --cov, compile: "0", cache: false, rep: 1 }
-          - { dist: worksteal, cov: --cov, compile: "0", cache: false, rep: 2 }
-          - { dist: worksteal, cov: --no-cov, compile: "0", cache: false, rep: 1 }
-          - { dist: worksteal, cov: --cov, compile: "1", cache: false, rep: 1 }
+          - { dist: load, cov: --cov, compile: "0", cache: false, rep: 1, n: auto }
+          - { dist: load, cov: --cov, compile: "0", cache: false, rep: 1, n: "6" }
+          - { dist: load, cov: --cov, compile: "0", cache: false, rep: 1, n: "0" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -27,4 +25,4 @@ jobs:
       - run: uv sync --locked
         env:
           UV_COMPILE_BYTECODE: ${{ matrix.compile }}
-      - run: uv run --no-sync pytest -q -n auto --dist ${{ matrix.dist }} ${{ matrix.cov }} -p no:randomly 2>&1 | tail -3
+      - run: uv run --no-sync pytest -q -n ${{ matrix.n }} --dist ${{ matrix.dist }} ${{ matrix.cov }} --durations=30 2>&1 | tail -40
