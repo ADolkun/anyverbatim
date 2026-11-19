@@ -106,7 +106,7 @@ class RawChunk:
 class ChunkInput:
     """What the worker handed to the engine for one chunk, kept so a guard can decode again."""
 
-    audio: "NDArray[np.float32]"
+    audio: NDArray[np.float32]
     start: float
     end: float
     language: str | None
@@ -130,7 +130,7 @@ class Engine(Protocol):
     def load(self) -> None: ...
 
     def transcribe(
-        self, audio: "NDArray[np.float32]", *, language: str | None, context: AsrContext | None
+        self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None
     ) -> RawChunk: ...
 
 
@@ -138,7 +138,7 @@ class Engine(Protocol):
 class LanguageDetector(Protocol):
     """An engine that can say which language a slice of at most one chunk is spoken in, without decoding it."""
 
-    def detect_language(self, audio: "NDArray[np.float32]") -> Mapping[str, float]:
+    def detect_language(self, audio: NDArray[np.float32]) -> Mapping[str, float]:
         """Return the probability of every language the engine knows, keyed by its code."""
         ...
 
@@ -147,7 +147,7 @@ class LanguageDetector(Protocol):
 class WindowDecoder(Protocol):
     """An engine that reports `RawChunk.windows` and can decode one of them again on its own."""
 
-    def transcribe_window(self, audio: "NDArray[np.float32]", *, language: str | None) -> RawChunk:
+    def transcribe_window(self, audio: NDArray[np.float32], *, language: str | None) -> RawChunk:
         """Decode audio no longer than one window, with no prompt."""
         ...
 

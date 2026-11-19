@@ -27,7 +27,7 @@ class OffsetMap:
     _starts: tuple[int, ...]
 
     @classmethod
-    def between(cls, before: str, after: str) -> "OffsetMap":
+    def between(cls, before: str, after: str) -> OffsetMap:
         ops = tuple(
             op
             for op in SequenceMatcher(None, before, after, autojunk=False).get_opcodes()

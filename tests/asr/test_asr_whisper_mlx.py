@@ -59,7 +59,7 @@ class FakeMel:
     def __init__(self, steps: tuple[Any, ...]) -> None:
         self.steps = steps
 
-    def astype(self, dtype: object) -> "FakeMel":
+    def astype(self, dtype: object) -> FakeMel:
         return FakeMel((*self.steps, ("astype", dtype)))
 
 

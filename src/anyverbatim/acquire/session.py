@@ -9,7 +9,7 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
@@ -284,7 +284,7 @@ class FetchSession:
             if exc.state not in _PER_VIDEO_AUTH_STATES:
                 self._source_failure = exc
             return self._failure(video_id, exc)
-        except (BatchStopError, DependencyError):
+        except BatchStopError, DependencyError:
             raise
         except AnyverbatimError as exc:
             return self._failure(video_id, exc)
@@ -559,7 +559,7 @@ class FetchSession:
 
 
 @contextlib.contextmanager
-def in_stage(name: str) -> Iterator[None]:
+def in_stage(name: str) -> Generator[None]:
     """Name the fetch stage on any error that leaves it, unless a nested stage already did."""
     try:
         yield
@@ -654,7 +654,7 @@ def _load_tracks(vdir: Path) -> list[dict[str, object]] | None:
     """Return the recorded caption tracks, or None when the stage has to run (again)."""
     try:
         raw: object = json.loads((vdir / CAPTIONS_DIR / TRACKS_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     tracks = cast("dict[str, object]", raw).get("tracks") if isinstance(raw, dict) else None
     if not isinstance(tracks, list):
@@ -670,7 +670,7 @@ def _load_tracks(vdir: Path) -> list[dict[str, object]] | None:
 def _audio_ready(vdir: Path) -> bool:
     try:
         expected = load_metadata(vdir).duration
-    except (OSError, YtDlpError):
+    except OSError, YtDlpError:
         return False
     native = find_audio(vdir)
     return (
@@ -702,7 +702,7 @@ def _load_prior(vdir: Path, *, need_fresh: bool, creator_note: bool) -> tuple[Vi
             return None
         metadata = load_metadata(vdir)
         access = Access.model_validate_json((vdir / ACCESS_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError, YtDlpError):
+    except OSError, ValueError, YtDlpError:
         return None
     if not (vdir / METADATA_FILE).is_file():
         return None
@@ -732,7 +732,7 @@ class VideoHook(Protocol):
 
     def done(self, video_id: str) -> bool: ...
 
-    def __call__(self, session: "FetchSession", planned: PlannedVideo) -> VideoOutcome: ...
+    def __call__(self, session: FetchSession, planned: PlannedVideo) -> VideoOutcome: ...
 
 
 @dataclass(frozen=True)
@@ -742,7 +742,7 @@ class _FetchOnly:
     def done(self, video_id: str) -> bool:
         return False
 
-    def __call__(self, session: "FetchSession", planned: PlannedVideo) -> VideoOutcome:
+    def __call__(self, session: FetchSession, planned: PlannedVideo) -> VideoOutcome:
         try:
             with video_lock(paths.video_dir(planned.video_id, self.out)):
                 return session.fetch_video(planned.video_id, cookies_first=planned.cookies_first)

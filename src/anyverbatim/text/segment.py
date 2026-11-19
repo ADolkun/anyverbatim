@@ -493,7 +493,7 @@ def _sentence(tokens: Sequence[Token]) -> Sentence:
     return Sentence(text, tokens[0].start, max(token.end for token in tokens), tuple(tokens), tuple(offsets))
 
 
-def _reading_speakers(tokens: list[Token], cutter: "_Cutter") -> list[Token]:
+def _reading_speakers(tokens: list[Token], cutter: _Cutter) -> list[Token]:
     """Give each token with nothing to read the speaker of a token next to it that has.
 
     An opening mark (“ or 《) leads what follows, so it takes the next reading token's speaker; any other bare
@@ -549,7 +549,7 @@ def _ranges(count: int, cuts: set[int]) -> list[tuple[int, int]]:
     return ranges
 
 
-def _attach_bare_punctuation(ranges: list[tuple[int, int]], cutter: "_Cutter") -> list[tuple[int, int]]:
+def _attach_bare_punctuation(ranges: list[tuple[int, int]], cutter: _Cutter) -> list[tuple[int, int]]:
     """Merge ranges with nothing to read (a lone "。" after a pause) into their neighbour."""
     merged: list[tuple[int, int]] = []
     carry: int | None = None

@@ -74,7 +74,7 @@ def ready_video(vdir: Path) -> Path | None:
     try:
         expected = load_metadata(vdir).duration
         validate_audio(path, expected_duration=expected, kind="video")
-    except (OSError, YtDlpError, MediaValidationError):
+    except OSError, YtDlpError, MediaValidationError:
         return None
     return path
 

@@ -577,7 +577,7 @@ def test_a_failed_refresh_raises_once_the_token_is_nearly_gone() -> None:
 NEW_CLIENT = "app_new_client"
 
 
-def scripted_token_endpoint(browsers: "Browsers", *outcomes: object) -> FakeOpener:
+def scripted_token_endpoint(browsers: Browsers, *outcomes: object) -> FakeOpener:
     """Token responses in turn: an error code string refuses, None issues tokens for the client that asked."""
     queue = list(outcomes)
 

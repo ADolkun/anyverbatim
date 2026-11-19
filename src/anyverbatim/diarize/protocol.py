@@ -90,14 +90,14 @@ class RawDiarization:
     """One diarizer run over a whole file: its turns and its (frames, channels) activity probabilities."""
 
     turns: tuple[Turn, ...]
-    probs: "NDArray[np.float32]"
+    probs: NDArray[np.float32]
     frame_s: float
 
 
 class Diarizer(Protocol):
     def load(self) -> None: ...
 
-    def diarize(self, audio: "NDArray[np.float32]") -> RawDiarization: ...
+    def diarize(self, audio: NDArray[np.float32]) -> RawDiarization: ...
 
 
 DiarizerFactory = Callable[[DiarizerSpec, Mapping[str, JsonValue]], Diarizer]

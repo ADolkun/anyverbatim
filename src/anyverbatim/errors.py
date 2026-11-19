@@ -160,7 +160,7 @@ class LLMError(AnyverbatimError):
     """
 
     def __init__(
-        self, message: str, *, responded: bool = False, usage: "Usage | None" = None, code: str | None = None
+        self, message: str, *, responded: bool = False, usage: Usage | None = None, code: str | None = None
     ) -> None:
         super().__init__(message)
         self.responded = responded
@@ -180,7 +180,7 @@ class LLMUnavailableError(LLMError):
         message: str,
         *,
         responded: bool = False,
-        usage: "Usage | None" = None,
+        usage: Usage | None = None,
         code: str | None = None,
         transient: bool = False,
     ) -> None:

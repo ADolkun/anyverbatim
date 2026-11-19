@@ -51,7 +51,7 @@ def node_major_version() -> int | None:
         return None
     try:
         result = proc.run([node, "--version"], timeout_s=_NODE_VERSION_TIMEOUT_S)
-    except (DependencyError, ProcTimeout):
+    except DependencyError, ProcTimeout:
         return None
     if result.returncode != 0:
         return None

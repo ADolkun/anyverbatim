@@ -550,13 +550,13 @@ def process_files(
 
 
 def _run_file(
-    path: Path, settings: "_Settings", seen: dict[str, str], provenance: local.Provenance | None
+    path: Path, settings: _Settings, seen: dict[str, str], provenance: local.Provenance | None
 ) -> VideoResult:
     """Run one file; a file whose audio already ran in this batch under another name is reported as a duplicate."""
     began = time.monotonic()
     try:
         recording = local.open_recording(path, provenance)
-    except (DependencyError, EngineMemoryError):
+    except DependencyError, EngineMemoryError:
         # A missing ffprobe or ffmpeg would fail every file the same way.
         raise
     except (AnyverbatimError, ValueError, OSError) as exc:
@@ -785,7 +785,7 @@ class _RunHook:
             if _reusable(vdir, self.settings) is None:
                 return False
             return not self.settings.video or ready_video(vdir) is not None
-        except (OSError, AnyverbatimError):
+        except OSError, AnyverbatimError:
             # A failed probe must not abort the batch from its pre-check; the video's own run records it.
             return False
 
@@ -820,7 +820,7 @@ def _run_source(
     settings: _Settings,
     *,
     reuse: Callable[[ContextDocument], VideoResult],
-    run: Callable[["_Trace"], VideoResult],
+    run: Callable[[_Trace], VideoResult],
     current: Callable[[ContextDocument], bool] | None = None,
 ) -> VideoResult:
     """Run one source of any kind under its directory lock, and record its own failure as its outcome.
@@ -1252,7 +1252,7 @@ class _YouTubeRun:
     def _local_metadata(self) -> VideoMetadata | None:
         try:
             return load_metadata(self.vdir)
-        except (OSError, ValueError, YtDlpError):
+        except OSError, ValueError, YtDlpError:
             return None
 
 
@@ -1786,6 +1786,6 @@ def _tags(vdir: Path) -> tuple[str, ...]:
     # VideoMetadata does not keep tags, but the raw extraction does.
     try:
         raw: object = json.loads(info_path(vdir).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return ()
     return info_tags(raw)

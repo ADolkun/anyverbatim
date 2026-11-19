@@ -76,7 +76,7 @@ class Qwen3Engine:
         # The download honors HF_HUB_CACHE, which the worker exports before anything imports huggingface_hub.
         self._model = cast(_Loader, utils).load(self._spec.repo, revision=self._spec.revision)
 
-    def transcribe(self, audio: "NDArray[np.float32]", *, language: str | None, context: AsrContext | None) -> RawChunk:
+    def transcribe(self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None) -> RawChunk:
         if self._model is None:
             raise RuntimeError("Qwen3Engine.transcribe called before load()")
         seconds = len(audio) / SAMPLE_RATE

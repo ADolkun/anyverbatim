@@ -127,7 +127,7 @@ def test_the_request_is_written_only_once_the_lock_is_held(tmp_path: Path, monke
     seen: list[bool] = []
 
     @contextlib.contextmanager
-    def spy_lock() -> Generator[None, None, None]:
+    def spy_lock() -> Generator[None]:
         seen.append(request_path.exists())
         yield
 

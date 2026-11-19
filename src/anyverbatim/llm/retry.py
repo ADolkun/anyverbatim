@@ -49,7 +49,7 @@ class RetryingClient:
     def inner(self) -> LLMClient:
         return self._inner
 
-    def around(self, wrap: Callable[[LLMClient], LLMClient]) -> "RetryingClient":
+    def around(self, wrap: Callable[[LLMClient], LLMClient]) -> RetryingClient:
         """Return the same retrying over `wrap(inner)`, so `wrap` sees each attempt rather than the final outcome."""
         return RetryingClient(wrap(self._inner), notify=self._notify, sleep=self._sleep, uniform=self._uniform)
 

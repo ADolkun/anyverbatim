@@ -264,7 +264,7 @@ type _Entry = dict[str, object]
 def _load_entries() -> dict[str, _Entry]:
     try:
         raw: object = json.loads(paths.preflight_cache_file().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         # A cache: missing or corrupt only costs one probe.
         return {}
     if not isinstance(raw, dict) or raw.get("version") != _CACHE_VERSION:

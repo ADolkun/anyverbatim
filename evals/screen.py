@@ -203,7 +203,7 @@ class Quality(_Frozen):
     decoder_anomalies: int = 0
     nonspeech_units: int = 0
 
-    def plus(self, other: "Quality") -> "Quality":
+    def plus(self, other: Quality) -> Quality:
         return Quality(**{name: getattr(self, name) + getattr(other, name) for name in Quality.model_fields})
 
     @property
@@ -237,10 +237,10 @@ class Rate(_Frozen):
         return self.errors / self.reference_units
 
     @classmethod
-    def of(cls, counts: ErrorCounts) -> "Rate":
+    def of(cls, counts: ErrorCounts) -> Rate:
         return cls(errors=counts.errors, reference_units=counts.reference_units)
 
-    def plus(self, other: "Rate") -> "Rate":
+    def plus(self, other: Rate) -> Rate:
         return Rate(errors=self.errors + other.errors, reference_units=self.reference_units + other.reference_units)
 
 

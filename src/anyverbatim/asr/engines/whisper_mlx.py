@@ -80,7 +80,7 @@ class _WhisperModel(Protocol):
 
 
 class _MelArray(Protocol):
-    def astype(self, dtype: object) -> "_MelArray": ...
+    def astype(self, dtype: object) -> _MelArray: ...
 
 
 class _AudioModule(Protocol):
@@ -101,7 +101,7 @@ class _ModelHolder(Protocol):
     def get_model(self, model_path: str, dtype: object) -> _WhisperModel: ...
 
 
-def create(spec: EngineSpec, variant: Mapping[str, JsonValue]) -> "WhisperEngine":
+def create(spec: EngineSpec, variant: Mapping[str, JsonValue]) -> WhisperEngine:
     mode = variant.get("mode")
     if mode not in ("whole_file", "chunk", "runs"):
         raise ConfigError(f"{spec.id}: Whisper mode must be 'whole_file', 'chunk' or 'runs', got {mode!r}")
@@ -162,7 +162,7 @@ class WhisperEngine:
         self._audio = cast(_AudioModule, audio)
         self._float16 = mx.float16
 
-    def detect_language(self, audio: "NDArray[np.float32]") -> dict[str, float]:
+    def detect_language(self, audio: NDArray[np.float32]) -> dict[str, float]:
         """Language probabilities for the first 30 s of `audio`, computed exactly as mlx-whisper's own detect-once."""
         if self._model is None or self._audio is None or self._mx is None:
             raise RuntimeError("load() must be called before detect_language()")
@@ -173,7 +173,7 @@ class WhisperEngine:
             _, probabilities = self._model.detect_language(segment)
         return {code: float(p) for code, p in probabilities.items()}
 
-    def transcribe(self, audio: "NDArray[np.float32]", *, language: str | None, context: AsrContext | None) -> RawChunk:
+    def transcribe(self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None) -> RawChunk:
         self._loaded()
         hint = _normalize_language(language)
         prompted = self.mode == "whole_file" and hint is not None and hint.startswith("zh")
@@ -184,11 +184,11 @@ class WhisperEngine:
             flags = ("prompt_echo",)
         return self._raw(audio, result, flags)
 
-    def transcribe_window(self, audio: "NDArray[np.float32]", *, language: str | None) -> RawChunk:
+    def transcribe_window(self, audio: NDArray[np.float32], *, language: str | None) -> RawChunk:
         """Decode at most one window's audio exactly as `transcribe` decodes a window, but never with the prompt."""
         return self._raw(audio, self._decode(audio, _normalize_language(language), None), ())
 
-    def _raw(self, audio: "NDArray[np.float32]", result: Mapping[str, Any], flags: tuple[ChunkFlag, ...]) -> RawChunk:
+    def _raw(self, audio: NDArray[np.float32], result: Mapping[str, Any], flags: tuple[ChunkFlag, ...]) -> RawChunk:
         if self._audio is None:
             raise RuntimeError("load() must be called before transcribe()")
         segments = cast(Sequence[_WhisperSegment], result.get("segments") or ())
@@ -213,7 +213,7 @@ class WhisperEngine:
             raise RuntimeError("load() must be called before transcribe()")
         return self._whisper, self._mx, self._model_path
 
-    def _decode(self, audio: "NDArray[np.float32]", hint: str | None, prompt: str | None) -> dict[str, Any]:
+    def _decode(self, audio: NDArray[np.float32], hint: str | None, prompt: str | None) -> dict[str, Any]:
         whisper, mx, model_path = self._loaded()
         with _bounded_mlx_cache(mx):
             return whisper.transcribe(

@@ -67,7 +67,7 @@ class FireRedEngine:
                 f"use, so this also fails offline or on a full disk): {exc}"
             ) from exc
 
-    def transcribe(self, audio: "NDArray[np.float32]", *, language: str | None, context: AsrContext | None) -> RawChunk:
+    def transcribe(self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None) -> RawChunk:
         model = self._model
         if model is None:
             raise EngineError(f"{self._spec.id}: load() must run before transcribe()")

@@ -12,7 +12,7 @@ The output is one segment with no word timestamps and no confidence.
 import importlib
 import math
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -54,10 +54,10 @@ class _Model(Protocol):
 
 
 class _Resampler(Protocol):
-    def __call__(self, x: "NDArray[np.float32]", up: int, down: int) -> "NDArray[np.float32]": ...
+    def __call__(self, x: NDArray[np.float32], up: int, down: int) -> NDArray[np.float32]: ...
 
 
-def resample_to_model_rate(audio: "NDArray[np.float32]") -> "NDArray[np.float32]":
+def resample_to_model_rate(audio: NDArray[np.float32]) -> NDArray[np.float32]:
     try:
         resample_poly = cast(_Resampler, importlib.import_module("scipy.signal").resample_poly)
     except ImportError as exc:
@@ -76,7 +76,7 @@ def model_language(language: str | None) -> str | None:
 
 
 @contextmanager
-def _pinned_tokenizer(model_class: Any, tokenizer_dir: Path) -> Iterator[list[Path]]:
+def _pinned_tokenizer(model_class: Any, tokenizer_dir: Path) -> Generator[list[Path]]:
     """Make `Model.post_load_hook` use the pinned tokenizer snapshot instead of resolving the manifest's repo name.
 
     The manifest names the repo without a revision, and redirecting that lookup is the only seam that does not mean
@@ -130,7 +130,7 @@ class MimoEngine:
             )
         self._model = model
 
-    def transcribe(self, audio: "NDArray[np.float32]", *, language: str | None, context: AsrContext | None) -> RawChunk:
+    def transcribe(self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None) -> RawChunk:
         model = self._model
         if model is None:
             raise EngineError(f"{self._spec.id}: load() must run before transcribe()")
