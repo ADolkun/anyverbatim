@@ -28,6 +28,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from typing import Literal, cast, override
 
 from anyverbatim import atomic, paths
@@ -46,6 +47,7 @@ PLAN_SCOPE = "chatgpt.tokens.use.direct"
 SCOPES = "openid profile email offline_access resource.invoke " + PLAN_SCOPE
 AGENT_NAME = "anyverbatim"
 CALLBACK_PATH = "/auth/callback"
+_LOOPBACK = "127.0.0.1"
 LOGIN_TIMEOUT_S = 300.0
 LOGIN_COMMAND = "anyverbatim login"
 
@@ -714,6 +716,14 @@ class _LoopbackServer(HTTPServer):
     _closer: threading.Timer | None = None
 
     @override
+    def server_bind(self) -> None:
+        # HTTPServer.server_bind reverse-resolves its address with socket.getfqdn for a name nothing here reads; on a
+        # machine whose resolver times out that stalls login for half a minute before the browser opens.
+        TCPServer.server_bind(self)
+        self.server_name = _LOOPBACK
+        self.server_port = self.socket.getsockname()[1]
+
+    @override
     def get_request(self) -> tuple[socket.socket, tuple[str, int]]:
         connection, address = super().get_request()
         left = self.deadline - time.monotonic()
@@ -777,10 +787,10 @@ def _authorize_in_browser(
 
     if not math.isfinite(timeout_s) or timeout_s <= 0:
         raise ChatGPTAuthError("the sign-in timeout must be finite and positive", code="invalid_timeout")
-    with _LoopbackServer(("127.0.0.1", 0), Callback) as server:
+    with _LoopbackServer((_LOOPBACK, 0), Callback) as server:
         server.timeout = 0.25
         server.deadline = time.monotonic() + timeout_s
-        pending = _Pending(client_id, f"http://127.0.0.1:{server.server_port}{CALLBACK_PATH}")
+        pending = _Pending(client_id, f"http://{_LOOPBACK}:{server.server_port}{CALLBACK_PATH}")
         if open_url(_authorization_url(pending, host_id, prompt=prompt, login_hint=login_hint)) is False:
             raise ChatGPTAuthError("could not open a browser; retry with --no-browser", code="no_browser")
         while not received and time.monotonic() < server.deadline:

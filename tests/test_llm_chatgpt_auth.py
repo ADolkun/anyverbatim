@@ -95,6 +95,16 @@ def login(browser: Callable[[str], bool], opener: FakeOpener, *, timeout_s: floa
     return chatgpt_auth.login(open_url=browser, opener=opener, timeout_s=timeout_s, clock=lambda: NOW)
 
 
+def test_login_never_resolves_the_loopback_address(state_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def resolve(_host: str = "") -> str:
+        raise AssertionError("reverse DNS can stall login for half a minute")
+
+    monkeypatch.setattr(socket, "getfqdn", resolve)
+    browser = Browser(approve)
+
+    assert login(browser, token_endpoint(browser)) == chatgpt_auth.LoginResult(EMAIL, plan=True)
+
+
 def test_login_registers_this_host_exchanges_the_code_and_stores_the_account(state_dir: Path) -> None:
     browser = Browser(approve)
     opener = token_endpoint(browser)

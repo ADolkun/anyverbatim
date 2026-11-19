@@ -14,7 +14,7 @@ typecheck:
 	uv run pyrefly check --min-severity warn
 
 test:
-	uv run pytest -n auto --dist worksteal --cov
+	uv run pytest -n auto --cov
 
 privacy-check:
 	uv run python scripts/check_private.py --all-tracked
