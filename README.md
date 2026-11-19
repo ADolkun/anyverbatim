@@ -1,4 +1,4 @@
-# anyverbatim
+# AnyVerbatim
 
 Turn YouTube videos and your own recordings (meetings, iPhone Voice Memos) into verified, timestamped transcripts for LLM context.
 
