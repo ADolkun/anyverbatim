@@ -4,7 +4,7 @@ from itertools import product
 
 import pytest
 
-from anyverbatim.text.numbers import _quantities, itn, quantity_tokens
+from anyverbatim.text.numbers import itn, quantities, quantity_tokens
 
 
 def surfaces(text: str) -> list[str]:
@@ -533,7 +533,7 @@ def test_words_after_a_numeral_that_are_not_counts(text: str) -> None:
     ],
 )
 def test_a_fraction_is_one_token_written_over_under(text: str, surface: str, value: str, kind: str) -> None:
-    (quantity,) = _quantities(text)
+    (quantity,) = quantities(text)
     assert (quantity.token.surface, quantity.token.value_itn, quantity.token.kind) == (surface, value, kind)
     assert quantity.value is None
 
@@ -573,9 +573,9 @@ def test_baifenzhi_on_its_own_is_still_a_percent() -> None:
     ],
 )
 def test_ji_and_shu_make_a_rough_figure(text: str, expected: list[tuple[str, str]]) -> None:
-    quantities = _quantities(text)
-    assert [(q.token.surface, q.token.value_itn) for q in quantities] == expected
-    assert all(q.value is None for q in quantities)
+    found = quantities(text)
+    assert [(q.token.surface, q.token.value_itn) for q in found] == expected
+    assert all(q.value is None for q in found)
 
 
 @pytest.mark.parametrize(
@@ -712,7 +712,8 @@ def test_a_scaled_range_start_keeps_its_surface_and_offsets() -> None:
 
 
 def test_a_rough_figure_never_shares_a_value_with_an_exact_one() -> None:
-    assert itn("二十几岁") != itn("二十岁") and itn("二十几") != itn("二十")
+    assert itn("二十几岁") != itn("二十岁")
+    assert itn("二十几") != itn("二十")
 
 
 @pytest.mark.parametrize(
@@ -742,13 +743,15 @@ def test_a_digit_after_a_word_ending_in_shu_makes_an_exact_figure(text: str, val
 )
 def test_a_spoken_percent_takes_no_measure_word(text: str, surface: str) -> None:
     (token,) = quantity_tokens(text)
-    assert token.surface == surface and token.kind == "percent"
+    assert token.surface == surface
+    assert token.kind == "percent"
 
 
 @pytest.mark.parametrize("text", ["一百点二十", "三点五十年期", "二十五点三十"])
 def test_a_clock_time_needs_an_hour_and_minutes_and_no_unit(text: str) -> None:
-    (quantity,) = _quantities(text)
-    assert "点" in quantity.token.surface and quantity.token.value_itn == quantity.token.surface
+    (quantity,) = quantities(text)
+    assert "点" in quantity.token.surface
+    assert quantity.token.value_itn == quantity.token.surface
     assert quantity.value is None
 
 

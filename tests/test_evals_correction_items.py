@@ -1,5 +1,6 @@
 from collections.abc import Iterator, Sequence
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from click.testing import CliRunner
@@ -10,6 +11,7 @@ from anyverbatim.contract.models import Word
 from anyverbatim.errors import ConfigError
 from anyverbatim.llm.protocol import LLMRequest, LLMResponse
 from anyverbatim.text.correct import Rejection
+from anyverbatim.text.guards import GuardName
 from evals import correction, listen, run_correction
 from evals.correction import (
     BASE,
@@ -300,8 +302,8 @@ def test_the_judge_never_sees_a_candidate_a_base_or_a_model(tmp_path: Path, monk
 # --- rejected proposals ---
 
 
-def rejected(segment: int, before: str, proposed: str, reason: str) -> Rejection:
-    return Rejection(segment, "first", before, proposed, reason)  # type: ignore[arg-type]
+def rejected(segment: int, before: str, proposed: str, reason: GuardName | Literal["index"]) -> Rejection:
+    return Rejection(segment, "first", before, proposed, reason)
 
 
 def with_rejections(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Layout, Manifest]:
@@ -438,7 +440,7 @@ def test_complete_candidates_lists_only_finished_runs(tmp_path: Path, monkeypatc
 
 
 def screened(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(run_correction, "judge_client", lambda: FakeJudge())
+    monkeypatch.setattr(run_correction, "judge_client", FakeJudge)
     result = CliRunner().invoke(run_correction.main, ["screen"])
     assert result.exit_code == 0, result.output
 

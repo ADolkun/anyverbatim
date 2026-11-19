@@ -420,7 +420,7 @@ def recommend(rows: Sequence[HypothesisScreen]) -> Recommendation:
     controls = [by_id[h] for h in CONTROLS if h in by_id]
     challengers = sorted(
         (by_id[h] for h in CHALLENGERS if h in by_id and by_id[h].judge is not None),
-        key=lambda row: _share(row),
+        key=_share,
         reverse=True,
     )
     control: HypothesisScreen | None = None

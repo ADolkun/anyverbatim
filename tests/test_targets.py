@@ -27,7 +27,9 @@ def here(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 )
 def test_youtube_targets(here: Path, target: str, kind: ids.RefKind, key: str) -> None:
     found = classify(target)
-    assert isinstance(found, ids.YouTubeRef) and found.kind is kind and found.id == key
+    assert isinstance(found, ids.YouTubeRef)
+    assert found.kind is kind
+    assert found.id == key
 
 
 def test_local_targets(here: Path) -> None:

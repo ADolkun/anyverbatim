@@ -1,7 +1,10 @@
 from pathlib import Path
+from typing import override
 
+import numpy as np
 import pytest
 from fake_engine import definition, write_silence
+from numpy.typing import NDArray
 from pydantic import ValidationError
 from scripted_engine import LOOP_TEXT, said, spaced, windowed
 
@@ -31,12 +34,12 @@ class DetectingEngine:
     def load(self) -> None:
         self.calls.append(("load", 0, None))
 
-    def detect_language(self, audio: object) -> dict[str, float]:
-        self.calls.append(("detect", len(audio), None))  # type: ignore[arg-type]
+    def detect_language(self, audio: NDArray[np.float32]) -> dict[str, float]:
+        self.calls.append(("detect", len(audio), None))
         return self.detections.pop(0)
 
-    def transcribe(self, audio: object, *, language: str | None, context: AsrContext | None) -> RawChunk:
-        samples = len(audio)  # type: ignore[arg-type]
+    def transcribe(self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None) -> RawChunk:
+        samples = len(audio)
         self.calls.append(("transcribe", samples, language))
         return RawChunk(
             text=f"{language}:{samples}",
@@ -52,8 +55,8 @@ def lid(mode: str) -> EngineDef:
     return definition(mode=mode, language="detect")
 
 
-def job(wav: Path, **fields: object) -> FileJob:
-    return FileJob(id="f1", wav=str(wav), chunks=CHUNKS, **fields)  # type: ignore[arg-type]
+def job(wav: Path, *, language: str | None = None, languages: tuple[str, ...] = ()) -> FileJob:
+    return FileJob(id="f1", wav=str(wav), language=language, chunks=CHUNKS, languages=languages)
 
 
 def run(tmp_path: Path, engine: DetectingEngine, definition_: EngineDef, *jobs: FileJob) -> list[ChunkHypothesis]:
@@ -209,16 +212,22 @@ def test_the_runs_guard_repairs_windows_like_the_whole_file_control(tmp_path: Pa
 
 def test_a_runs_rows_anomaly_span_is_its_window_after_the_run_start(tmp_path: Path, wav: Path) -> None:
     class LoopingRuns(DetectingEngine):
-        def transcribe(self, audio: object, *, language: str | None, context: AsrContext | None) -> RawChunk:
+        @override
+        def transcribe(
+            self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None
+        ) -> RawChunk:
             super().transcribe(audio, language=language, context=context)
             return windowed((0.0, 2.0, spaced("alpha bravo")), (2.0, 6.0, spaced(LOOP_TEXT)), language=language)
 
-        def transcribe_window(self, audio: object, *, language: str | None) -> RawChunk:
+        def transcribe_window(self, audio: NDArray[np.float32], *, language: str | None) -> RawChunk:
             return said(*spaced(LOOP_TEXT))
 
     request = WorkerRequest(engine=lid("runs"), out_dir=str(tmp_path / "out"), files=(job(wav),))
     worker.run_request(request, engine=LoopingRuns([ZH, ZH, EN, EN]), guard=worker.default_guard(request))
-    rows = [ChunkHypothesis.model_validate_json(line) for line in (tmp_path / "out" / HYPOTHESES_FILE).open()]
+    rows = [
+        ChunkHypothesis.model_validate_json(line)
+        for line in (tmp_path / "out" / HYPOTHESES_FILE).read_text(encoding="utf-8").splitlines()
+    ]
     assert [(row.start, row.flags, row.anomaly_spans) for row in rows] == [
         (1.0, ("redecoded", "decoder_anomaly"), (AnomalySpan(start=3.0, end=7.0),)),
         (9.0, ("redecoded", "decoder_anomaly"), (AnomalySpan(start=11.0, end=15.0),)),
@@ -290,7 +299,10 @@ def test_an_interrupted_per_chunk_output_detects_only_the_chunks_it_still_decode
 
 def test_the_per_chunk_guard_redecodes_the_halves_in_the_detected_language(tmp_path: Path, wav: Path) -> None:
     class SilentFirst(DetectingEngine):
-        def transcribe(self, audio: object, *, language: str | None, context: AsrContext | None) -> RawChunk:
+        @override
+        def transcribe(
+            self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None
+        ) -> RawChunk:
             raw = super().transcribe(audio, language=language, context=context)
             return RawChunk(text="", language=language) if len(self.decodes()) == 1 else raw
 
@@ -299,7 +311,10 @@ def test_the_per_chunk_guard_redecodes_the_halves_in_the_detected_language(tmp_p
     request = WorkerRequest(engine=lid("chunk"), out_dir=str(tmp_path / "out"), files=(single,))
     worker.run_request(request, engine=engine, guard=QualityGuard())
     assert [language for _, language in engine.decodes()] == ["en", "en", "en"]
-    (row,) = [ChunkHypothesis.model_validate_json(line) for line in (tmp_path / "out" / HYPOTHESES_FILE).open()]
+    (row,) = [
+        ChunkHypothesis.model_validate_json(line)
+        for line in (tmp_path / "out" / HYPOTHESES_FILE).read_text(encoding="utf-8").splitlines()
+    ]
     assert ("redecoded" in row.flags, row.language, row.language_prob) == (True, "en", 0.7)
 
 

@@ -88,4 +88,5 @@ def test_a_document_that_is_not_utf8_is_left_out(tmp_path: Path) -> None:
     (tmp_path / "rec-eeeeeeeeeeeeeeee").mkdir()
     (tmp_path / "rec-eeeeeeeeeeeeeeee" / "context.json").write_bytes(b"\xff\xfe not utf-8")
     text = write_index(tmp_path).read_text(encoding="utf-8")
-    assert "Kept" in text and "eeeeeeeeeeeeeeee" not in text
+    assert "Kept" in text
+    assert "eeeeeeeeeeeeeeee" not in text

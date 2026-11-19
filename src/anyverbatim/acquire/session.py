@@ -15,7 +15,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from types import TracebackType
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol, cast, override
 
 from anyverbatim import atomic, config, ids, paths
 from anyverbatim.acquire.audio import INFO_MAX_AGE_S, WAV_NAME, fetch_audio, find_audio, to_wav16k, validate_audio
@@ -320,7 +320,9 @@ class FetchSession:
             entries = _load_tracks(vdir)
             if entries is None:
                 with in_stage("captions"):
-                    result = self._stage(snaps, access.cookies_used, lambda c: self._captions(vdir, metadata, c))
+                    result = self._stage(
+                        snaps, lambda c: self._captions(vdir, metadata, c), cookies_used=access.cookies_used
+                    )
                 warnings += result.warnings
                 entries = _track_entries(result)
                 if self._captions_completed():
@@ -333,10 +335,12 @@ class FetchSession:
         audio_s: float | None = None
         if want_audio:
             with in_stage("audio"):
-                audio_s = self._audio(video_id, vdir, metadata, snaps, access.cookies_used, reused)
+                audio_s = self._audio(video_id, vdir, metadata, snaps, reused, cookies_used=access.cookies_used)
         if self._options.video:
             with in_stage("video"):
-                self._video(video_id, vdir, metadata, snaps, access.cookies_used, reused, present=video_done)
+                self._video(
+                    video_id, vdir, metadata, snaps, reused, cookies_used=access.cookies_used, present=video_done
+                )
 
         warnings += [w for seen in self._runner.seen for w in seen.warnings]
         access = access.model_copy(update={"warnings": _clean_warnings(warnings)})
@@ -396,7 +400,7 @@ class FetchSession:
         logged_in = Signal.AUTH_COOKIES_FOUND in secondary
         premium = True if Signal.PREMIUM in secondary else False if logged_in else None
         if premium is not None and self._source is not None:
-            preflight.record_premium(self._source, premium)
+            preflight.record_premium(self._source, premium=premium)
         return _Extracted(metadata, cookies_used=True, logged_in=logged_in, premium=premium)
 
     def _login_verdict(self, cause: Signal) -> AuthError:
@@ -435,7 +439,7 @@ class FetchSession:
             preflight.invalidate(self._source)
         return result
 
-    def _stage[T](self, snaps: _Snapshots | None, cookies_used: bool, call: Callable[[Path | None], T]) -> T:
+    def _stage[T](self, snaps: _Snapshots | None, call: Callable[[Path | None], T], *, cookies_used: bool) -> T:
         if not cookies_used:
             return call(None)
         return self._with_cookies(self._cookie_snapshots(snaps, None), call)
@@ -461,8 +465,9 @@ class FetchSession:
         vdir: Path,
         metadata: VideoMetadata,
         snaps: _Snapshots | None,
-        cookies_used: bool,
         reused: list[str],
+        *,
+        cookies_used: bool,
     ) -> float:
         expected = metadata.duration
         native = find_audio(vdir)
@@ -471,7 +476,6 @@ class FetchSession:
         else:
             native = self._stage(
                 snaps,
-                cookies_used,
                 lambda c: fetch_audio(
                     self._runner,
                     video_id,
@@ -481,6 +485,7 @@ class FetchSession:
                     cookies=c,
                     creator_note=self._options.creator_note,
                 ),
+                cookies_used=cookies_used,
             )
         wav = vdir / WAV_NAME
         wav_s = _duration_if_valid(wav, expected)
@@ -496,9 +501,9 @@ class FetchSession:
         vdir: Path,
         metadata: VideoMetadata,
         snaps: _Snapshots | None,
-        cookies_used: bool,
         reused: list[str],
         *,
+        cookies_used: bool,
         present: bool,
     ) -> None:
         if present:
@@ -506,7 +511,6 @@ class FetchSession:
             return
         self._stage(
             snaps,
-            cookies_used,
             lambda c: download_video(
                 self._runner,
                 video_id,
@@ -516,6 +520,7 @@ class FetchSession:
                 cookies=c,
                 creator_note=self._options.creator_note,
             ),
+            cookies_used=cookies_used,
         )
 
     def _access(self, metadata: VideoMetadata, extracted: _Extracted, warnings: Iterable[str]) -> Access:
@@ -736,12 +741,14 @@ class VideoHook(Protocol):
 
 
 @dataclass(frozen=True)
-class _FetchOnly:
+class _FetchOnly(VideoHook):
     out: Path
 
+    @override
     def done(self, video_id: str) -> bool:
         return False
 
+    @override
     def __call__(self, session: FetchSession, planned: PlannedVideo) -> VideoOutcome:
         try:
             with video_lock(paths.video_dir(planned.video_id, self.out)):
@@ -852,10 +859,10 @@ def expand(
         found = _list_ids(runner, target, ref, cookies_first=cookies_first, source=source, limit=limit)
         if runner.stop is not None:
             raise BatchStopError(runner.stop.signal, runner.stop.until)
-        return found
     except AnyverbatimError as exc:
         explain(exc, source)
         raise
+    return found
 
 
 def fetch(

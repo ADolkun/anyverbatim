@@ -107,11 +107,11 @@ def _parse(alias: str, body: bytes) -> list[_Entry]:
     models = payload.get("models") if isinstance(payload, dict) else None
     if not isinstance(models, list):
         raise _error(f"the ChatGPT model catalog has an unexpected shape, so {alias} cannot be resolved")
-    entries: list[_Entry] = []
-    for item in models:
-        if isinstance(item, dict) and isinstance(slug := item.get("slug"), str):
-            entries.append(_Entry(slug, item.get("visibility") == "list" and item.get("supported_in_api") is True))
-    return entries
+    return [
+        _Entry(slug, item.get("visibility") == "list" and item.get("supported_in_api") is True)
+        for item in models
+        if isinstance(item, dict) and isinstance(slug := item.get("slug"), str)
+    ]
 
 
 def _error(message: str, *, signed_out: bool = False) -> ConfigError:

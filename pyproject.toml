@@ -72,39 +72,34 @@ indent-width = 4
 target-version = "py314"
 
 [tool.ruff.lint]
-select = [
-    "E",       # pycodestyle errors
-    "F",       # pyflakes
-    "W",       # pycodestyle warnings
-    "I",       # isort
-    "B",       # flake8-bugbear
-    "UP",      # pyupgrade
-    "SIM",     # flake8-simplify
-    "RUF",     # ruff-specific
-    "N",       # pep8-naming
-    "TID",     # flake8-tidy-imports
-    "D",       # pydocstyle
-    "C901",    # mccabe complexity
-    "PLR0911", # too many returns
-    "PLR0912", # too many branches
-    "PLR0913", # too many args
-    "PLR0915", # too many statements
-    "PLR2004", # magic-value comparison
-]
+# Every rule, so new ruff releases tighten the bar by default. Each opt-out names why it doesn't fit this project.
+select = ["ALL"]
 ignore = [
-    # Mandarin text is first-class data here (transcripts, fixtures); the
-    # confusable-character checks are noise for it.
+    # The formatter owns trailing commas.
+    "COM812",
+    # The MIT licence lives in LICENSE, not in per-file headers.
+    "CPY001",
+    # Docstrings only where they add what the signature can't; a required docstring just restates it.
+    "D100",
+    "D101",
+    "D102",
+    "D103",
+    "D104",
+    "D105",
+    "D106",
+    "D107",
+    # Fail-loud errors carry their actionable message at the raise site; assigning it first only changes tracebacks.
+    "EM101",
+    "EM102",
+    "TRY003",
+    # Mandarin text is first-class data here (transcripts, fixtures); the confusable-character checks are noise for it.
     "RUF001",
     "RUF002",
     "RUF003",
-    "D100", # missing module docstring
-    "D101", # missing public class docstring
-    "D102", # missing public method docstring
-    "D103", # missing public function docstring
-    "D104", # missing package docstring
-    "D105", # missing magic-method docstring
-    "D106", # missing nested-class docstring
-    "D107", # missing __init__ docstring
+    # Every subprocess call passes an argv list; shell=True stays banned by S602 and S604.
+    "S603",
+    # Python 3.14 evaluates annotations lazily, and pydantic and click read them at runtime, so imports stay real.
+    "TC",
 ]
 
 [tool.ruff.lint.isort]
@@ -123,8 +118,13 @@ max-branches = 18
 max-statements = 80
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["D", "PLR2004"]
-"scripts/**" = ["D", "PLR2004", "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915"]
+# pytest asserts; fake secrets, temp paths and seeded randomness in fixtures; stand-ins keep the parameter names of what
+# they replace; tests call private helpers and take parametrized booleans; tests are not a package.
+"tests/**" = ["ARG", "D", "FBT", "INP001", "PLR2004", "S101", "S105", "S106", "S108", "S311", "S607", "SLF001"]
+# Command-line tools that print, run outside the package, and carry no complexity budget.
+# Eval sampling is seeded for reproducibility, not security.
+"evals/**" = ["S311"]
+"scripts/**" = ["D", "INP001", "PLR2004", "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915", "T201"]
 
 [tool.pyrefly]
 preset = "strict"
@@ -135,28 +135,12 @@ search-path = [".", "scripts", "tests", "tests/acquire", "tests/asr", "tests/dia
 [tool.pyrefly.errors]
 unannotated-attribute = true
 unannotated-return = true
-
-[[tool.pyrefly.sub-config]]
-matches = "tests/**"
-# Tests are verified by execution; relax the kinds that fire on concrete
-# literals passed into precisely typed source signatures. Source stays fully checked.
-[tool.pyrefly.sub-config.errors]
-implicit-any = false
-implicit-any-parameter = false
-implicit-any-type-argument = false
-implicit-any-attribute = false
-implicit-any-empty-container = false
-implicit-any-lambda = false
-unannotated-attribute = false
-unannotated-return = false
-missing-override-decorator = false
-bad-argument-type = false
-bad-index = false
-not-iterable = false
-no-matching-overload = false
+unused-ignore = "error"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 pythonpath = [".", "scripts"]
 addopts = "-p no:cacheprovider"
+strict = true
+filterwarnings = ["error"]

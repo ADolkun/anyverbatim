@@ -5,8 +5,10 @@ from evals_fixture import CHUNKS, ZH, chunk_rows, make_eval, write_pair
 
 from anyverbatim.asr.models import ChunkHypothesis, RunMetrics
 from anyverbatim.contract.models import Word
-from evals.consensus import Segment, TimedUnit, find_disputes, timed_units, window_units
+from evals import run_asr
+from evals.consensus import Dispute, Segment, TimedUnit, find_disputes, timed_units, window_units
 from evals.metrics import weighted_wilson, wilson_interval
+from evals.normalize import Language
 from evals.screen import (
     NO_SPEED,
     HypothesisScreen,
@@ -28,12 +30,12 @@ from evals.screen import (
 from evals.store import RunRecord, append_history, hypothesis_units, load_plan, row_units, write_rows
 
 
-def dispute_of(a: str, b: str, language: str = "zh"):
+def dispute_of(a: str, b: str, language: Language = "zh") -> Dispute:
     hyps = {
-        "a": timed_units([Segment(f"我们{a}了", 0, 5)], language),  # type: ignore[arg-type]
-        "b": timed_units([Segment(f"我们{b}了", 0, 5)], language),  # type: ignore[arg-type]
+        "a": timed_units([Segment(f"我们{a}了", 0, 5)], language),
+        "b": timed_units([Segment(f"我们{b}了", 0, 5)], language),
     }
-    (dispute,) = find_disputes(hyps, language)  # type: ignore[arg-type]
+    (dispute,) = find_disputes(hyps, language)
     return dispute
 
 
@@ -43,7 +45,7 @@ def test_written_form_only_differences_are_set_aside_but_case_errors_stay() -> N
     assert not format_only(dispute_of("买一百股", "买两百股").distinct, "zh")
 
 
-def en_dispute(a: str, b: str):
+def en_dispute(a: str, b: str) -> Dispute:
     hyps = {"a": timed_units([Segment(a, 0, 5)], "en"), "b": timed_units([Segment(b, 0, 5)], "en")}
     (dispute,) = find_disputes(hyps, "en")
     return dispute
@@ -86,7 +88,7 @@ def test_quality_counts_flags_and_redecodes(tmp_path: Path, monkeypatch: pytest.
     assert plan is not None
     rows = chunk_rows(
         "q-base", ZH, ["好好好好好好好好", "今天", "明天", ""],
-        flags=[("token_cap_hit",), ("redecoded",), ("decoder_anomaly", "redecoded"), ()],  # type: ignore[list-item]
+        flags=[("token_cap_hit",), ("redecoded",), ("decoder_anomaly", "redecoded"), ()],
     )  # fmt: skip
     q = file_quality(manifest.videos[0], plan, rows)
     assert (q.token_cap_hits, q.decoder_anomalies, q.redecoded, q.chunks) == (1, 1, 2, 4)
@@ -108,8 +110,6 @@ def test_whole_file_text_in_a_pause_counts_as_nonspeech(tmp_path: Path, monkeypa
 
 
 def test_screen_reports_reference_cer_and_recommends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from evals import run_asr
-
     layout, manifest = make_eval(tmp_path / "eval", monkeypatch)
     write_pair(layout)
     run_asr.build_captions(layout, manifest)
@@ -137,7 +137,7 @@ def share(wins: int, decided: int) -> Share:
 
 
 def row(name: str, judge: Share | None) -> HypothesisScreen:
-    q = {"zh": Quality(), "en": Quality()}
+    q: dict[Language, Quality] = {"zh": Quality(), "en": Quality()}
     return HypothesisScreen(hypothesis=name, quality=q, reference_cer={}, reference_cer_raw={}, reference_mer={},
                             caption_wer=None, speed=NO_SPEED, judge=judge, disputes=0)  # fmt: skip
 

@@ -9,6 +9,7 @@ from anyverbatim.errors import ConfigError
 from evals import run_asr
 from evals.decide import decide
 from evals.listen import Choice, LoggedDecision
+from evals.metrics import weighted_wilson
 from evals.normalize import Language
 from evals.report import ABResult, Report, WinStats, build_report, render_markdown
 from evals.screen import (
@@ -27,8 +28,6 @@ HOUR = 3600.0
 
 
 def stats(wins: int, losses: int) -> WinStats:
-    from evals.metrics import weighted_wilson
-
     w = weighted_wilson([(True, 1.0)] * wins + [(False, 1.0)] * losses)
     return WinStats(challenger_wins=wins, control_wins=losses, both=3, neither=1, skipped=0, rate=w.rate,
                     effective_n=w.effective_n, low=w.low, high=w.high)  # fmt: skip
@@ -40,7 +39,9 @@ def quality(**extra: float) -> dict[Language, Quality]:
 
 
 def screen_row(name: str, cer: float | None = 0.10, **extra: float) -> HypothesisScreen:
-    reference = {"zh": Rate(errors=round(cer * 1000), reference_units=1000)} if cer is not None else {}
+    reference: dict[Language, Rate] = (
+        {"zh": Rate(errors=round(cer * 1000), reference_units=1000)} if cer is not None else {}
+    )
     return HypothesisScreen(hypothesis=name, quality=quality(**extra), reference_cer=reference,
                             reference_cer_raw=reference, reference_mer=reference, caption_wer=None,
                             speed=NO_SPEED.model_copy(update={"rtf": 0.1, "load_s": 1.0}),
@@ -167,8 +168,8 @@ def test_the_report_and_results_hold_no_transcript_text_or_ids(tmp_path: Path, m
     key = load_key(layout.session_dir("main"))
     with (layout.session_dir("main") / DECISIONS_FILE).open("w", encoding="utf-8") as handle:
         for i, entry in enumerate(key.entries):
-            choice = str(entry.challenger_option) if i % 3 else "both"
-            handle.write(LoggedDecision(span=entry.id, choice=choice, at="t").model_dump_json() + "\n")  # type: ignore[arg-type]
+            choice: Choice = ("1" if entry.challenger_option == 1 else "2") if i % 3 else "both"
+            handle.write(LoggedDecision(span=entry.id, choice=choice, at="t").model_dump_json() + "\n")
     result = build_report(layout, manifest, screen, "main", "t")
     assert result.ab is not None
     assert result.ab.overall.challenger_wins == sum(1 for i in range(len(key.entries)) if i % 3)
@@ -181,10 +182,13 @@ def test_the_report_and_results_hold_no_transcript_text_or_ids(tmp_path: Path, m
     han = {run for text in sources for run in re.findall(r"[一-鿿]{2,}", text)}
     words = {w for text in sources for w in text.split() if len(w) > 3}
     for text in texts:
-        assert ZH not in text and EN not in text and "Example title" not in text
+        assert ZH not in text
+        assert EN not in text
+        assert "Example title" not in text
         assert not any(run in text for run in han)
         assert not any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
-        assert "zh-01" in text and "en-01" in text
+        assert "zh-01" in text
+        assert "en-01" in text
 
 
 def test_skips_count_as_undecided_until_revisited(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,14 +212,18 @@ def test_skips_count_as_undecided_until_revisited(tmp_path: Path, monkeypatch: p
     for entry in rest[:-1]:
         log(entry.id, "1")
     partial = build_report(layout, manifest, screen, "main", "t")
-    assert partial.ab is not None and partial.ab.undecided == 2 and partial.ab.answered == len(key.entries) - 2
+    assert partial.ab is not None
+    assert partial.ab.undecided == 2
+    assert partial.ab.answered == len(key.entries) - 2
     with pytest.raises(ConfigError, match="2 of 6 spans without a decision"):
         run_asr.write_decision(partial, tmp_path / "results", "2025-01-01")
 
     log(rest[-1].id, "2")
     log(first.id, "both")
     complete = build_report(layout, manifest, screen, "main", "t")
-    assert complete.ab is not None and complete.ab.undecided == 0 and complete.ab.overall.skipped == 0
+    assert complete.ab is not None
+    assert complete.ab.undecided == 0
+    assert complete.ab.overall.skipped == 0
     run_asr.write_decision(complete, tmp_path / "results", "2025-01-01")
 
 

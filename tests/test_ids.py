@@ -117,6 +117,7 @@ def test_is_video_id() -> None:
 def test_a_recording_id_is_the_prefix_of_its_audio_digest() -> None:
     digest = "0123456789abcdef" + "f" * 48
     assert recording_id(digest) == "rec-0123456789abcdef"
-    assert is_recording_id("rec-0123456789abcdef") and not is_video_id("rec-0123456789abcdef")
+    assert is_recording_id("rec-0123456789abcdef")
+    assert not is_video_id("rec-0123456789abcdef")
     with pytest.raises(ValueError, match="sha256"):
         recording_id(digest.upper())

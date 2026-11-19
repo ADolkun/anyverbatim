@@ -1,7 +1,9 @@
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 from chatgpt_fakes import EMAIL, store_account
@@ -44,7 +46,11 @@ class FakeLogin:
 
 def test_login_when_already_signed_in_opens_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     store_account(expires_at=time.time() + 3600)
-    monkeypatch.setattr(chatgpt_auth, "login", lambda **_kwargs: pytest.fail("opened a sign-in"))
+
+    def refuse_login(**_kwargs: object) -> NoReturn:
+        pytest.fail("opened a sign-in")
+
+    monkeypatch.setattr(chatgpt_auth, "login", refuse_login)
     result = CliRunner().invoke(main, ["login"])
     assert result.exit_code == 0, result.output
     assert result.output.startswith(f"Already signed in as {EMAIL} (")
@@ -56,7 +62,11 @@ def test_login_switch_signs_in_even_when_signed_in(monkeypatch: pytest.MonkeyPat
     store_account(expires_at=time.time() + 3600)
     login = FakeLogin()
     monkeypatch.setattr(chatgpt_auth, "login", login)
-    monkeypatch.setattr(cli_session.webbrowser, "open", lambda _url: True)
+
+    def open_browser(url: str) -> bool:
+        return True
+
+    monkeypatch.setattr(cli_session.webbrowser, "open", open_browser)
     result = CliRunner().invoke(main, ["login", "--switch"])
     assert result.exit_code == 0, result.output
     assert login.calls == [True]
@@ -64,27 +74,42 @@ def test_login_switch_signs_in_even_when_signed_in(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.parametrize(
     "stored",
-    [None, {"expires_at": 1.0, "refresh": ""}, {"scopes": ("openid",)}, {"refresh_refused": True}],
+    [
+        None,
+        partial(store_account, expires_at=1.0, refresh=""),
+        partial(store_account, scopes=("openid",)),
+        partial(store_account, refresh_refused=True),
+    ],
 )
 def test_login_signs_in_when_the_session_needs_it(
-    monkeypatch: pytest.MonkeyPatch, stored: dict[str, object] | None
+    monkeypatch: pytest.MonkeyPatch, stored: Callable[[], object] | None
 ) -> None:
     if stored is not None:
-        store_account(**stored)  # type: ignore[arg-type]
+        stored()
     login = FakeLogin()
     opened: list[str] = []
     monkeypatch.setattr(chatgpt_auth, "login", login)
-    monkeypatch.setattr(cli_session.webbrowser, "open", lambda url: opened.append(url) or True)
+
+    def open_browser(url: str) -> bool:
+        opened.append(url)
+        return True
+
+    monkeypatch.setattr(cli_session.webbrowser, "open", open_browser)
     result = CliRunner().invoke(main, ["login"])
     assert result.exit_code == 0, result.output
     assert login.calls == [False]
-    assert "https://auth.openai.com/api/accounts/authorize" in result.output and len(opened) == 1
+    assert "https://auth.openai.com/api/accounts/authorize" in result.output
+    assert len(opened) == 1
     assert f"chatgpt: signed in as {EMAIL}" in result.output
 
 
 def test_login_no_browser_only_prints_the_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(chatgpt_auth, "login", FakeLogin())
-    monkeypatch.setattr(cli_session.webbrowser, "open", lambda _url: pytest.fail("opened a browser"))
+
+    def refuse_browser(url: str) -> NoReturn:
+        pytest.fail("opened a browser")
+
+    monkeypatch.setattr(cli_session.webbrowser, "open", refuse_browser)
     result = CliRunner().invoke(main, ["login", "--no-browser"])
     assert result.exit_code == 0, result.output
     assert "https://auth.openai.com/api/accounts/authorize" in result.output
@@ -103,7 +128,8 @@ def test_login_failures_are_reported(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(chatgpt_auth, "login", fail)
     result = CliRunner().invoke(main, ["login", "--no-browser"])
-    assert result.exit_code == 1 and "sign-in timed out" in result.output
+    assert result.exit_code == 1
+    assert "sign-in timed out" in result.output
 
 
 @pytest.mark.parametrize(

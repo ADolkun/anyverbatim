@@ -32,6 +32,7 @@ from typing import Literal
 
 import click
 import numpy as np
+import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from anyverbatim import atomic
@@ -211,13 +212,16 @@ def download(url: str, destination: Path, *, free: Callable[[Path], int] = disk.
     check_free_disk(destination.parent, free=free)
     part = destination.with_name(destination.name + ".part")
     have = part.stat().st_size if part.exists() else 0
-    request = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
+    # Every caller passes one of this module's fixed https URLs.
+    request = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})  # noqa: S310
     try:
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request) as response:  # noqa: S310
             resumed = have > 0 and response.status == 206  # noqa: PLR2004
             with part.open("ab" if resumed else "wb") as handle:
                 shutil.copyfileobj(response, handle, 1 << 20)
     except urllib.error.URLError as exc:
+        if isinstance(exc, urllib.error.HTTPError):
+            exc.close()
         raise ConfigError(f"could not download {url}: {exc}") from exc
     part.replace(destination)
     return destination
@@ -325,8 +329,6 @@ def ami_alignment(turns: Sequence[Turn], utterances: Sequence[RefUtterance]) -> 
 
 def prepare_ami(audio_shard: Path, text_shards: Sequence[Path], corpus_dir: Path) -> CorpusIndex:
     """Lay out every meeting of one sdm test shard: RTTM from its turns, reference text from the utterance corpus."""
-    import pyarrow.parquet as pq
-
     transcripts: dict[str, list[RefUtterance]] = defaultdict(list)
     columns = ["meeting_id", "begin_time", "end_time", "speaker_id", "text"]
     for shard in text_shards:
@@ -444,8 +446,6 @@ def render_session(plan: SessionPlan, samples: Callable[[AscendUtterance], np.nd
 
 
 def _ascend_rows(parquet: Path) -> Iterator[tuple[AscendUtterance, bytes]]:
-    import pyarrow.parquet as pq
-
     for batch in pq.ParquetFile(parquet).iter_batches(batch_size=1):
         row = batch.to_pylist()[0]
         session, speaker, line, start, duration = parse_ascend_name(row["path"])
@@ -615,7 +615,7 @@ def _show(index: CorpusIndex) -> None:
     "--shard", default=0, show_default=True, type=click.IntRange(0, 2), help="sdm test shard (about 5 meetings)."
 )
 @click.option("--keep-raw", is_flag=True, help="Keep the downloaded parquet files.")
-def ami(shard: int, keep_raw: bool) -> None:
+def ami(shard: int, *, keep_raw: bool) -> None:
     """AMI SDM test: one shard of meetings with RTTMs and reference text."""
     audio = _fetch(AMI_REPO, AMI_AUDIO_SHARD.format(index=shard), "ami-sdm")
     text = [_fetch(AMI_TEXT_REPO, name, "ami-text") for name in AMI_TEXT_SHARDS]
@@ -627,7 +627,7 @@ def ami(shard: int, keep_raw: bool) -> None:
 
 @main.command()
 @click.option("--keep-raw", is_flag=True, help="Keep the downloaded parquet file.")
-def ascend(keep_raw: bool) -> None:
+def ascend(*, keep_raw: bool) -> None:
     """ASCEND test split: utterances plus long-form sessions."""
     parquet = _fetch(ASCEND_REPO, ASCEND_TEST, "ascend")
     _show(prepare_ascend(parquet, recordings_dir() / "ascend"))
@@ -638,7 +638,7 @@ def ascend(keep_raw: bool) -> None:
 @main.command()
 @click.option("--sessions", type=int, default=None, help="Keep only the first N sessions (default: all 8).")
 @click.option("--keep-archive", is_flag=True, help="Keep the 3.67 GB archive.")
-def alimeeting(sessions: int | None, keep_archive: bool) -> None:
+def alimeeting(sessions: int | None, *, keep_archive: bool) -> None:
     """AliMeeting Eval: far-field channel 1 as 16 kHz WAV plus references; the archive is deleted afterwards."""
     root = recordings_dir()
     archive = download(ALIMEETING_URL, root / RAW / "alimeeting" / "Eval_Ali.tar.gz")

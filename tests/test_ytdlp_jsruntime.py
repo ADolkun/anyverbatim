@@ -13,7 +13,11 @@ def no_override(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _path(monkeypatch: pytest.MonkeyPatch, *found: str) -> None:
-    monkeypatch.setattr(jsruntime.shutil, "which", lambda name: f"/opt/bin/{name}" if name in found else None)
+
+    def which(name: str) -> str | None:
+        return f"/opt/bin/{name}" if name in found else None
+
+    monkeypatch.setattr(jsruntime.shutil, "which", which)
 
 
 def _node(monkeypatch: pytest.MonkeyPatch, stdout: str, code: int = 0) -> list[list[str]]:

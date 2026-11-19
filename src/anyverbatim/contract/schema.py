@@ -45,7 +45,7 @@ def load_document(source: Path | str) -> ContextDocument:
         data = _upgrade_1x(data)
     elif minor > _CURRENT_MINOR:
         schema = export_schema()
-        data = _prune_unknown(data, schema, schema["$defs"])
+        data = cast("dict[str, Any]", _prune_unknown(data, schema, schema["$defs"]))
     if (major, minor) != (_CURRENT_MAJOR, _CURRENT_MINOR):
         data = {**data, "schema_version": SCHEMA_VERSION}
     try:
@@ -95,7 +95,7 @@ def _upgrade_1x(data: dict[str, Any]) -> dict[str, Any]:
     return upgraded
 
 
-def _prune_unknown(value: object, node: dict[str, Any], defs: dict[str, Any]) -> Any:
+def _prune_unknown(value: object, node: dict[str, Any], defs: dict[str, Any]) -> object:
     """Drop object keys that the schema node does not declare, following $ref, discriminators, anyOf and array items."""
     if "$ref" in node:
         return _prune_unknown(value, defs[node["$ref"].rsplit("/", 1)[-1]], defs)

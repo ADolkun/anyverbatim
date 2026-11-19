@@ -31,7 +31,7 @@ from anyverbatim.asr.models import (
 from anyverbatim.asr.runner import WorkerResult
 from anyverbatim.asr.worker import _claim_output as claim_output
 from anyverbatim.contract import Word
-from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Usage
+from anyverbatim.llm.protocol import LLMClient, LLMRequest, LLMResponse, Usage
 from anyverbatim.pipeline import ProgressEvent, VideoResult, process_many
 from anyverbatim.store import LOCK_NAME
 from anyverbatim.ytdlp import jsruntime, version
@@ -269,9 +269,9 @@ def isolated(home: Path) -> Generator[None]:
     os.environ["HOME"] = str(home)
     try:
         with (
-            mock.patch.object(version, "installed", lambda: version.YtDlpVersion("2099.01.01", NOW.date())),
-            mock.patch.object(jsruntime, "detect", lambda: jsruntime.JsRuntime("deno", (), None)),
-            mock.patch.object(registry, "find_spec", lambda _name: object()),
+            mock.patch.object(version, "installed", return_value=version.YtDlpVersion("2099.01.01", NOW.date())),
+            mock.patch.object(jsruntime, "detect", return_value=jsruntime.JsRuntime("deno", (), None)),
+            mock.patch.object(registry, "find_spec", return_value=object()),
             mock.patch.object(stages, "__version__", GENERATOR_VERSION),
         ):
             yield
@@ -284,7 +284,7 @@ def isolated(home: Path) -> Generator[None]:
 
 
 def run(
-    video_id: str, out: Path | None, llm: FakeLLM, yt: YtDlpRunner, progress: list[ProgressEvent] | None = None
+    video_id: str, out: Path | None, llm: LLMClient, yt: YtDlpRunner, progress: list[ProgressEvent] | None = None
 ) -> VideoResult:
     results: list[VideoResult] = []
     events: list[ProgressEvent] = [] if progress is None else progress
@@ -352,4 +352,4 @@ def generate(target: Path) -> dict[str, list[ProgressEvent]]:
 if __name__ == "__main__":
     written = Path(sys.argv[1]) if len(sys.argv) > 1 else FIXTURE_ROOT
     generate(written)
-    print(f"wrote {written}")
+    sys.stdout.write(f"wrote {written}\n")

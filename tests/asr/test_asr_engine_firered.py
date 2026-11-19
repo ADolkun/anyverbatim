@@ -4,6 +4,8 @@ from typing import Any
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
+from pydantic import JsonValue
 
 from anyverbatim.asr import registry
 from anyverbatim.asr.engines import firered
@@ -14,7 +16,7 @@ SPEC = registry.get("f-aed").spec
 
 class FakeMx:
     @staticmethod
-    def array(values: Any) -> tuple[str, Any]:
+    def array(values: NDArray[np.float32]) -> tuple[str, NDArray[np.float32]]:
         return ("mx", values)
 
 
@@ -22,33 +24,33 @@ class FakeModel:
     def __init__(self, text: str = "nvda rose 3.5 percent", confidence: float = 0.9137) -> None:
         self.text = text
         self.confidence = confidence
-        self.calls: list[tuple[Any, dict[str, Any]]] = []
+        self.calls: list[tuple[object, dict[str, object]]] = []
 
-    def generate(self, audio: Any, **kwargs: Any) -> SimpleNamespace:
+    def generate(self, audio: object, **kwargs: object) -> SimpleNamespace:
         self.calls.append((audio, kwargs))
         return SimpleNamespace(
             text=self.text, segments=[{"text": self.text, "confidence": self.confidence}], generation_tokens=7
         )
 
 
-def install(monkeypatch: pytest.MonkeyPatch, model: FakeModel) -> list[tuple[str, dict[str, Any]]]:
-    loads: list[tuple[str, dict[str, Any]]] = []
+def install(monkeypatch: pytest.MonkeyPatch, model: FakeModel) -> list[tuple[str, dict[str, object]]]:
+    loads: list[tuple[str, dict[str, object]]] = []
     stt, mlx, core = ModuleType("mlx_audio.stt"), ModuleType("mlx"), ModuleType("mlx.core")
 
-    def load(repo: str, **kwargs: Any) -> FakeModel:
+    def load(repo: str, **kwargs: object) -> FakeModel:
         loads.append((repo, kwargs))
         return model
 
-    stt.load = load  # type: ignore[attr-defined]
-    core.array = FakeMx.array  # type: ignore[attr-defined]
-    mlx.core = core  # type: ignore[attr-defined]
+    vars(stt)["load"] = load
+    vars(core)["array"] = FakeMx.array
+    vars(mlx)["core"] = core
     monkeypatch.setitem(sys.modules, "mlx_audio.stt", stt)
     monkeypatch.setitem(sys.modules, "mlx", mlx)
     monkeypatch.setitem(sys.modules, "mlx.core", core)
     return loads
 
 
-def loaded_engine(monkeypatch: pytest.MonkeyPatch, model: FakeModel) -> tuple[Any, list[tuple[str, dict[str, Any]]]]:
+def loaded_engine(monkeypatch: pytest.MonkeyPatch, model: FakeModel) -> tuple[Any, list[tuple[str, dict[str, object]]]]:
     loads = install(monkeypatch, model)
     engine = firered.create(SPEC, registry.get("f-aed").variant)
     engine.load()
@@ -120,10 +122,10 @@ def test_transcribe_before_load_is_an_engine_error() -> None:
 def test_a_failing_load_names_the_repo_and_revision(monkeypatch: pytest.MonkeyPatch) -> None:
     stt = ModuleType("mlx_audio.stt")
 
-    def load(repo: str, **kwargs: Any) -> None:
+    def load(repo: str, **kwargs: object) -> None:
         raise OSError("no route to host")
 
-    stt.load = load  # type: ignore[attr-defined]
+    vars(stt)["load"] = load
     monkeypatch.setitem(sys.modules, "mlx_audio.stt", stt)
     monkeypatch.setenv("HF_HUB_CACHE", "/tmp/hub")
 
@@ -132,6 +134,6 @@ def test_a_failing_load_names_the_repo_and_revision(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.parametrize("beam_size", [None, 0, "3", True])
-def test_the_variant_needs_a_positive_integer_beam_size(beam_size: object) -> None:
+def test_the_variant_needs_a_positive_integer_beam_size(beam_size: JsonValue) -> None:
     with pytest.raises(ConfigError, match="beam_size"):
-        firered.create(SPEC, {"beam_size": beam_size})  # type: ignore[dict-item]
+        firered.create(SPEC, {"beam_size": beam_size})

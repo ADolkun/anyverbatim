@@ -173,7 +173,7 @@ def parse_json3(content: str, *, kind: CaptionKind) -> tuple[CaptionSegment, ...
         raise ValueError(f"caption file is not valid json3: {exc}") from exc
     events = cast("dict[str, object]", parsed).get("events") if isinstance(parsed, dict) else None
     if not isinstance(events, list):
-        raise ValueError("json3 has no events list")
+        raise ValueError("json3 has no events list")  # noqa: TRY004 - a malformed file, which callers catch as ValueError
     # Newline-only aAppend events stay in the list: they carry no speech but mark where the previous line ends.
     entries = _json3_entries(cast("list[object]", events))
     segments: list[CaptionSegment] = []
@@ -250,7 +250,7 @@ def caption_quality(
 
 
 def _base(code: str) -> str:
-    return code.split("-")[0].lower()
+    return code.split("-", maxsplit=1)[0].lower()
 
 
 def _dropped(captions_dir: Path) -> CaptionsResult:

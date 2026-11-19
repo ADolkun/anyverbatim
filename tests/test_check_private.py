@@ -65,23 +65,21 @@ def test_scan_text_reports_line_numbers() -> None:
 
 
 def test_parse_added_lines_tracks_new_line_numbers() -> None:
-    diff = "\n".join(
-        [
-            "diff --git a/a.txt b/a.txt",
-            "--- a/a.txt",
-            "+++ b/a.txt",
-            "@@ -1,0 +5,2 @@",
-            "+first",
-            "+second",
-            "@@ -9 +12 @@",
-            "-old",
-            "+new",
-            "diff --git a/gone.txt b/gone.txt",
-            "--- a/gone.txt",
-            "+++ /dev/null",
-            "@@ -1 +0,0 @@",
-            "-removed",
-        ]
+    diff = (
+        "diff --git a/a.txt b/a.txt\n"
+        "--- a/a.txt\n"
+        "+++ b/a.txt\n"
+        "@@ -1,0 +5,2 @@\n"
+        "+first\n"
+        "+second\n"
+        "@@ -9 +12 @@\n"
+        "-old\n"
+        "+new\n"
+        "diff --git a/gone.txt b/gone.txt\n"
+        "--- a/gone.txt\n"
+        "+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n"
+        "-removed"
     )
     assert list(check_private.parse_added_lines(diff)) == [
         ("a.txt", 5, "first"),

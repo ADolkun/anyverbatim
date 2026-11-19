@@ -1,10 +1,10 @@
 import re
 import sys
 from types import ModuleType, SimpleNamespace
-from typing import Any
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from anyverbatim.diarize import nemotron, registry
 from anyverbatim.errors import ConfigError, DependencyError, EngineError
@@ -18,9 +18,9 @@ class FakeModel:
         self.config = SimpleNamespace(
             num_speakers=speakers, output_subsampling_factor=1, processor_config=SimpleNamespace(hop_length=160)
         )
-        self.calls: list[tuple[Any, dict[str, Any]]] = []
+        self.calls: list[tuple[NDArray[np.float32], dict[str, object]]] = []
 
-    def generate(self, audio: Any, **kwargs: Any) -> Any:
+    def generate(self, audio: NDArray[np.float32], **kwargs: object) -> SimpleNamespace:
         self.calls.append((audio, kwargs))
         probs = np.zeros((300, 8), dtype=np.float32)
         probs[:150, 2] = 0.9
@@ -32,15 +32,15 @@ class FakeModel:
         return SimpleNamespace(segments=segments, speaker_probs=probs, num_speakers=2)
 
 
-def install_fake(monkeypatch: pytest.MonkeyPatch, model: FakeModel) -> list[tuple[str, dict[str, Any]]]:
-    loads: list[tuple[str, dict[str, Any]]] = []
+def install_fake(monkeypatch: pytest.MonkeyPatch, model: FakeModel) -> list[tuple[str, dict[str, object]]]:
+    loads: list[tuple[str, dict[str, object]]] = []
     package, vad = ModuleType("mlx_audio"), ModuleType("mlx_audio.vad")
 
-    def load(repo: str, **kwargs: Any) -> FakeModel:
+    def load(repo: str, **kwargs: object) -> FakeModel:
         loads.append((repo, kwargs))
         return model
 
-    vad.load = load  # type: ignore[attr-defined]
+    vars(vad)["load"] = load
     monkeypatch.setitem(sys.modules, "mlx_audio", package)
     monkeypatch.setitem(sys.modules, "mlx_audio.vad", vad)
     return loads
@@ -113,6 +113,10 @@ def test_an_unknown_diarizer_lists_the_known_ones() -> None:
 
 
 def test_missing_mlx_audio_is_reported_before_any_work(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(registry, "find_spec", lambda name: None)
+
+    def nothing_installed(name: str) -> None:
+        return None
+
+    monkeypatch.setattr(registry, "find_spec", nothing_installed)
     with pytest.raises(DependencyError, match=r"uv sync --extra asr"):
         registry.check_dependencies(registry.get("d-nemotron-8bit"))

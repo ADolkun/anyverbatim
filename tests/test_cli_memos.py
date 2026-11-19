@@ -1,6 +1,7 @@
 import json
 import unicodedata
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 from click.testing import CliRunner
@@ -27,7 +28,11 @@ def library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rows: list[Row]) ->
 
 
 def no_hashing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(voicememos.MemoCache, "resolve", lambda *_a, **_k: pytest.fail("the listing hashed a memo"))
+
+    def refuse(*_args: object, **_kwargs: object) -> NoReturn:
+        pytest.fail("the listing hashed a memo")
+
+    monkeypatch.setattr(voicememos.MemoCache, "resolve", refuse)
 
 
 def test_the_listing_shows_date_duration_title_status_and_a_short_id(
@@ -84,7 +89,8 @@ def test_out_picks_the_root_where_documents_are_looked_up(tmp_path: Path, monkey
 def test_the_newest_twenty_are_shown_unless_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     library(tmp_path, monkeypatch, [Row(f"id{n:02d}", unix=1_700_000_000 + n, path=f"{n}.m4a") for n in range(25)])
     short = CliRunner().invoke(main, ["memos"]).output.splitlines()
-    assert len(short) == 21 and short[-1] == "5 older memos not shown; --all lists every memo"
+    assert len(short) == 21
+    assert short[-1] == "5 older memos not shown; --all lists every memo"
     assert short[0].endswith("id24")
     assert len(CliRunner().invoke(main, ["memos", "--all"]).output.splitlines()) == 25
     assert len(json.loads(CliRunner().invoke(main, ["memos", "--json"]).output)) == 25
@@ -108,7 +114,8 @@ def test_wide_characters_keep_the_columns_aligned(tmp_path: Path, monkeypatch: p
 def test_a_long_wide_title_is_cut_to_the_column_width(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     library(tmp_path, monkeypatch, [Row("A", title="会" * 30, path="a.m4a")])
     line = CliRunner().invoke(main, ["memos"]).output.splitlines()[0]
-    assert "会" * 19 + "…" in line and "会" * 20 not in line
+    assert "会" * 19 + "…" in line
+    assert "会" * 20 not in line
 
 
 def test_the_eviction_warning_goes_to_stderr_and_the_listing_still_works(

@@ -70,7 +70,7 @@ def message(*texts: str, item_id: str = "msg_1") -> dict[str, object]:
     }
 
 
-REASONING = {"id": "rs_1", "type": "reasoning", "summary": [], "encrypted_content": "opaque"}
+REASONING: dict[str, object] = {"id": "rs_1", "type": "reasoning", "summary": [], "encrypted_content": "opaque"}
 USAGE = {
     "input_tokens": 120,
     "output_tokens": 45,
@@ -191,7 +191,8 @@ def test_another_model_answering_is_refused(signed_in: list[str]) -> None:
 def test_a_completed_response_without_usage_is_refused(signed_in: list[str]) -> None:
     with pytest.raises(LLMUnavailableError, match="no token usage") as raised:
         client(stream(sse(completed([message("ok")], usage=None)))).complete(REQUEST)
-    assert raised.value.responded is True and raised.value.usage is None
+    assert raised.value.responded is True
+    assert raised.value.usage is None
 
 
 def test_a_failed_response_carries_its_code_and_is_not_retried(signed_in: list[str]) -> None:
@@ -207,7 +208,8 @@ def test_a_failed_response_carries_its_code_and_is_not_retried(signed_in: list[s
     with pytest.raises(LLMUnavailableError, match="server_is_overloaded") as raised:
         client(opener).complete(REQUEST)
     assert raised.value.code == "server_is_overloaded"
-    assert raised.value.responded is True and raised.value.usage == Usage(120, 45)
+    assert raised.value.responded is True
+    assert raised.value.usage == Usage(120, 45)
     assert raised.value.transient is True
     assert "secret server detail" not in str(raised.value)
     assert len(opener.requests) == 1
@@ -235,7 +237,8 @@ def test_an_incomplete_response_is_an_output_error_with_its_reason(signed_in: li
     with pytest.raises(LLMOutputError, match="max_output_tokens") as raised:
         client(stream(sse(incomplete))).complete(REQUEST)
     assert raised.value.code == "max_output_tokens"
-    assert raised.value.responded is True and raised.value.usage == Usage(120, 45)
+    assert raised.value.responded is True
+    assert raised.value.usage == Usage(120, 45)
 
 
 @pytest.mark.parametrize(
@@ -249,7 +252,8 @@ def test_an_error_event_raises_with_its_code(signed_in: list[str], event: dict[s
     with pytest.raises(LLMUnavailableError, match="rate_limit_exceeded") as raised:
         client(stream(sse(event))).complete(REQUEST)
     assert raised.value.code == "rate_limit_exceeded"
-    assert raised.value.responded is False and raised.value.usage is None
+    assert raised.value.responded is False
+    assert raised.value.usage is None
     assert raised.value.transient is False
 
 
@@ -265,7 +269,8 @@ def test_a_server_overload_error_event_is_transient(signed_in: list[str], event:
     with pytest.raises(LLMUnavailableError) as raised:
         client(stream(sse(event))).complete(REQUEST)
     assert raised.value.transient is True
-    assert raised.value.responded is False and raised.value.usage is None
+    assert raised.value.responded is False
+    assert raised.value.usage is None
 
 
 def test_a_stream_that_ends_without_completing_raises(signed_in: list[str]) -> None:
@@ -371,11 +376,13 @@ def test_the_token_is_refreshed_before_the_request() -> None:
         return FakeResponse(lines=sse(completed([message("ok")])))
 
     opener = FakeOpener({f"POST {TOKEN_URL}": refresh, f"POST {RESPONSES_URL}": responses})
-    real_access_token: Callable[..., str] = chatgpt_auth.access_token
+    real_access_token = chatgpt_auth.access_token
+
+    def access_token_at_now(*, opener: chatgpt_http.Opener) -> str:
+        return real_access_token(opener=opener, clock=lambda: NOW)
+
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(
-            chatgpt_auth, "access_token", lambda *, opener: real_access_token(opener=opener, clock=lambda: NOW)
-        )
+        patch.setattr(chatgpt_auth, "access_token", access_token_at_now)
         assert client(opener).complete(REQUEST).text == "ok"
     assert order == ["refresh_token", "Bearer fresh-token"]
 
@@ -392,12 +399,12 @@ def test_the_token_is_refreshed_before_the_request() -> None:
 )
 def test_https_open_refuses_anything_but_the_fixed_hosts(url: str) -> None:
     with pytest.raises(ConfigError, match="refusing to contact"):
-        chatgpt_http.https_open(urllib.request.Request(url), 1.0)
+        chatgpt_http.https_open(urllib.request.Request(url), 1.0)  # noqa: S310 - the hostile scheme is the input
 
 
 def test_redirects_are_refused_rather_than_followed() -> None:
     handler = chatgpt_http._RefuseRedirects()
-    request = urllib.request.Request(RESPONSES_URL, data=b"{}", headers={"Authorization": "Bearer t"})
+    request = urllib.request.Request(RESPONSES_URL, data=b"{}", headers={"Authorization": "Bearer t"})  # noqa: S310 - never opened
     assert handler.redirect_request(request, io.BytesIO(), 307, "redirect", Message(), "https://example.com/") is None
 
 
@@ -441,7 +448,7 @@ def test_a_stream_that_breaks_off_is_unavailable(signed_in: list[str]) -> None:
 
 def test_the_suite_cannot_reach_openai() -> None:
     with pytest.raises(AssertionError, match="tried to contact"):
-        chatgpt_http.https_open(urllib.request.Request(RESPONSES_URL), 1.0)
+        chatgpt_http.https_open(urllib.request.Request(RESPONSES_URL), 1.0)  # noqa: S310 - the autouse guard refuses it
 
 
 Script = Callable[[socket.socket], None]
@@ -559,7 +566,7 @@ def test_a_response_without_a_reachable_socket_fails_loud_and_is_closed() -> Non
 
     stripped = Stripped()
     with pytest.raises(RuntimeError, match="deadline cannot be enforced"):
-        chatgpt_http.BoundedResponse(stripped, 1.0)  # type: ignore[arg-type]
+        chatgpt_http.BoundedResponse(stripped, 1.0)  # pyrefly: ignore[bad-argument-type]  # duck-typed HTTPResponse
     assert stripped.closed
 
 
@@ -569,7 +576,7 @@ def test_a_response_without_a_reachable_socket_fails_loud_and_is_closed() -> Non
 )
 def test_whatever_a_read_the_deadline_interrupts_returns_is_the_timeout(outcome: Exception | bytes) -> None:
     class Interrupted:
-        fp = None
+        fp: None = None
 
         def read1(self, _size: int) -> bytes:
             bounded._expired.set()  # the deadline timer firing in the middle of this read
@@ -583,13 +590,13 @@ def test_whatever_a_read_the_deadline_interrupts_returns_is_the_timeout(outcome:
         def close(self) -> None:
             pass
 
-    bounded = chatgpt_http.BoundedResponse(Interrupted(), 5.0)  # type: ignore[arg-type]
+    bounded = chatgpt_http.BoundedResponse(Interrupted(), 5.0)  # pyrefly: ignore[bad-argument-type]
     with pytest.raises(TimeoutError):
         bounded.readline()
 
 
 def test_reply_items_with_a_null_status_count_as_complete(signed_in: list[str]) -> None:
-    reasoning = {"type": "reasoning", "id": "rs_1", "status": None, "summary": []}
+    reasoning: dict[str, object] = {"type": "reasoning", "id": "rs_1", "status": None, "summary": []}
     reply = {**message("ok"), "status": None}
     response = client(stream(sse(completed([reasoning, reply])))).complete(REQUEST)
     assert response.text == "ok"
@@ -644,7 +651,8 @@ def test_a_lapsed_sign_in_signs_in_again_once_then_retries(monkeypatch: pytest.M
     signed_in: list[str] = []
     opener = stream(sse(completed([message("ok")])))
     assert reauth_client(opener, lambda: signed_in.append("browser")).complete(REQUEST).text == "ok"
-    assert signed_in == ["browser"] and tokens.calls == 2
+    assert signed_in == ["browser"]
+    assert tokens.calls == 2
     assert len(opener.requests) == 1
 
 
@@ -657,7 +665,9 @@ def test_a_second_failure_after_signing_in_again_raises_without_a_third_try(monk
     with pytest.raises(LLMUnavailableError, match="invalid_grant") as raised:
         chat.complete(REQUEST)
     assert raised.value.code == "invalid_grant"
-    assert signed_in == ["browser"] and tokens.calls == 2 and opener.requests == []
+    assert signed_in == ["browser"]
+    assert tokens.calls == 2
+    assert opener.requests == []
     with pytest.raises(LLMUnavailableError):
         chat.complete(REQUEST)
     assert signed_in == ["browser"], "a failed sign-in is not reopened on every later call"
@@ -690,7 +700,11 @@ def test_without_reauth_a_lapsed_sign_in_raises(monkeypatch: pytest.MonkeyPatch)
 
 def responses(*routes: Route) -> FakeOpener:
     queue = list(routes)
-    return FakeOpener({f"POST {RESPONSES_URL}": lambda request: queue.pop(0)(request)})
+
+    def next_route(request: urllib.request.Request) -> FakeResponse:
+        return queue.pop(0)(request)
+
+    return FakeOpener({f"POST {RESPONSES_URL}": next_route})
 
 
 def ok_stream(_request: urllib.request.Request) -> FakeResponse:
@@ -703,7 +717,9 @@ def test_a_401_signs_in_again_once_and_resends(monkeypatch: pytest.MonkeyPatch) 
     signed_in: list[str] = []
     opener = responses(http_error(401, {"error": {"code": "invalid_token"}}), ok_stream)
     assert reauth_client(opener, lambda: signed_in.append("browser")).complete(REQUEST).text == "ok"
-    assert signed_in == ["browser"] and len(opener.requests) == 2 and tokens.calls == 2
+    assert signed_in == ["browser"]
+    assert len(opener.requests) == 2
+    assert tokens.calls == 2
 
 
 def test_a_second_401_is_not_answered_again(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -712,7 +728,8 @@ def test_a_second_401_is_not_answered_again(monkeypatch: pytest.MonkeyPatch) -> 
     opener = responses(http_error(401), http_error(401))
     with pytest.raises(LLMUnavailableError, match="anyverbatim login"):
         reauth_client(opener, lambda: signed_in.append("browser")).complete(REQUEST)
-    assert signed_in == ["browser"] and len(opener.requests) == 2
+    assert signed_in == ["browser"]
+    assert len(opener.requests) == 2
 
 
 def test_a_401_without_reauth_keeps_the_login_hint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -739,7 +756,8 @@ def test_a_sign_in_before_the_request_does_not_spend_its_deadline(monkeypatch: p
         reauth=slow_browser,
     )
     response = chat.complete(REQUEST)
-    assert response.text == "ok" and response.elapsed_s < 900.0
+    assert response.text == "ok"
+    assert response.elapsed_s < 900.0
 
 
 def test_a_401_waits_for_a_sign_in_another_thread_is_running(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -778,7 +796,7 @@ def test_threads_sharing_a_client_sign_in_once(monkeypatch: pytest.MonkeyPatch) 
     def call() -> None:
         try:
             texts.append(chat.complete(REQUEST).text)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - a failure on a worker thread must reach the main assertion
             errors.append(exc)
 
     threads = [threading.Thread(target=call) for _ in range(2)]
@@ -786,7 +804,8 @@ def test_threads_sharing_a_client_sign_in_once(monkeypatch: pytest.MonkeyPatch) 
         thread.start()
     for thread in threads:
         thread.join(5)
-    assert errors == [] and texts == ["ok", "ok"]
+    assert errors == []
+    assert texts == ["ok", "ok"]
     assert sign_ins == ["browser"]
 
 

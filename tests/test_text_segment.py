@@ -168,7 +168,8 @@ def test_overlong_sentence_without_a_comma_is_cut_in_its_middle() -> None:
     words[44] += ":"
     parts = chunk_level(EN_FILLER + " ".join(words) + ".", "en")
     long_parts = parts[5:]
-    assert len(long_parts) == 2 and len(long_parts[0].split()) == 45
+    assert len(long_parts) == 2
+    assert len(long_parts[0].split()) == 45
 
 
 def test_a_bare_terminator_after_a_pause_joins_the_sentence_before_it() -> None:
@@ -215,7 +216,8 @@ def test_zh_tagged_text_without_cjk_uses_the_english_rules() -> None:
     assert chunk_level("It rose. Then it fell.", "zh") == ["It rose.", "Then it fell."]
     assert seg.is_punctuated("It rose. Then it fell.", "zh")
     assert not seg.is_punctuated(" ".join(["word"] * 80), "zh")
-    assert not seg.uses_zh_rules("It rose.", "zh") and seg.uses_zh_rules("它涨了。", "zh-Hans")
+    assert not seg.uses_zh_rules("It rose.", "zh")
+    assert seg.uses_zh_rules("它涨了。", "zh-Hans")
 
 
 class _Budget:
@@ -248,7 +250,8 @@ def test_a_zh_token_longer_than_the_unit_cap_becomes_its_own_sentence(monkeypatc
     after = [Token(t.text, t.start + 4.0, t.end + 4.0) for t in timed(list("丙" * 10))]
     tokens = [*timed(list("乙" * 10)), Token(giant, 3.0, 4.0), *after]
     texts = [s.text for s in seg.segment_tokens(tokens, "zh")]
-    assert giant in texts and "".join(texts) == "乙" * 10 + giant + "丙" * 10
+    assert giant in texts
+    assert "".join(texts) == "乙" * 10 + giant + "丙" * 10
 
 
 def test_an_en_token_holding_many_words_still_terminates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -378,7 +381,8 @@ def test_zh_a_ticker_never_absorbs_the_characters_next_to_it() -> None:
 def test_zh_pieces_keep_the_lowest_confidence() -> None:
     words = [Word(text="X", start=1.0, end=1.5, conf=0.9), Word(text="LP", start=1.5, end=2.0, conf=0.4)]
     (token,), complete = seg.aligned_tokens("XLP", words, 0.0, 3.0, language="zh")
-    assert complete and token.conf == 0.4
+    assert complete
+    assert token.conf == 0.4
 
 
 def test_en_pieces_of_one_word_join_across_the_text_gap_the_engine_ignored() -> None:
@@ -435,17 +439,21 @@ def test_en_whole_words_keep_their_own_tokens_and_times() -> None:
 def test_en_a_contraction_matches_whole_or_in_two_pieces() -> None:
     expected = [("I", True), (" can't", True), (" go.", True)]
     whole, complete = align("I can't go.", [" I", " can't", " go."], "en")
-    assert complete and timing(whole) == expected
+    assert complete
+    assert timing(whole) == expected
     split, complete = align("I can't go.", [" I", " can", "'t", " go."], "en")
-    assert complete and timing(split) == expected
+    assert complete
+    assert timing(split) == expected
     assert (split[1].start, split[1].end) == (10.5, 11.5)
 
 
 def test_en_a_thousands_number_in_one_word_or_in_pieces_matches() -> None:
     whole, complete = align("It costs 1,500 dollars.", [" It", " costs", " 1,500", " dollars."], "en")
-    assert complete and timing(whole)[2] == (" 1,500", True)
+    assert complete
+    assert timing(whole)[2] == (" 1,500", True)
     split, complete = align("It costs 1,500 dollars.", [" It", " costs", " 1", ",", "500", " dollars."], "en")
-    assert complete and timing(split)[2] == (" 1,500", True)
+    assert complete
+    assert timing(split)[2] == (" 1,500", True)
     assert (split[2].start, split[2].end) == (11.0, 12.5)
 
 
@@ -500,7 +508,8 @@ def test_a_run_is_timed_whole_or_not_at_all() -> None:
     ]
     tokens, complete = align("成交150万手", ["成", "交", "15", "万", "手"], "zh")
     assert not complete
-    assert ("150", False) in timing(tokens) and ("15", True) not in timing(tokens)
+    assert ("150", False) in timing(tokens)
+    assert ("15", True) not in timing(tokens)
 
 
 def test_a_word_cannot_take_the_start_of_the_next_run() -> None:
@@ -522,7 +531,8 @@ def test_alignment_of_a_long_text_stays_fast() -> None:
     words = pieces_of(parts, step=0.1)
     started = time.perf_counter()
     tokens, complete = seg.aligned_tokens(text, words, 0.0, 1e6, language="en")
-    assert complete and all(token.timed for token in tokens)
+    assert complete
+    assert all(token.timed for token in tokens)
     assert time.perf_counter() - started < 2.0
 
 
@@ -538,7 +548,8 @@ def test_unrelated_text_and_words_cost_no_character_diff() -> None:
     words = pieces_of([f" w{i}z" for i in range(6000)], step=0.01)
     started = time.perf_counter()
     tokens, complete = seg.aligned_tokens(text, words, 0.0, 1e6, language="en")
-    assert not complete and not any(token.timed for token in tokens)
+    assert not complete
+    assert not any(token.timed for token in tokens)
     assert "".join(token.text for token in tokens) == text
     assert time.perf_counter() - started < 2.0
 

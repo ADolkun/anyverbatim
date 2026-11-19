@@ -67,7 +67,11 @@ class FakeProc:
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda name: FAKE_CLAUDE if name == "claude" else None)
+
+    def which(name: str) -> str | None:
+        return FAKE_CLAUDE if name == "claude" else None
+
+    monkeypatch.setattr(claude_cli.shutil, "which", which)
     return tmp_path
 
 
@@ -423,7 +427,11 @@ def test_timeout_is_unavailable(fake: FakeProc) -> None:
 
 
 def test_missing_cli_is_a_dependency_error(fake: FakeProc, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda name: None)
+
+    def nothing_installed(name: str) -> None:
+        return None
+
+    monkeypatch.setattr(claude_cli.shutil, "which", nothing_installed)
     with pytest.raises(DependencyError, match="claude CLI not found"):
         ClaudeCLIClient(model="haiku").complete(REQUEST)
     assert fake.calls == []
@@ -484,5 +492,9 @@ def test_readiness_handles_missing_cli_timeout_and_garbage(fake: FakeProc, monke
     assert "unreadable" in claude_cli.readiness().detail
     fake.raises = ProcTimeout("claude", 10.0)
     assert not claude_cli.readiness().ready
-    monkeypatch.setattr(claude_cli.shutil, "which", lambda name: None)
+
+    def nothing_installed(name: str) -> None:
+        return None
+
+    monkeypatch.setattr(claude_cli.shutil, "which", nothing_installed)
     assert "not found" in claude_cli.readiness().detail

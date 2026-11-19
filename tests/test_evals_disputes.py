@@ -5,6 +5,7 @@ import pytest
 from click.testing import CliRunner
 from recordings_fixture import FakeWorker, make_meeting, make_owner, pieces, silent, spoken, wav_seconds_of
 
+from anyverbatim.asr.models import ChunkHypothesis, WorkerRequest
 from anyverbatim.contract.models import Word
 from anyverbatim.errors import ConfigError
 from evals import disputes
@@ -55,7 +56,7 @@ A = [Turn(0, 10, "s1"), Turn(10, 20, "s2")]
 B = [Turn(0, 10, "u"), Turn(10, 14, "v"), Turn(14, 20, "u")]
 
 
-def test_lines_break_at_pauses_and_at_the_word_cap():
+def test_lines_break_at_pauses_and_at_the_word_cap() -> None:
     lines = transcript_lines(WORDS)
     assert [round(start) for start, _, _ in lines] == [0, 10, 16]
     assert lines[0][2] == "the quarterly numbers look quite strong overall"
@@ -64,13 +65,13 @@ def test_lines_break_at_pauses_and_at_the_word_cap():
     assert transcript_lines([]) == []
 
 
-def test_a_span_is_labelled_by_the_speaker_with_most_time_in_it():
+def test_a_span_is_labelled_by_the_speaker_with_most_time_in_it() -> None:
     assert label_over(A, 8, 11) == "s1"
     assert label_over(A, 9, 15) == "s2"
     assert label_over(A, 30, 31) is None
 
 
-def test_attribution_disputes_name_each_candidates_speaker_in_one_label_space():
+def test_attribution_disputes_name_each_candidates_speaker_in_one_label_space() -> None:
     (dispute,) = attribution_disputes("rec-01", {"nemotron": A, "other": B}, WORDS)
     assert (dispute.id, dispute.recording) == ("rec-01-a0000", "rec-01")
     assert (dispute.start, dispute.end) == (14, 20)
@@ -81,13 +82,13 @@ def test_attribution_disputes_name_each_candidates_speaker_in_one_label_space():
     assert labelled[16] == {"nemotron": "s2", "other": "s1"}
 
 
-def test_attribution_lines_far_from_the_dispute_are_left_out():
+def test_attribution_lines_far_from_the_dispute_are_left_out() -> None:
     far = [*WORDS, *spoken_line("a line that comes much much later", 900)]
     (dispute,) = attribution_disputes("rec-01", {"a": A, "b": B}, far)
     assert [round(line.start) for line in dispute.lines] == [0, 10, 16]
 
 
-def test_attribution_disputes_become_anchored_questions():
+def test_attribution_disputes_become_anchored_questions() -> None:
     disputes_ = attribution_disputes("rec-01", {"a": A, "b": B}, WORDS)
     built = build_questions(disputes_)
     (question,) = built.questions
@@ -96,11 +97,11 @@ def test_attribution_disputes_become_anchored_questions():
     assert not built.skipped
 
 
-def rows(hypothesis: str, text: str):
+def rows(hypothesis: str, text: str) -> list[ChunkHypothesis]:
     return [spoken(hypothesis, "m1", pieces(text, 1.0), chunk=0)]
 
 
-def test_text_disputes_carry_every_readings_wording_and_a_policy_group_for_numbers():
+def test_text_disputes_carry_every_readings_wording_and_a_policy_group_for_numbers() -> None:
     base = "we closed the quarter with twenty five new customers in the region"
     rows_by = {
         "w-runs-lid": rows("w-runs-lid", base),
@@ -110,13 +111,15 @@ def test_text_disputes_carry_every_readings_wording_and_a_policy_group_for_numbe
     item = Item("owner", "rec-01", Path("a.wav"), 60.0, "en", None)
     (dispute,) = text_disputes(item, rows_by, "w-runs-lid")
     assert dispute.group == NUMERAL_GROUP
-    assert dispute.recording == "rec-01" and dispute.id == "rec-01-t0000"
+    assert dispute.recording == "rec-01"
+    assert dispute.id == "rec-01-t0000"
     assert dispute.candidates["w-vad-lid"] == "four"
     assert dispute.candidates["w-runs-lid"] == "five"
-    assert "closed the quarter" in dispute.before and "customers" in dispute.after
+    assert "closed the quarter" in dispute.before
+    assert "customers" in dispute.after
 
 
-def test_a_latin_word_in_chinese_speech_is_a_latin_group_dispute():
+def test_a_latin_word_in_chinese_speech_is_a_latin_group_dispute() -> None:
     item = Item("owner", "rec-01", Path("a.wav"), 60.0, "zh", None)
     rows_by = {
         "a": [spoken("a", "rec-01", pieces("我们今天开 Zoom 会议", 0.0, 0.3))],
@@ -143,7 +146,7 @@ def many_text(n: int, group: str | None) -> list[TextDispute]:
     ]
 
 
-def test_selection_keeps_three_examples_per_group_and_a_seeded_sample_of_singles():
+def test_selection_keeps_three_examples_per_group_and_a_seeded_sample_of_singles() -> None:
     pool = [*many_text(10, NUMERAL_GROUP), *many_text(10, LATIN_GROUP), *many_text(30, None)]
     chosen = select_text(pool, 4, seed=1)
     assert sum(d.group == NUMERAL_GROUP for d in chosen) == MAX_EXAMPLES
@@ -154,13 +157,13 @@ def test_selection_keeps_three_examples_per_group_and_a_seeded_sample_of_singles
     assert select_text(many_text(2, None), 6, seed=0) == many_text(2, None)
 
 
-def test_attribution_selection_is_a_seeded_sample():
+def test_attribution_selection_is_a_seeded_sample() -> None:
     runs = attribution_disputes("rec-01", {"a": A, "b": B}, WORDS)
     assert select_attribution(runs, 5, 0) == runs
     assert select_attribution(runs, 0, 0) == []
 
 
-def test_built_questions_stay_inside_the_excerpt_limits():
+def test_built_questions_stay_inside_the_excerpt_limits() -> None:
     long = " ".join(f"word{i}" for i in range(80))
     items = [
         TextDispute(
@@ -186,7 +189,7 @@ def test_built_questions_stay_inside_the_excerpt_limits():
     assert all(len(o) <= MAX_ANCHOR_CHARS + 80 for o in attribution.examples[0].options)
 
 
-def test_a_clip_holds_the_dispute_with_two_seconds_of_padding_and_is_capped(tmp_path: Path):
+def test_a_clip_holds_the_dispute_with_two_seconds_of_padding_and_is_capped(tmp_path: Path) -> None:
     wav = tmp_path / "a.wav"
     wav.write_bytes(silent(100))
     cut_clip(wav, 20, 22, tmp_path / "clips" / "c.wav")
@@ -197,7 +200,7 @@ def test_a_clip_holds_the_dispute_with_two_seconds_of_padding_and_is_capped(tmp_
 
 def test_disputes_are_built_from_finished_runs_and_loaded_back_within_the_limits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     monkeypatch.setenv(EVAL_DIR_ENV, str(tmp_path / "eval"))
     root = tmp_path / "eval" / "recordings"
     make_owner(root, [("rec-01", 60, {"language": "en"})])
@@ -205,7 +208,7 @@ def test_disputes_are_built_from_finished_runs_and_loaded_back_within_the_limits
     base = "we closed the quarter with twenty five new customers in the region"
     texts = {"w-runs-lid": base, "w-vad-lid": base.replace("twenty five", "twenty four"), "w-prod": base}
 
-    def rows_for(request):
+    def rows_for(request: WorkerRequest) -> list[ChunkHypothesis]:
         name = request.engine.spec.id
         return [spoken(name, "rec-01", pieces(texts[name], 1.0))]
 
@@ -236,7 +239,7 @@ def test_disputes_are_built_from_finished_runs_and_loaded_back_within_the_limits
     assert {q.kind for q in built.questions} == {"policy", "attribution"}
 
 
-def test_building_needs_finished_runs_words_and_diarizations(tmp_path: Path):
+def test_building_needs_finished_runs_words_and_diarizations(tmp_path: Path) -> None:
     make_meeting(tmp_path, "ami", "m1", [])
     (item,) = load_items("ami", root=tmp_path)
     with pytest.raises(ConfigError, match="not finished"):
@@ -253,12 +256,15 @@ def test_building_needs_finished_runs_words_and_diarizations(tmp_path: Path):
         build_disputes([item], asr_hypotheses=[], pivot=None, diarizers=["d-a", "d-b"], limit=3, seed=0, root=tmp_path)
 
 
-def test_the_command_refuses_a_single_hypothesis_and_an_empty_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_the_command_refuses_a_single_hypothesis_and_an_empty_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv(EVAL_DIR_ENV, str(tmp_path / "eval"))
     runner = CliRunner()
     assert runner.invoke(disputes.main, ["build"]).exit_code != 0
     single = runner.invoke(disputes.main, ["build", "--asr-hyps", "w-prod"])
-    assert single.exit_code != 0 and "at least two" in single.output
+    assert single.exit_code != 0
+    assert "at least two" in single.output
     unknown = runner.invoke(disputes.main, ["build", "--asr-hyps", "w-prod,zzz"])
     assert "unknown ASR hypotheses" in unknown.output
     off_pivot = runner.invoke(disputes.main, ["build", "--asr-hyps", "w-prod,w-vad", "--pivot", "w-runs-lid"])
@@ -267,24 +273,25 @@ def test_the_command_refuses_a_single_hypothesis_and_an_empty_request(tmp_path: 
 
 def test_the_intermediate_cannot_be_written_outside_the_recordings_folder(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     monkeypatch.setenv(EVAL_DIR_ENV, str(tmp_path / "eval"))
     root = tmp_path / "eval" / "recordings"
     make_owner(root, [("rec-01", 10, {})])
     runner = CliRunner()
     for outside in (tmp_path / "elsewhere.jsonl", root / ".." / ".." / "x.jsonl", root.parent / "x.jsonl"):
         result = runner.invoke(disputes.main, ["build", "--asr-hyps", "w-prod,w-vad", "--out", str(outside)])
-        assert result.exit_code != 0 and "inside the recordings folder" in result.output
+        assert result.exit_code != 0
+        assert "inside the recordings folder" in result.output
     inside = runner.invoke(disputes.main, ["build", "--asr-hyps", "w-prod,w-vad", "--out", str(root / "d.jsonl")])
     assert "inside the recordings folder" not in inside.output
 
 
-def test_the_command_says_the_file_is_a_full_text_intermediate():
+def test_the_command_says_the_file_is_a_full_text_intermediate() -> None:
     help_text = " ".join(CliRunner().invoke(disputes.main, ["build", "--help"]).output.split())
     assert "agents must not read" in help_text
     assert "questions.jsonl" in help_text
     assert "full-text intermediate" in help_text
 
 
-def test_attribution_sampling_makes_no_claim_about_bias():
+def test_attribution_sampling_makes_no_claim_about_bias() -> None:
     assert "unbiased" not in (select_attribution.__doc__ or "")

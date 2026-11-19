@@ -51,7 +51,8 @@ def test_every_error_has_a_fix_that_is_empty_until_one_is_set() -> None:
     ]
     assert [e.fix for e in errors] == [""] * len(errors)
     errors[1].fix = "Run: anyverbatim auth profiles"
-    assert errors[1].fix == "Run: anyverbatim auth profiles" and errors[0].fix == ""
+    assert errors[1].fix == "Run: anyverbatim auth profiles"
+    assert errors[0].fix == ""
 
 
 def test_stderr_preview_keeps_both_ends() -> None:

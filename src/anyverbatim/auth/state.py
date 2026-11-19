@@ -20,5 +20,5 @@ class AuthState(StrEnum):
     AUTH_REQUIRED = "auth_required"
     JS_RUNTIME_MISSING = "js_runtime_missing"
     YTDLP_STALE = "ytdlp_stale"
-    PO_TOKEN_REQUIRED = "po_token_required"
+    PO_TOKEN_REQUIRED = "po_token_required"  # noqa: S105 - a state name, not a password
     OK = "ok"

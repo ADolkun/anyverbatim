@@ -4,6 +4,7 @@ from evals.consensus import (
     UNCERTAIN,
     Segment,
     TimedUnit,
+    _medoid,
     find_disputes,
     timed_units,
     window_units,
@@ -174,8 +175,6 @@ def test_the_pivot_counts_one_hypothesis_per_family() -> None:
     unweighted = find_disputes(hyps, "zh")
     per_family = find_disputes(hyps, "zh", families=families)
     assert [r.text for r in unweighted[0].readings] == [r.text for r in per_family[0].readings]
-    from evals.consensus import _medoid
-
     units = {n: [u.text for u in h] for n, h in hyps.items()}
     assert _medoid(units, {}) in {"w1", "w2"}
     assert _medoid(units, families) in {"q", "f"}

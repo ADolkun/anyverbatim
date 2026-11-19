@@ -83,7 +83,7 @@ class AuthReport:
         }
 
 
-def premium_text(premium: bool | None) -> str:
+def premium_text(*, premium: bool | None) -> str:
     return "unknown" if premium is None else "yes" if premium else "no"
 
 
@@ -114,8 +114,8 @@ class _Outcome:
 def preflight(
     source: CookieSource | None,
     runner: YtDlpRunner,
-    refresh: bool = False,
     *,
+    refresh: bool = False,
     now: float | None = None,
     ignore_cooldown: bool = False,
 ) -> AuthReport:
@@ -126,7 +126,7 @@ def preflight(
     """
     now = time.time() if now is None else now
     outcome, premium = _check(source, runner, refresh=refresh, now=now, ignore_cooldown=ignore_cooldown)
-    return _report(outcome, source, premium, now)
+    return _report(outcome, source, premium=premium, now=now)
 
 
 def _check(
@@ -170,7 +170,7 @@ def cache_key(source: CookieSource, profile: str | None) -> str:
     return hashlib.sha256(f"{format_spec(source)}\0{profile or ''}".encode()).hexdigest()[:24]
 
 
-def record_premium(source: CookieSource, premium: bool, *, now: float | None = None) -> None:
+def record_premium(source: CookieSource, *, premium: bool, now: float | None = None) -> None:
     """Remember the Premium status a cookied fetch saw in ``-v`` output; it outlives the login TTL."""
     stamp = time.time() if now is None else now
     _update(cache_key(source, resolve_profile(source)), "premium", {"value": premium, "recorded_at": stamp}, now=stamp)
@@ -222,7 +222,7 @@ def _failed_probe(exc: YtDlpError, source: CookieSource) -> _Outcome:
     return _Outcome(AuthState.AUTH_UNCERTAIN, detail=f"the :ytfav probe failed with {cause} (exit {exc.returncode})")
 
 
-def _report(outcome: _Outcome, source: CookieSource | None, premium: bool | None, now: float) -> AuthReport:
+def _report(outcome: _Outcome, source: CookieSource | None, *, premium: bool | None, now: float) -> AuthReport:
     installed = version.installed()
     js_runtime = jsruntime.detect().name
     warnings = list(outcome.warnings)
@@ -234,7 +234,7 @@ def _report(outcome: _Outcome, source: CookieSource | None, premium: bool | None
     fix = fix_for(
         outcome.state,
         **fix_context(source, outcome.profile),
-        premium=premium_text(premium),
+        premium=premium_text(premium=premium),
         verified=checked_at.astimezone().strftime("%Y-%m-%d %H:%M"),
         until=shown_time(outcome.cooldown.until) if outcome.cooldown is not None else None,
     )

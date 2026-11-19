@@ -366,7 +366,7 @@ def main() -> None:
     "--no-names", is_flag=True, help="Assert that there are no names to redact (the alternative to --names-file)."
 )
 @click.option("--seed", default=0, show_default=True)
-def build(disputes: Path, out_dir: Path, names_file: Path | None, no_names: bool, seed: int) -> None:
+def build(disputes: Path, out_dir: Path, names_file: Path | None, *, no_names: bool, seed: int) -> None:
     """Write questions.jsonl (agent-readable) and questions.key.jsonl (private) under OUT."""
     if (names_file is not None) == no_names:
         raise click.UsageError("pass exactly one of --names-file and --no-names, so an unredacted run is deliberate")

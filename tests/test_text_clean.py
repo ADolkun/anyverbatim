@@ -58,13 +58,15 @@ def test_steps_chain_from_the_input_to_the_output_one_replacement_at_a_time() ->
     text = "um the GAAP number um rose"
     result = normalize(text, "en", script="zh-Hans", fillers="remove")
     assert result.text == "the GAAP number rose"
-    assert result.steps[0][0] == text and result.steps[-1][1] == result.text
+    assert result.steps[0][0] == text
+    assert result.steps[-1][1] == result.text
     assert all(a[1] == b[0] for a, b in zip(result.steps, result.steps[1:], strict=False))
 
 
 def test_a_text_of_only_fillers_is_kept_as_it_was() -> None:
     result = normalize("um uh", "en", script="zh-Hans", fillers="remove")
-    assert result.text == "um uh" and result.steps == ()
+    assert result.text == "um uh"
+    assert result.steps == ()
 
 
 @pytest.mark.parametrize(
@@ -177,7 +179,8 @@ def test_each_converted_mark_is_one_step_and_flag_offsets_follow() -> None:
     text = "OK,所以我来自福建,所以"
     result = normalize(text, "zh", script="zh-Hans", fillers="keep")
     assert [after for _, after in result.steps] == ["OK，所以我来自福建,所以", "OK，所以我来自福建，所以"]
-    assert result.steps[0][0] == text and result.steps[-1][1] == result.text
+    assert result.steps[0][0] == text
+    assert result.steps[-1][1] == result.text
     spaced = normalize("好 , 我", "zh", script="zh-Hans", fillers="keep")
     assert spaced.steps == (("好 , 我", "好，我"),)
     ellipsis = normalize("好吧 ... 然后", "zh", script="zh-Hans", fillers="keep")

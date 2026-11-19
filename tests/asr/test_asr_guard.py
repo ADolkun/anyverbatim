@@ -1,6 +1,7 @@
 import json
 import zlib
 from pathlib import Path
+from typing import override
 
 import numpy as np
 import pytest
@@ -170,6 +171,7 @@ def test_the_redecode_reuses_the_language_and_context() -> None:
     seen: list[tuple[str | None, AsrContext | None]] = []
 
     class Spy(ScriptedEngine):
+        @override
         def transcribe(
             self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None
         ) -> RawChunk:

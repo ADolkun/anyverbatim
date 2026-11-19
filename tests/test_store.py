@@ -30,7 +30,8 @@ def test_a_matching_hash_skips_the_stage(tmp_path: Path) -> None:
     first, reused_first = store.run("demo", "1", key, Output, compute)
     second, reused_second = store.run("demo", "1", key, Output, compute)
     assert (first, reused_first) == (Output(value=1), False)
-    assert (second, reused_second) == (Output(value=1), True) and len(calls) == 1
+    assert (second, reused_second) == (Output(value=1), True)
+    assert len(calls) == 1
     record = json.loads((tmp_path / ".stages" / "demo.json").read_text(encoding="utf-8"))
     assert record == {"stage_version": "1", "input_hash": key, "output": {"value": 1}}
 

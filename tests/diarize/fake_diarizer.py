@@ -25,9 +25,9 @@ def write_silence(path: Path, seconds: float) -> Path:
     return path
 
 
-def definition(**variant: object) -> DiarizerDef:
+def definition(**variant: JsonValue) -> DiarizerDef:
     spec = DiarizerSpec("d-fake", "fake", "example/fake", "0" * 40, 1, CHANNELS, RATE)
-    return DiarizerDef(spec, "fake_diarizer.create", {"threshold": 0.5, **variant})  # type: ignore[arg-type]
+    return DiarizerDef(spec, "fake_diarizer.create", {"threshold": 0.5, **variant})
 
 
 class FakeDiarizer:

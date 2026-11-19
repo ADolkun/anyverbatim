@@ -80,7 +80,7 @@ def finished(request: DiarizeRequest) -> Path | None:
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) < 3:  # noqa: PLR2004
-        print("usage: python -m anyverbatim.diarize.runner DIARIZER OUT_DIR WAV...", file=sys.stderr)
+        sys.stderr.write("usage: python -m anyverbatim.diarize.runner DIARIZER OUT_DIR WAV...\n")
         return 2
     definition = registry.get(args[0])
     registry.check_dependencies(definition)
@@ -95,7 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     }
     summary = {"metrics": result.metrics.model_dump(mode="json"), "elapsed_s": result.elapsed_s, "files": files}
-    print(json.dumps(summary, indent=2))
+    sys.stdout.write(json.dumps(summary, indent=2) + "\n")
     return 0
 
 

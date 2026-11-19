@@ -117,7 +117,8 @@ def test_flags_stay_on_their_characters_across_normalize_and_punctuation() -> No
     assert [s.text for s in doc.segments] == ["这个GAAP数据很好。", "然后估值也不低。"]
     assert flagged(doc) == [(0, "decoder_anomaly", "GAAP数据"), (1, "low_confidence", "估值")]
     assert all(s.edits == () for s in doc.segments)
-    assert doc.transcript.punctuation == "llm" and doc.transcript.script == "zh-Hans"
+    assert doc.transcript.punctuation == "llm"
+    assert doc.transcript.script == "zh-Hans"
 
 
 def test_flags_stay_on_their_characters_when_marks_become_full_width() -> None:
@@ -147,7 +148,9 @@ def test_a_corrected_word_is_interpolated_while_the_rest_keeps_engine_times() ->
     assert flagged(doc) == [(0, "timing_interpolated", after), (0, "entity_corrected", "GAAP")]
     assert [(e.stage, e.before, e.after) for e in segment.edits] == [("correction", "GAP", "GAAP")]
     markdown = render_markdown(doc)
-    assert "GAAP[^1]" in markdown and "was GAP" in markdown and "timing_interpolated" not in markdown
+    assert "GAAP[^1]" in markdown
+    assert "was GAP" in markdown
+    assert "timing_interpolated" not in markdown
     assert any("did not cover" in w for w in doc.quality.warnings)
 
 
@@ -222,11 +225,13 @@ def test_a_manual_caption_track_is_a_source_of_its_own() -> None:
         ),
     )
     source = from_captions(track, "en")
-    assert source.run.kind == "caption_manual" and source.run.id == "caption_manual:en"
+    assert source.run.kind == "caption_manual"
+    assert source.run.id == "caption_manual:en"
     doc = document(source, source.stretches, "en")
     assert [s.text for s in doc.segments] == ["Markets rose today.", "Then they fell."]
     assert all(s.words is None and s.flags == () for s in doc.segments)
-    assert doc.transcript.punctuation == "caption" and doc.segments[0].start == 1.0
+    assert doc.transcript.punctuation == "caption"
+    assert doc.segments[0].start == 1.0
     assert "Transcript: manual captions" in render_markdown(doc)
 
 
@@ -282,7 +287,8 @@ def test_words_split_over_a_figure_retime_it_without_interpolation(
     (stretch,) = numerals(source.stretches, "zh")
     assert stretch.text == shown
     doc = document(source, (stretch,))
-    assert flagged(doc) == [] and not any("did not cover" in w for w in doc.quality.warnings)
+    assert flagged(doc) == []
+    assert not any("did not cover" in w for w in doc.quality.warnings)
     (segment,) = doc.segments
     timed = {w.text: (w.start, w.end, w.conf) for w in segment.words or ()}
     assert timed[figure] == (1.0 + first, 1.5 + last, 0.9 - last / 100)
@@ -306,7 +312,8 @@ def test_a_range_with_an_end_its_words_only_partly_cover_stays_whole() -> None:
     assert numerals((stretch,), "zh")[0].text == "要3到15个月"
     words = (*stretch.words[:1], stretch.words[1].model_copy(update={"text": "三到十"}), *stretch.words[2:])
     (shown,) = numerals((stretch.model_copy(update={"words": words}),), "zh")
-    assert shown.text == "要三到十五个月" and shown.words == words
+    assert shown.text == "要三到十五个月"
+    assert shown.words == words
 
 
 @pytest.mark.parametrize(
@@ -388,7 +395,8 @@ def test_an_edit_is_rewritten_even_where_the_final_text_has_no_numeral() -> None
         edits=(Edit(stage="numeric", before="涨了百分之五", after="涨了50%", llm=LLM),),
     )
     (shown,) = numerals((stretch,), "zh")
-    assert shown.text == "涨了50%" and shown.edits[0].before == "涨了5%"
+    assert shown.text == "涨了50%"
+    assert shown.edits[0].before == "涨了5%"
 
 
 def test_the_numerals_stage_leaves_other_languages_alone() -> None:
@@ -456,7 +464,8 @@ def test_a_figure_the_edit_changed_reads_its_own_value_in_the_rewritten_edit(
     (shown,) = numerals((stretch,), "zh")
     (edit,) = shown.edits
     assert (edit.before, edit.after) == (shown_before, shown_after)
-    assert readings(edit.before) == readings(before) and edit.after == shown.text
+    assert readings(edit.before) == readings(before)
+    assert edit.after == shown.text
 
 
 def test_rewrites_carried_along_a_chain_of_edits_keep_every_text_reading_its_values() -> None:
@@ -555,7 +564,8 @@ def test_traditional_words_in_an_english_stretch_are_converted_with_their_text()
 
 def test_an_english_stretch_in_a_mandarin_recording_keeps_english_rules() -> None:
     source = lid_source(ZH_DOMINANT)
-    assert source.language == "zh" and [s.language for s in source.stretches] == [None, "en"]
+    assert source.language == "zh"
+    assert [s.language for s in source.stretches] == [None, "en"]
     normalized = normalize(source.stretches, source.language, script="zh-Hans", fillers="remove")
     assert normalized[1].text == "I think so", "an English hesitation goes by the English rule"
     assert numerals((Stretch(text="三个 one", start=0.0, end=1.0, language="en"),), "zh")[0].text == "三个 one"
@@ -563,7 +573,8 @@ def test_an_english_stretch_in_a_mandarin_recording_keeps_english_rules() -> Non
 
 def test_a_stretch_without_a_language_or_speaker_dumps_as_before() -> None:
     plain = Stretch(text="x", start=0.0, end=1.0)
-    assert "language" not in plain.model_dump() and "speaker" not in plain.model_dump()
+    assert "language" not in plain.model_dump()
+    assert "speaker" not in plain.model_dump()
     assert Stretch(text="x", start=0.0, end=1.0, language="zh").model_dump()["language"] == "zh"
 
 
@@ -587,7 +598,8 @@ def test_a_mixed_document_lists_its_languages_by_speech_and_reads_script_and_pun
     punctuated = [s.model_copy(update={"text": s.text.capitalize() + "."}) for s in stretches]
     punctuated[1] = punctuated[1].model_copy(update={"text": "我们开会了，嗯，三个人都在。"})
     doc = document(source, tuple(punctuated), "en", llm_punctuated=True)
-    assert doc.transcript.language == "en" and doc.transcript.languages == ("en", "zh")
+    assert doc.transcript.language == "en"
+    assert doc.transcript.languages == ("en", "zh")
     assert (doc.transcript.script, doc.transcript.punctuation) == ("zh-Hans", "llm")
     unpunctuated = document(source, stretches, "en")
     assert unpunctuated.transcript.punctuation == "none"

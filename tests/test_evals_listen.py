@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
@@ -61,7 +61,8 @@ def test_scripted_keys_record_decisions_and_resume(session: tuple[Layout, Manife
     second = Harness("b0s12")
     rest = second.run(layout, manifest)
     assert not rest.quit
-    assert rest.decided == 4 and rest.remaining == 0
+    assert rest.decided == 4
+    assert rest.remaining == 0
     decisions = listen.read_decisions(layout.session_dir("main"))
     assert [d.choice for d in decisions] == ["1", "2", "both", "neither", "skip", "1", "2"]
     assert decisions[4].span == decisions[6].span
@@ -78,14 +79,16 @@ def test_skipped_spans_come_back_at_the_end_and_on_the_next_run(session: tuple[L
     skipped_span = decisions[0].span
     assert [d.choice for d in decisions] == ["skip", "1", "1", "1", "1", "1", "skip"]
     assert decisions[-1].span == skipped_span
-    assert result.remaining == 1 and not result.quit
+    assert result.remaining == 1
+    assert not result.quit
     assert any("still skipped" in line for line in first.output)
 
     second = Harness("b")
     rest = second.run(layout, manifest)
     assert "1 of 6 spans left" in second.output[0]
     assert any("1 skipped spans come back after the 0 new ones" in line for line in second.output)
-    assert rest.decided == 1 and rest.remaining == 0
+    assert rest.decided == 1
+    assert rest.remaining == 0
     assert listen.read_decisions(layout.session_dir("main"))[-1].span == skipped_span
 
 
@@ -102,7 +105,7 @@ def test_clips_cover_the_session_windows(session: tuple[Layout, Manifest]) -> No
     layout, manifest = session
     harness = Harness("111111")
     harness.run(layout, manifest)
-    spans = [s for s in (layout.session_dir("main") / "spans.jsonl").read_text().splitlines()]
+    spans = (layout.session_dir("main") / "spans.jsonl").read_text().splitlines()
     assert len(harness.cut) == len(spans) == 6
     assert all(end > start for start, end in harness.cut)
 
@@ -134,7 +137,10 @@ def test_ffmpeg_and_afplay_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_a_failed_cut_fails_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    fail: Callable[..., proc.ProcResult] = lambda argv, *, timeout_s: proc.ProcResult(1, "", "bad input", 0.1)  # noqa: E731
+
+    def fail(argv: Sequence[str], *, timeout_s: float) -> proc.ProcResult:
+        return proc.ProcResult(1, "", "bad input", 0.1)
+
     monkeypatch.setattr(proc, "run", fail)
     with pytest.raises(Exception, match="bad input"):
         listen.ffmpeg_cut(tmp_path / "in.wav", 0.0, 1.0, tmp_path / "out.wav")

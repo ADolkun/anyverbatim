@@ -10,7 +10,7 @@ from anyverbatim.errors import LLMOutputError
 from anyverbatim.llm import LLMRequest, LLMResponse
 from evals import judge
 from evals.consensus import UNCERTAIN
-from evals.screen import collect_spans, judge_items, judge_shares
+from evals.screen import Span, collect_spans, judge_items, judge_shares
 from evals.store import write_rows
 
 HYPOTHESES = ("w-vad", "q-base", "f-aed")
@@ -40,14 +40,14 @@ class FakeClient:
 
 
 @pytest.fixture
-def spans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list:
+def spans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[Span]:
     layout, manifest = make_eval(tmp_path / "eval", monkeypatch)
     for name, texts in TEXTS.items():
         write_rows(layout, name, chunk_rows(name, ZH, texts))
     return collect_spans(layout, manifest, HYPOTHESES)
 
 
-def test_the_prompt_hides_engines_and_agreement_counts(spans: list, tmp_path: Path) -> None:
+def test_the_prompt_hides_engines_and_agreement_counts(spans: list[Span], tmp_path: Path) -> None:
     assert len(spans) == 2
     items = judge_items(spans, 10, seed=3)
     client = FakeClient()
@@ -64,7 +64,7 @@ def test_the_prompt_hides_engines_and_agreement_counts(spans: list, tmp_path: Pa
         assert len(item.options) == len(set(item.options)) == 2
 
 
-def test_the_context_holds_only_agreed_units_with_placeholders(spans: list) -> None:
+def test_the_context_holds_only_agreed_units_with_placeholders(spans: list[Span]) -> None:
     items = {frozenset(i.options): i for i in judge_items(spans, 10, seed=0)}
     first = items[frozenset({"今", "明"})]
     assert first.left == "我们"
@@ -83,7 +83,7 @@ def test_reading_order_is_seeded_per_span() -> None:
     assert len(orders) > 1
 
 
-def test_verdicts_are_cached_on_disk_and_reused(spans: list, tmp_path: Path) -> None:
+def test_verdicts_are_cached_on_disk_and_reused(spans: list[Span], tmp_path: Path) -> None:
     items = judge_items(spans, 10, seed=0)
     client = FakeClient()
     directory = tmp_path / "judge"
@@ -99,7 +99,7 @@ def test_verdicts_are_cached_on_disk_and_reused(spans: list, tmp_path: Path) -> 
     assert len(other.requests) == 1
 
 
-def test_a_quota_stop_resumes_where_it_left_off(spans: list, tmp_path: Path) -> None:
+def test_a_quota_stop_resumes_where_it_left_off(spans: list[Span], tmp_path: Path) -> None:
     items = judge_items(spans, 10, seed=0)
     directory = tmp_path / "judge"
     partial = judge.run_judge(FakeClient(), items, directory, model="m", batch_size=1, max_calls=1)
@@ -110,7 +110,7 @@ def test_a_quota_stop_resumes_where_it_left_off(spans: list, tmp_path: Path) -> 
     assert len(rest) == 2
 
 
-def test_a_torn_last_verdict_line_is_judged_again(spans: list, tmp_path: Path) -> None:
+def test_a_torn_last_verdict_line_is_judged_again(spans: list[Span], tmp_path: Path) -> None:
     items = judge_items(spans, 10, seed=0)
     directory = tmp_path / "judge"
     judge.run_judge(FakeClient(), items, directory, model="m", batch_size=1)
@@ -121,19 +121,21 @@ def test_a_torn_last_verdict_line_is_judged_again(spans: list, tmp_path: Path) -
 
     client = FakeClient()
     verdicts = judge.run_judge(client, items, directory, model="m", batch_size=1)
-    assert len(client.requests) == 1 and len(verdicts) == 2
+    assert len(client.requests) == 1
+    assert len(verdicts) == 2
     lines = path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 2 and all(json.loads(line) for line in lines)
+    assert len(lines) == 2
+    assert all(json.loads(line) for line in lines)
 
 
-def test_needs_audio_counts_for_nobody(spans: list, tmp_path: Path) -> None:
+def test_needs_audio_counts_for_nobody(spans: list[Span], tmp_path: Path) -> None:
     items = judge_items(spans, 10, seed=0)
     verdicts = judge.run_judge(FakeClient("audio"), items, tmp_path / "judge", model="m")
     shares = judge_shares(spans, verdicts, HYPOTHESES)
     assert shares == {}
 
 
-def test_judge_shares_credit_every_engine_with_the_chosen_reading(spans: list, tmp_path: Path) -> None:
+def test_judge_shares_credit_every_engine_with_the_chosen_reading(spans: list[Span], tmp_path: Path) -> None:
     items = judge_items(spans, 10, seed=0)
     verdicts = judge.run_judge(FakeClient(), items, tmp_path / "judge", model="m")
     shares = judge_shares(spans, verdicts, HYPOTHESES)

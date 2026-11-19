@@ -65,8 +65,10 @@ MAX_STILL_FLAGGED_SHARE = 0.5
 MAX_SEAM_SHARE = 0.25
 
 UNAVAILABLE = (
-    "window start: rows do not store Whisper's decode windows, so a loop's offset inside its window is not known; "
-    "loop_offset_s is relative to the repaired span",
+    (
+        "window start: rows do not store Whisper's decode windows, so a loop's offset inside its window is not known; "
+        "loop_offset_s is relative to the repaired span"
+    ),
 )
 
 

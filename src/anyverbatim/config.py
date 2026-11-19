@@ -152,7 +152,7 @@ def _checked(cls: type, section: str, values: Mapping[str, object]) -> dict[str,
     return {key: _coerce(f"{section}.{key}", value, hints[key]) for key, value in values.items()}
 
 
-def _coerce(name: str, value: object, hint: object) -> Any:
+def _coerce(name: str, value: object, hint: object) -> object:
     origin = get_origin(hint)
     if origin is Union or origin is types.UnionType:
         (inner,) = (arg for arg in get_args(hint) if arg is not type(None))

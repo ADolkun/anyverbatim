@@ -553,9 +553,9 @@ def _attach_bare_punctuation(ranges: list[tuple[int, int]], cutter: _Cutter) -> 
     """Merge ranges with nothing to read (a lone "。" after a pause) into their neighbour."""
     merged: list[tuple[int, int]] = []
     carry: int | None = None
-    for a, b in ranges:
-        if carry is not None:
-            a, carry = carry, None
+    for first, b in ranges:
+        a = first if carry is None else carry
+        carry = None
         if cutter.units(a, b) == 0:
             if merged:
                 merged[-1] = (merged[-1][0], b)

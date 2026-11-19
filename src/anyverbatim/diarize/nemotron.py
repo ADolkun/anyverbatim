@@ -49,11 +49,11 @@ class _Model(Protocol):
     @property
     def sample_rate(self) -> int: ...
 
-    def generate(self, audio: Any, **kwargs: Any) -> _Output: ...
+    def generate(self, audio: object, **kwargs: object) -> _Output: ...
 
 
 class _Loader(Protocol):
-    def load(self, model_path: str, **kwargs: Any) -> _Model: ...
+    def load(self, model_path: str, **kwargs: object) -> _Model: ...
 
 
 class NemotronDiarizer:
@@ -93,7 +93,7 @@ class NemotronDiarizer:
         config = model.config
         frame_s = config.processor_config.hop_length * config.output_subsampling_factor / model.sample_rate
         turns = tuple(
-            Turn(start=float(s.start), end=float(s.end), speaker=int(s.speaker))
+            Turn(start=float(s.start), end=float(s.end), speaker=s.speaker)
             for s in sorted(output.segments, key=lambda s: (s.start, s.speaker))
         )
         return RawDiarization(turns=turns, probs=probs, frame_s=frame_s)

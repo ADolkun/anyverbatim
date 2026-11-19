@@ -2,6 +2,7 @@ import itertools
 from pathlib import Path
 
 import pytest
+from acquire_fixture import Fakes
 
 from anyverbatim.acquire import captions
 from anyverbatim.acquire.captions import CaptionKind, CaptionSegment, CaptionTrack
@@ -204,7 +205,7 @@ def test_selection_skips_an_auto_track_in_an_unwanted_language() -> None:
 # --- fetch ---
 
 
-def test_fetch_downloads_one_call_and_parses_both_tracks(fakes, tmp_path: Path) -> None:
+def test_fetch_downloads_one_call_and_parses_both_tracks(fakes: Fakes, tmp_path: Path) -> None:
     info = tmp_path / "info.json"
     captions_dir = tmp_path / "captions"
 
@@ -235,7 +236,7 @@ def test_fetch_downloads_one_call_and_parses_both_tracks(fakes, tmp_path: Path) 
     assert result.warnings == ()
 
 
-def test_fetch_falls_back_to_vtt(fakes, tmp_path: Path) -> None:
+def test_fetch_falls_back_to_vtt(fakes: Fakes, tmp_path: Path) -> None:
     def handler(args: list[str], _label: str) -> YtDlpResult:
         template = arg_after(args, "-o").removeprefix("subtitle:")
         Path(template.replace("%(ext)s", "zh.vtt")).write_text(fixture_text("manual_zh.vtt"), encoding="utf-8")
@@ -248,20 +249,20 @@ def test_fetch_falls_back_to_vtt(fakes, tmp_path: Path) -> None:
     assert result.tracks[0].segments[0].text == "大家好 欢迎回来"
 
 
-def test_fetch_without_wanted_tracks_makes_no_request(fakes, tmp_path: Path) -> None:
+def test_fetch_without_wanted_tracks_makes_no_request(fakes: Fakes, tmp_path: Path) -> None:
     runner = fakes.runner(lambda _args, _label: fakes.ok())
     result = captions.fetch_captions(runner, tmp_path / "i.json", tmp_path / "c", make_meta())
     assert (result.tracks, result.warnings, runner.calls) == ((), (), [])
 
 
-def test_missing_file_is_reported_as_a_warning(fakes, tmp_path: Path) -> None:
+def test_missing_file_is_reported_as_a_warning(fakes: Fakes, tmp_path: Path) -> None:
     runner = fakes.runner(lambda _args, _label: fakes.ok())
     result = captions.fetch_captions(runner, tmp_path / "i.json", tmp_path / "c", make_meta(subtitle_langs=("en",)))
     assert result.tracks == ()
     assert "no json3 or vtt caption file for 'en'" in result.warnings[0]
 
 
-def test_a_rate_limited_subtitle_download_drops_captions_with_a_warning(fakes, tmp_path: Path) -> None:
+def test_a_rate_limited_subtitle_download_drops_captions_with_a_warning(fakes: Fakes, tmp_path: Path) -> None:
     captions_dir = tmp_path / "c"
     captions_dir.mkdir()
     (captions_dir / "captions.en.json3").write_text("{}", encoding="utf-8")
@@ -285,7 +286,7 @@ def test_a_rate_limited_subtitle_download_drops_captions_with_a_warning(fakes, t
     ],
 )
 def test_other_failures_still_raise(
-    fakes, tmp_path: Path, primary: Signal | None, secondary: tuple[Signal, ...]
+    fakes: Fakes, tmp_path: Path, primary: Signal | None, secondary: tuple[Signal, ...]
 ) -> None:
     runner = fakes.runner(fakes.raises(fakes.fail(primary, *secondary)))
     with pytest.raises(YtDlpError):

@@ -113,8 +113,10 @@ def read_library(recordings: Path | None = None) -> Listing:
     warnings = ()
     if "ZEVICTIONDATE" not in columns:
         warnings = (
-            f"the Voice Memos database has no ZEVICTIONDATE column in {TABLE}, "
-            "so memos in Recently Deleted cannot be told apart and are listed too",
+            (
+                f"the Voice Memos database has no ZEVICTIONDATE column in {TABLE}, "
+                "so memos in Recently Deleted cannot be told apart and are listed too"
+            ),
         )
     return Listing(memos, warnings)
 
@@ -139,7 +141,7 @@ def _copy_database(folder: Path, copy: Path) -> None:
     # The -shm file is the WAL's index and is rebuilt from the copied WAL on open, so it is not copied.
     wal, wal_copy = Path(f"{database}-wal"), Path(f"{copy}-wal")
     try:
-        os.stat(folder)
+        folder.stat()
         shutil.copyfile(database, copy)
         try:
             shutil.copyfile(wal, wal_copy)
@@ -165,7 +167,9 @@ def _query(database: Path) -> tuple[list[dict[str, object]], frozenset[str]]:
             )
         columns = [column for column in (*_REQUIRED, *_OPTIONAL) if column in present]
         rows: list[dict[str, object]] = [
-            dict(row) for row in connection.execute(f"SELECT {', '.join(columns)} FROM {TABLE}")
+            # The table and every column are constants of this module; SQL cannot bind identifiers.
+            dict(row)
+            for row in connection.execute(f"SELECT {', '.join(columns)} FROM {TABLE}")  # noqa: S608
         ]
         return rows, frozenset(columns)
 

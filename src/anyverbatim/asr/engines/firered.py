@@ -9,7 +9,7 @@ and `context` are ignored.
 import importlib
 import os
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, override
 
 from pydantic import JsonValue
 
@@ -40,10 +40,10 @@ class _Output(Protocol):
 
 
 class _Model(Protocol):
-    def generate(self, audio: object, **kwargs: Any) -> _Output: ...
+    def generate(self, audio: object, **kwargs: object) -> _Output: ...
 
 
-class FireRedEngine:
+class FireRedEngine(Engine):
     def __init__(self, spec: EngineSpec, beam_size: int) -> None:
         if spec.max_chunk_s is None:
             raise ConfigError(f"{spec.id} decodes bounded chunks, but its spec has no max_chunk_s")
@@ -52,6 +52,7 @@ class FireRedEngine:
         self._beam_size = beam_size
         self._model: _Model | None = None
 
+    @override
     def load(self) -> None:
         spec = self._spec
         try:
@@ -67,6 +68,7 @@ class FireRedEngine:
                 f"use, so this also fails offline or on a full disk): {exc}"
             ) from exc
 
+    @override
     def transcribe(self, audio: NDArray[np.float32], *, language: str | None, context: AsrContext | None) -> RawChunk:
         model = self._model
         if model is None:

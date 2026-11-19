@@ -4,6 +4,7 @@ import errno
 import json
 import os
 import shutil
+import sys
 import threading
 from pathlib import Path
 
@@ -74,6 +75,14 @@ def test_every_path_lookup_refuses_an_old_variable(name: str, monkeypatch: pytes
     monkeypatch.setenv(name, "set")
     with pytest.raises(ConfigError, match="ANYVERBATIM_" + name.removeprefix("YTVERBATIM_")):
         paths.state_dir()
+
+
+def test_the_move_works_in_a_process_without_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    old, new = tmp_path / "ytverbatim", tmp_path / "anyverbatim"
+    old.mkdir(mode=0o700)
+    monkeypatch.setattr(sys, "stderr", None)
+    assert legacy.move_into_place(old, new) == new
+    assert new.is_dir()
 
 
 def test_only_the_old_directory_is_moved_with_one_notice(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -151,7 +160,7 @@ def test_concurrent_moves_leave_one_winner_and_no_errors(tmp_path: Path, capsys:
         start.wait()
         try:
             outcomes.append(legacy.move_into_place(old, new))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - any failure of a racing thread is an outcome to assert on
             outcomes.append(exc)
 
     threads = [threading.Thread(target=migrate) for _ in range(8)]
@@ -212,7 +221,8 @@ def test_the_cli_reports_a_conflict_with_its_fix_before_any_command(home: Path) 
     new_roots(home)["state"].mkdir(parents=True)
     result = CliRunner().invoke(main, ["memos", "--help"])
     assert result.exit_code == 1
-    assert "both" in result.output and "Fix: merge" in result.output
+    assert "both" in result.output
+    assert "Fix: merge" in result.output
     assert old_roots(home)["state"].exists()
 
 

@@ -10,8 +10,8 @@ from anyverbatim.acquire import local
 from anyverbatim.acquire.voicememos import Memo, MemoCache
 from anyverbatim.errors import MediaValidationError
 
-AAC = {"codec_name": "aac", "duration": "12.5"}
-APAC = {"codec_name": "apac", "duration": "12.5"}
+AAC: dict[str, object] = {"codec_name": "aac", "duration": "12.5"}
+APAC: dict[str, object] = {"codec_name": "apac", "duration": "12.5"}
 
 
 class FakeMedia:
@@ -35,7 +35,9 @@ class FakeMedia:
     def __call__(self, argv: list[str], *, timeout_s: float, cwd: Path | None = None, **_: object) -> proc.ProcResult:
         self.calls.append(argv)
         given = argv[argv.index("-i") + 1] if "-i" in argv else argv[-1]
-        assert cwd is not None and given.startswith("./") and "/" not in given[2:], "ffmpeg sees only ./<name>"
+        assert cwd is not None
+        assert given.startswith("./"), "ffmpeg sees only ./<name>"
+        assert "/" not in given[2:], "ffmpeg sees only ./<name>"
         source = cwd / given
         if argv[0] == "ffprobe":
             return proc.ProcResult(0, json.dumps(self.probes[source.name]), "", 0.0)
@@ -62,11 +64,14 @@ def test_the_id_is_the_packet_hash_whatever_the_name_container_or_metadata(tmp_p
 
     a, b, c = (local.open_recording(path) for path in (first, renamed, other))
     digest = hashlib.sha256(b"alpha:0").hexdigest()
-    assert a.audio_sha256 == digest and a.id == f"rec-{digest[:16]}"
-    assert b.id == a.id and c.id != a.id
+    assert a.audio_sha256 == digest
+    assert a.id == f"rec-{digest[:16]}"
+    assert b.id == a.id
+    assert c.id != a.id
     assert local.recording_id(renamed) == a.id
     hashed = next(argv for argv in media.calls if "hash" in argv)
-    assert hashed[hashed.index("-map") + 1] == "0:a:0" and "copy" in hashed
+    assert hashed[hashed.index("-map") + 1] == "0:a:0"
+    assert "copy" in hashed
 
 
 def test_aac_is_preferred_over_an_undecodable_spatial_track(tmp_path: Path, media: FakeMedia) -> None:
@@ -100,8 +105,10 @@ def test_a_missing_file_is_an_error(tmp_path: Path, media: FakeMedia) -> None:
 
 def test_metadata_precedence_and_no_date_rather_than_the_mtime(tmp_path: Path, media: FakeMedia) -> None:
     plain = local.open_recording(media.add(tmp_path / "Team call.m4a", "a", streams=[AAC], tags={}))
-    assert plain.title == "Team call" and plain.recorded_at is None
-    assert plain.duration_s == 12.5 and plain.file_name == "Team call.m4a"
+    assert plain.title == "Team call"
+    assert plain.recorded_at is None
+    assert plain.duration_s == 12.5
+    assert plain.file_name == "Team call.m4a"
 
     both = {
         "creation_time": "2026-11-03T06:05:00.000000Z",
@@ -122,7 +129,7 @@ def test_metadata_precedence_and_no_date_rather_than_the_mtime(tmp_path: Path, m
 
 
 def test_a_stream_date_is_read_when_the_container_has_none(tmp_path: Path, media: FakeMedia) -> None:
-    stream = {**AAC, "tags": {"creation_time": "2026-11-03T06:05:00Z"}}
+    stream: dict[str, object] = {**AAC, "tags": {"creation_time": "2026-11-03T06:05:00Z"}}
     path = media.add(tmp_path / "s.m4a", "a", streams=[stream], tags={})
     assert local.open_recording(path).recorded_at == datetime(2026, 11, 3, 6, 5, tzinfo=UTC)
 

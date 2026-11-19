@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from fake_engine import definition, write_silence
+from pydantic import JsonValue
 
 from anyverbatim import config, mlx_worker, paths, proc
 from anyverbatim.asr import runner
@@ -25,7 +26,14 @@ from anyverbatim.asr.models import (
     FileJob,
     WorkerRequest,
 )
-from anyverbatim.errors import ConfigError, EngineError, EngineMemoryError, MediaValidationError, ProcMemoryExceeded
+from anyverbatim.errors import (
+    ConfigError,
+    EngineError,
+    EngineMemoryError,
+    MediaValidationError,
+    MemoryTrigger,
+    ProcMemoryExceeded,
+)
 
 HERE = Path(__file__).parent
 
@@ -40,10 +48,10 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return home
 
 
-def make_request(tmp_path: Path, *, seconds: float = 6.0, **variant: object) -> WorkerRequest:
+def make_request(tmp_path: Path, *, seconds: float = 6.0, **variant: JsonValue) -> WorkerRequest:
     wav = write_silence(tmp_path / "-dash.wav", seconds)
     job = FileJob(id="f1", wav=str(wav), language="en", chunks=(Chunk(0.5, 2.5), Chunk(3.0, 5.0)))
-    return WorkerRequest(engine=definition(**variant), out_dir=str(tmp_path / "out"), files=(job,))
+    return WorkerRequest(engine=definition(30.0, **variant), out_dir=str(tmp_path / "out"), files=(job,))
 
 
 def test_worker_argv_isolates_the_working_directory() -> None:
@@ -224,12 +232,12 @@ def test_every_worker_runs_under_a_memory_watch_defaulting_to_half_the_ram(
     [("footprint", "use a smaller engine, or raise asr.memory_cap_gib"), ("available", "close memory-heavy apps")],
 )
 def test_a_memory_kill_becomes_an_engine_memory_error_with_the_fix(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trigger: str, fix: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, trigger: MemoryTrigger, fix: str
 ) -> None:
     def fake_run(argv: list[str], **_: object) -> proc.ProcResult:
         raise ProcMemoryExceeded(
             "python3",
-            trigger,  # type: ignore[arg-type]
+            trigger,
             footprint_bytes=9 * GIB,
             cap_bytes=8 * GIB,
             available_percent=40 if trigger == "footprint" else 6,

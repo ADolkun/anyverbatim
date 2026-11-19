@@ -95,7 +95,8 @@ def test_the_chatgpt_store_location_is_computed_without_creating_it(home: Path) 
     assert location == home / ".local" / "state" / "anyverbatim" / "llm" / "chatgpt"
     assert not (home / ".local").exists()
     assert paths.chatgpt_auth_dir(create_parents=True) == location
-    assert _mode(location.parent) == 0o700 and not location.exists()
+    assert _mode(location.parent) == 0o700
+    assert not location.exists()
 
 
 def test_source_dir_takes_either_id_shape(home: Path) -> None:

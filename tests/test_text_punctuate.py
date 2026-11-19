@@ -97,8 +97,10 @@ def test_only_the_unpunctuated_stretches_go_to_the_llm(tmp_path: Path) -> None:
             reply(
                 (
                     0,
-                    "So today we are going to talk about how the market reacts when the Fed changes its mind about "
-                    "rates.",
+                    (
+                        "So today we are going to talk about how the market reacts when the Fed changes its mind about "
+                        "rates."
+                    ),
                 )
             )
         ]
@@ -203,7 +205,8 @@ def test_guard_names_a_lowercased_letter() -> None:
 def test_the_prompt_forbids_touching_punctuation_at_numbers(tmp_path: Path) -> None:
     client = FakeClient([reply((0, "Hello, everyone."))])
     run(["hello everyone"], client, tmp_path, "en")
-    assert "next to a number" in client.requests[0].system and "Never lowercase" in client.requests[0].system
+    assert "next to a number" in client.requests[0].system
+    assert "Never lowercase" in client.requests[0].system
 
 
 def test_guard_diff_names_the_change() -> None:
@@ -300,7 +303,7 @@ def test_wrong_indices_once_is_retried(tmp_path: Path) -> None:
 
 
 def test_batches_hold_about_1500_characters_and_use_batch_local_indices(tmp_path: Path) -> None:
-    texts = [("大家好欢迎回来" * 100) for _ in range(5)]
+    texts: list[str] = [("大家好欢迎回来" * 100) for _ in range(5)]
     seen: list[list[int]] = []
 
     def respond(request: LLMRequest) -> str:
@@ -364,7 +367,7 @@ def test_english_context_is_whole_words(tmp_path: Path) -> None:
 
 
 def test_neighbours_are_shown_as_transcribed_not_as_an_earlier_batch_punctuated_them(tmp_path: Path) -> None:
-    texts = [("大家好欢迎回来" * 100) for _ in range(5)]
+    texts: list[str] = [("大家好欢迎回来" * 100) for _ in range(5)]
     seen: list[list[dict[str, Any]]] = []
 
     def respond(request: LLMRequest) -> str:

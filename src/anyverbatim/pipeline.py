@@ -26,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Final, Literal, NoReturn, get_args
+from typing import Final, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
@@ -333,7 +333,7 @@ def process(
             return _finished(result, "youtube", out)
         if report.stopped is not None:
             raise report.stopped
-        _raise(result)
+        raise _failure(result)
     except AnyverbatimError as exc:
         explain(exc, source)
         raise
@@ -363,7 +363,7 @@ def _process_file(
     (result,) = results
     if result.document is not None:
         return _finished(result, "recording", out)
-    _raise(result)
+    raise _failure(result)
 
 
 def _finished(result: VideoResult, kind: SourceKind, out: Path | None) -> Result:
@@ -418,10 +418,8 @@ def _diarizer(options: config.DiarizeOptions, source: SourceKind) -> DiarizerDef
     return None
 
 
-def _raise(result: VideoResult) -> NoReturn:
-    if result.error is not None:
-        raise result.error
-    raise _error_for(result.outcome)
+def _failure(result: VideoResult) -> Exception:
+    return result.error if result.error is not None else _error_for(result.outcome)
 
 
 def process_many(  # noqa: PLR0913
@@ -1232,7 +1230,8 @@ class _YouTubeRun:
 
     def _latest(self) -> tuple[VideoOutcome, Access]:
         # `run` prepares the source only after accepting a fetch, and a failed later fetch never clears it.
-        assert self.fetched is not None
+        if self.fetched is None:
+            raise RuntimeError("the source was prepared before any fetch was accepted")
         return self.fetched
 
     def _ensure_wav(self) -> None:
@@ -1751,7 +1750,7 @@ def _evidence_tracks(tracks: Sequence[CaptionTrack], source: Transcribed) -> lis
 
 
 def _base(code: str) -> str:
-    return code.split("-")[0].lower()
+    return code.split("-", maxsplit=1)[0].lower()
 
 
 def _track_key(track: CaptionTrack) -> str:

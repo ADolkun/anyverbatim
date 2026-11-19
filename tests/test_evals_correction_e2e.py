@@ -17,6 +17,7 @@ from anyverbatim.llm.protocol import LLMRequest, LLMResponse, Readiness, Usage
 from evals import correction, correction_metrics, listen, run_correction
 from evals.correction import CANDIDATES, Failure
 from evals.correction_report import SCREEN_FILE, CorrectionScreen
+from evals.manifest import Manifest
 from evals.session import KEY_FILE, ShownSpan, load_key, load_shown
 from evals.store import REFERENCE, Layout, write_json, write_rows
 
@@ -160,7 +161,9 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Rig:
     def server(candidate: correction.Candidate, *_: object, **__: object) -> Generator[Corrector]:
         yield made.correctors[candidate.id]
 
-    def fake_listen(store: Layout, manifest: Any, name: str, *, getchar: Callable[[], str], echo: Any) -> None:
+    def fake_listen(
+        store: Layout, manifest: Manifest, name: str, *, getchar: Callable[[], str], echo: Callable[[str], None]
+    ) -> None:
         pressed = iter(made.presses(load_shown(store.session_dir(name))))
         listen.listen(
             store,
@@ -168,13 +171,26 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Rig:
             name,
             getchar=lambda: next(pressed),
             echo=echo,
-            player=lambda clip: None,
-            cutter=lambda wav, start, end, out: out.write_bytes(b"RIFF"),
+            player=silent_player,
+            cutter=stub_cutter,
         )
 
-    monkeypatch.setattr(run_correction, "punctuation_client", lambda spec: made.punct)
+    def silent_player(clip: Path) -> None:
+        return None
+
+    def stub_cutter(wav: Path, start: float, end: float, out: Path) -> None:
+        out.write_bytes(b"RIFF")
+
+    def punctuation_client(spec: str) -> Punctuator:
+        return made.punct
+
+    monkeypatch.setattr(run_correction, "punctuation_client", punctuation_client)
     monkeypatch.setattr(claude_cli, "readiness", lambda: Readiness(True, "fake"))
-    monkeypatch.setattr(run_correction, "ClaudeCLIClient", lambda *, model: by_model[model])
+
+    def claude_client(*, model: str) -> Corrector:
+        return by_model[model]
+
+    monkeypatch.setattr(run_correction, "ClaudeCLIClient", claude_client)
     monkeypatch.setattr(run_correction, "local_server", server)
     monkeypatch.setattr(run_correction, "judge_client", lambda: made.judge)
     monkeypatch.setattr(run_correction, "listen_loop", fake_listen)

@@ -46,5 +46,5 @@ def test_tokens_carry_offsets_surface_value_and_kind() -> None:
         ("三家公司", [(0, 2, "三家", "3家", "cjk_quantity")]),
     ],
 )
-def test_pinned_token_examples(text: str, tokens: list[tuple[int, int, str, str, str]]) -> None:
+def test_pinned_token_examples(text: str, tokens: list[tuple[int, int, str, str, numbers.QKind]]) -> None:
     assert anyverbatim.quantity_tokens(text) == [anyverbatim.QToken(*token) for token in tokens]
