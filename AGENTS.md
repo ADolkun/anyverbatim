@@ -24,7 +24,7 @@ Lean contract for coding agents. Keep it short; link to docs for detail.
 - Source lives in `src/anyverbatim/`; the public API must stay typed (`py.typed`).
 
 ## Verification
-`make check` must pass before a task is done: ruff lint, ruff format check, pyrefly strict with zero errors, pytest, and the privacy check. Run the narrowest checks while iterating.
+`make check` must pass before a task is done: ruff lint, the zizmor workflow audit, ruff format check, pyrefly strict with zero errors, pytest in parallel with a 96% coverage floor, the privacy check, and a smoke test of the built wheel. CI runs the same target on macOS behind one required check, `CI gate`. Run the narrowest checks while iterating.
 
 ## Conventions
 - Conventional commits. No AI attribution and no `Co-Authored-By` trailers.
