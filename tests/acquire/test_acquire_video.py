@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import pytest
+from acquire_fixture import FakeProc, Fakes
 
 import anyverbatim
 from anyverbatim import paths
@@ -28,7 +29,7 @@ def stage(tmp_path: Path, duration: float = 600.0) -> Path:
     return stage_dir
 
 
-def test_the_download_asks_for_the_video_track_only_as_mp4(fakes, tmp_path: Path, fake_proc) -> None:
+def test_the_download_asks_for_the_video_track_only_as_mp4(fakes: Fakes, tmp_path: Path, fake_proc: FakeProc) -> None:
     stage_dir = stage(tmp_path)
     out_dir = tmp_path / "out"
     runner = fakes.runner(lambda args, _label: (write_video(args), fakes.ok())[1])
@@ -60,7 +61,7 @@ def test_the_download_asks_for_the_video_track_only_as_mp4(fakes, tmp_path: Path
     [(None, 3600.0), (600.0, 3600.0), (7200.0, 21600.0), (20 * 3600.0, 12 * 3600.0)],
 )
 def test_the_download_limit_scales_with_the_duration_between_a_floor_and_a_ceiling(
-    fakes, tmp_path: Path, fake_proc, duration: float | None, timeout_s: float
+    fakes: Fakes, tmp_path: Path, fake_proc: FakeProc, duration: float | None, timeout_s: float
 ) -> None:
     runner = fakes.runner(lambda args, _label: (write_video(args), fakes.ok())[1])
     fake_proc.probe_returns(f"{duration or 600.0}\n")
@@ -69,7 +70,9 @@ def test_the_download_limit_scales_with_the_duration_between_a_floor_and_a_ceili
     assert call.timeout_s == timeout_s
 
 
-def test_an_earlier_file_is_removed_so_yt_dlp_does_not_skip_the_download(fakes, tmp_path: Path, fake_proc) -> None:
+def test_an_earlier_file_is_removed_so_yt_dlp_does_not_skip_the_download(
+    fakes: Fakes, tmp_path: Path, fake_proc: FakeProc
+) -> None:
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     (out_dir / "video.mp4").write_bytes(b"corrupt")
@@ -91,7 +94,7 @@ def test_an_earlier_file_is_removed_so_yt_dlp_does_not_skip_the_download(fakes, 
     assert (out_dir / "audio.webm").exists()
 
 
-def test_a_truncated_download_is_deleted_and_raises(fakes, tmp_path: Path, fake_proc) -> None:
+def test_a_truncated_download_is_deleted_and_raises(fakes: Fakes, tmp_path: Path, fake_proc: FakeProc) -> None:
     out_dir = tmp_path / "out"
     runner = fakes.runner(lambda args, _label: (write_video(args), fakes.ok())[1])
     fake_proc.probe_returns("100\n")
@@ -100,13 +103,13 @@ def test_a_truncated_download_is_deleted_and_raises(fakes, tmp_path: Path, fake_
     assert not (out_dir / "video.mp4").exists()
 
 
-def test_no_output_file_raises(fakes, tmp_path: Path) -> None:
+def test_no_output_file_raises(fakes: Fakes, tmp_path: Path) -> None:
     runner = fakes.runner(lambda _args, _label: fakes.ok())
     with pytest.raises(MediaValidationError, match=r"no video\.mp4"):
         video.fetch_video(runner, VIDEO_ID, stage(tmp_path), tmp_path / "out", expected_duration=None)
 
 
-def test_403_with_stale_info_re_extracts_once_then_retries(fakes, tmp_path: Path, fake_proc) -> None:
+def test_403_with_stale_info_re_extracts_once_then_retries(fakes: Fakes, tmp_path: Path, fake_proc: FakeProc) -> None:
     stage_dir = stage(tmp_path)
     old = info_path(stage_dir).stat().st_mtime - 2 * 3600
     os.utime(info_path(stage_dir), (old, old))
@@ -130,7 +133,7 @@ def test_403_with_stale_info_re_extracts_once_then_retries(fakes, tmp_path: Path
     assert info_path(stage_dir).stat().st_mtime > old
 
 
-def test_403_with_fresh_info_is_not_re_extracted(fakes, tmp_path: Path) -> None:
+def test_403_with_fresh_info_is_not_re_extracted(fakes: Fakes, tmp_path: Path) -> None:
     def handler(_args: list[str], _label: str) -> YtDlpResult:
         raise fakes.fail(Signal.HTTP_403)
 
@@ -140,7 +143,7 @@ def test_403_with_fresh_info_is_not_re_extracted(fakes, tmp_path: Path) -> None:
     assert len(runner.calls) == 1
 
 
-def test_video_file_returns_a_whole_file(tmp_path: Path, fake_proc, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_video_file_returns_a_whole_file(tmp_path: Path, fake_proc: FakeProc, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANYVERBATIM_HOME", str(tmp_path / "home"))
     vdir = paths.video_dir(VIDEO_ID)
     vdir.mkdir(parents=True)
@@ -156,7 +159,7 @@ def test_video_file_returns_a_whole_file(tmp_path: Path, fake_proc, monkeypatch:
 
 @pytest.mark.parametrize(("probed", "returncode"), [("100\n", 0), ("", 1)])
 def test_video_file_treats_a_short_or_undecodable_file_as_absent(
-    tmp_path: Path, fake_proc, probed: str, returncode: int
+    tmp_path: Path, fake_proc: FakeProc, probed: str, returncode: int
 ) -> None:
     vdir = paths.video_dir(VIDEO_ID, tmp_path)
     vdir.mkdir(parents=True)
@@ -166,7 +169,7 @@ def test_video_file_treats_a_short_or_undecodable_file_as_absent(
     assert video.video_file(VIDEO_ID, tmp_path) is None
 
 
-def test_video_file_without_saved_metadata_is_absent(tmp_path: Path, fake_proc) -> None:
+def test_video_file_without_saved_metadata_is_absent(tmp_path: Path, fake_proc: FakeProc) -> None:
     vdir = paths.video_dir(VIDEO_ID, tmp_path)
     vdir.mkdir(parents=True)
     (vdir / "video.mp4").write_bytes(b"x")

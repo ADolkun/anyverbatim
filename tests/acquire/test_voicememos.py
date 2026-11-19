@@ -140,16 +140,18 @@ def test_permission_denied_gives_the_full_disk_access_fix(
     monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
     real_stat, real_copy = os.stat, shutil.copyfile
 
-    def stat(path: object, *args: object, **kwargs: object) -> os.stat_result:
-        if denied == "folder" and Path(str(path)) == folder:
+    def stat(
+        path: str | os.PathLike[str], *, dir_fd: int | None = None, follow_symlinks: bool = True
+    ) -> os.stat_result:
+        if denied == "folder" and Path(path) == folder:
             raise PermissionError(1, "Operation not permitted")
-        return real_stat(path, *args, **kwargs)  # type: ignore[arg-type]
+        return real_stat(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
 
-    def copyfile(src: str | Path, dst: str | Path, **kwargs: object) -> object:
+    def copyfile(src: str | Path, dst: str | Path, *, follow_symlinks: bool = True) -> str | Path:
         name = Path(src).name
         if (denied, name) in {("database", voicememos.DATABASE), ("wal", f"{voicememos.DATABASE}-wal")}:
             raise PermissionError(13, "Permission denied")
-        return real_copy(src, dst, **kwargs)  # type: ignore[arg-type]
+        return real_copy(src, dst, follow_symlinks=follow_symlinks)
 
     monkeypatch.setattr(os, "stat", stat)
     monkeypatch.setattr(shutil, "copyfile", copyfile)
@@ -274,13 +276,14 @@ def test_the_private_copy_is_removed_afterwards(tmp_path: Path, monkeypatch: pyt
 
 def test_a_torn_copy_is_retried_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     folder = make_library(tmp_path, [Row("A", path="a.m4a")])
-    real, calls = sqlite3.connect, []
+    real = sqlite3.connect
+    calls: list[int] = []
 
-    def flaky(*args: object, **kwargs: object) -> sqlite3.Connection:
+    def flaky(database: str, *, uri: bool) -> sqlite3.Connection:
         calls.append(1)
         if len(calls) == 1:
             raise sqlite3.DatabaseError("database disk image is malformed")
-        return real(*args, **kwargs)  # type: ignore[arg-type]
+        return real(database, uri=uri)
 
     monkeypatch.setattr(sqlite3, "connect", flaky)
     assert [m.unique_id for m in voicememos.list_memos(folder)] == ["A"]

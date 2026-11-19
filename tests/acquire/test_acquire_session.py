@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from acquire_fixture import FakeProc, FakeYtDlp, SessionKit
 
 from anyverbatim import paths, proc
 from anyverbatim.acquire import session
@@ -25,7 +26,15 @@ NOW = datetime(2030, 1, 1, 12, 0, tzinfo=UTC)
 SOURCE = CookieFileSource(Path("/nonexistent/cookies.txt"))
 
 
-def run(kit, yt, targets: Sequence[str], *, source=SOURCE, now: datetime = NOW, **options: object) -> BatchReport:
+def run(
+    kit: SessionKit,
+    yt: FakeYtDlp,
+    targets: Sequence[str],
+    *,
+    source: CookieFileSource | None = SOURCE,
+    now: datetime = NOW,
+    options: FetchOptions | None = None,
+) -> BatchReport:
     kit.sleep_args = []
 
     def factory(sleep: Sequence[str]) -> YtDlpRunner:
@@ -36,7 +45,7 @@ def run(kit, yt, targets: Sequence[str], *, source=SOURCE, now: datetime = NOW, 
         targets,
         source=source,
         out=kit.out,
-        options=FetchOptions(**options),
+        options=options,
         runner_factory=factory,
         sleep=kit.slept.append,
         clock=lambda: now,
@@ -48,7 +57,7 @@ def only(report: BatchReport) -> VideoOutcome:
     return outcome
 
 
-def test_anonymous_public_success_takes_no_snapshot(session_kit) -> None:
+def test_anonymous_public_success_takes_no_snapshot(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     report = run(session_kit, yt, [PUBLIC])
     outcome = only(report)
@@ -76,7 +85,7 @@ def test_anonymous_public_success_takes_no_snapshot(session_kit) -> None:
     assert batch["stopped"] is None
 
 
-def test_members_escalation_reuses_one_snapshot_and_sets_member(session_kit) -> None:
+def test_members_escalation_reuses_one_snapshot_and_sets_member(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.availability[MEMBERS] = "subscriber_only"
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
@@ -97,7 +106,7 @@ def test_members_escalation_reuses_one_snapshot_and_sets_member(session_kit) -> 
     assert not snap.exists()
 
 
-def test_escalation_without_source_is_an_auth_error(session_kit) -> None:
+def test_escalation_without_source_is_an_auth_error(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.LOGIN_REQUIRED)]
     report = run(session_kit, yt, [MEMBERS], source=None)
@@ -110,21 +119,21 @@ def test_escalation_without_source_is_an_auth_error(session_kit) -> None:
     assert session_kit.snapshots.taken == []
 
 
-def test_policy_never_does_not_escalate(session_kit) -> None:
+def test_policy_never_does_not_escalate(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
-    outcome = only(run(session_kit, yt, [MEMBERS], policy="never"))
+    outcome = only(run(session_kit, yt, [MEMBERS], options=FetchOptions(policy="never")))
     assert outcome.error == AuthState.AUTH_REQUIRED.value
     assert session_kit.snapshots.taken == []
 
 
-def test_policy_always_needs_a_source(session_kit) -> None:
+def test_policy_always_needs_a_source(session_kit: SessionKit) -> None:
     with pytest.raises(AuthError) as caught:
-        run(session_kit, session_kit.yt(), [PUBLIC], source=None, policy="always")
+        run(session_kit, session_kit.yt(), [PUBLIC], source=None, options=FetchOptions(policy="always"))
     assert caught.value.state is AuthState.NO_SOURCE
 
 
-def test_rotation_retries_once_with_a_fresh_snapshot(session_kit) -> None:
+def test_rotation_retries_once_with_a_fresh_snapshot(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
     yt.failures[("metadata", True)] = [session_kit.fail(Signal.MEMBERS_ONLY, Signal.ROTATED)]
@@ -136,7 +145,7 @@ def test_rotation_retries_once_with_a_fresh_snapshot(session_kit) -> None:
     assert yt.labels("audio")[0].cookies == second
 
 
-def test_rotation_twice_is_an_auth_error_and_poisons_later_cookied_videos(session_kit) -> None:
+def test_rotation_twice_is_an_auth_error_and_poisons_later_cookied_videos(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     rotated = [session_kit.fail(Signal.MEMBERS_ONLY, Signal.ROTATED) for _ in range(2)]
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY) for _ in range(2)]
@@ -151,7 +160,7 @@ def test_rotation_twice_is_an_auth_error_and_poisons_later_cookied_videos(sessio
     assert report.exit_code == 2
 
 
-def test_rotated_on_success_invalidates_preflight(session_kit, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rotated_on_success_invalidates_preflight(session_kit: SessionKit, monkeypatch: pytest.MonkeyPatch) -> None:
     invalidated: list[object] = []
     monkeypatch.setattr(preflight, "invalidate", invalidated.append)
     yt = session_kit.yt()
@@ -163,7 +172,7 @@ def test_rotated_on_success_invalidates_preflight(session_kit, monkeypatch: pyte
     assert session_kit.slept == []
 
 
-def test_bot_check_writes_cooldown_and_stops_without_escalating(session_kit) -> None:
+def test_bot_check_writes_cooldown_and_stops_without_escalating(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.BOT_CHECK)]
     report = run(session_kit, yt, [PUBLIC, PUBLIC_2])
@@ -184,7 +193,7 @@ def test_bot_check_writes_cooldown_and_stops_without_escalating(session_kit) -> 
     assert [v["status"] for v in batch["videos"]] == ["error", "not_attempted"]
 
 
-def test_bot_check_on_cookied_call_also_stops(session_kit) -> None:
+def test_bot_check_on_cookied_call_also_stops(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
     yt.failures[("metadata", True)] = [session_kit.fail(Signal.CAPTCHA, Signal.ROTATED)]
@@ -193,7 +202,7 @@ def test_bot_check_on_cookied_call_also_stops(session_kit) -> None:
     assert session_kit.slept == []
 
 
-def test_http_429_on_metadata_or_audio_stops_but_on_captions_only_drops_them(session_kit) -> None:
+def test_http_429_on_metadata_or_audio_stops_but_on_captions_only_drops_them(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.HTTP_429)]
     assert run(session_kit, yt, [PUBLIC]).exit_code == 3
@@ -217,7 +226,7 @@ def test_http_429_on_metadata_or_audio_stops_but_on_captions_only_drops_them(ses
     assert not paths.cooldown_file().exists()
 
 
-def test_stop_signal_among_secondary_signals_never_escalates(session_kit) -> None:
+def test_stop_signal_among_secondary_signals_never_escalates(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY, Signal.BOT_CHECK)]
     report = run(session_kit, yt, [MEMBERS, PUBLIC])
@@ -232,7 +241,7 @@ def test_stop_signal_among_secondary_signals_never_escalates(session_kit) -> Non
     assert json.loads(paths.cooldown_file().read_text())["signal"] == "bot_check"
 
 
-def test_a_429_among_secondary_signals_stops_except_on_captions(session_kit) -> None:
+def test_a_429_among_secondary_signals_stops_except_on_captions(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.LOGIN_REQUIRED, Signal.HTTP_429)]
     assert run(session_kit, yt, [MEMBERS]).exit_code == 3
@@ -244,7 +253,7 @@ def test_a_429_among_secondary_signals_stops_except_on_captions(session_kit) -> 
     assert run(session_kit, yt, [PUBLIC_2]).exit_code == 3
 
 
-def test_stop_signal_on_a_successful_call_finishes_the_video_then_stops(session_kit) -> None:
+def test_stop_signal_on_a_successful_call_finishes_the_video_then_stops(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.secondary[("metadata", False)] = (Signal.RATE_LIMITED,)
     yt.secondary[("audio", False)] = (Signal.BOT_CHECK,)
@@ -263,7 +272,7 @@ def test_stop_signal_on_a_successful_call_finishes_the_video_then_stops(session_
     assert json.loads((session_kit.out / "batch_report.json").read_text())["stopped"]["signal"] == "rate_limited"
 
 
-def test_a_429_on_a_successful_captions_call_does_not_stop(session_kit) -> None:
+def test_a_429_on_a_successful_captions_call_does_not_stop(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.secondary[("captions", False)] = (Signal.HTTP_429,)
     report = run(session_kit, yt, [PUBLIC, PUBLIC_2])
@@ -272,7 +281,7 @@ def test_a_429_on_a_successful_captions_call_does_not_stop(session_kit) -> None:
     assert not paths.cooldown_file().exists()
 
 
-def test_stop_signal_while_expanding_stops_before_any_video(session_kit) -> None:
+def test_stop_signal_while_expanding_stops_before_any_video(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.playlist = [PUBLIC]
     yt.secondary[("expand", False)] = (Signal.BOT_CHECK,)
@@ -282,7 +291,7 @@ def test_stop_signal_while_expanding_stops_before_any_video(session_kit) -> None
     assert paths.cooldown_file().exists()
 
 
-def test_stop_signal_on_the_login_probe_stops_the_batch(session_kit) -> None:
+def test_stop_signal_on_the_login_probe_stops_the_batch(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
     yt.failures[("metadata", True)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
@@ -293,7 +302,7 @@ def test_stop_signal_on_the_login_probe_stops_the_batch(session_kit) -> None:
     assert json.loads(paths.cooldown_file().read_text())["hours"] == 1
 
 
-def test_auth_uncertain_is_one_videos_failure_not_the_sources(session_kit) -> None:
+def test_auth_uncertain_is_one_videos_failure_not_the_sources(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.availability["memVideo002"] = "subscriber_only"
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY) for _ in range(2)]
@@ -308,19 +317,19 @@ def test_auth_uncertain_is_one_videos_failure_not_the_sources(session_kit) -> No
     assert len(yt.labels("metadata", cookied=True)) == 2
 
 
-def test_cooldown_refuses_to_start_unless_ignored(session_kit) -> None:
+def test_cooldown_refuses_to_start_unless_ignored(session_kit: SessionKit) -> None:
     session.start_cooldown(Signal.RATE_LIMITED, NOW)
     yt = session_kit.yt()
     with pytest.raises(BatchStopError) as caught:
         run(session_kit, yt, [PUBLIC], now=NOW + timedelta(minutes=30))
     assert caught.value.signal is Signal.RATE_LIMITED
     assert yt.calls == []
-    report = run(session_kit, yt, [PUBLIC], now=NOW + timedelta(minutes=30), ignore_cooldown=True)
+    report = run(session_kit, yt, [PUBLIC], now=NOW + timedelta(minutes=30), options=FetchOptions(ignore_cooldown=True))
     assert report.exit_code == 0
     assert run(session_kit, session_kit.yt(), [PUBLIC_2], now=NOW + timedelta(hours=2)).exit_code == 0
 
 
-def test_fetch_takes_the_per_video_lock_that_run_uses(session_kit) -> None:
+def test_fetch_takes_the_per_video_lock_that_run_uses(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     with session.video_lock(session_kit.out / PUBLIC):
         report = run(session_kit, yt, [PUBLIC, PUBLIC_2])
@@ -331,7 +340,7 @@ def test_fetch_takes_the_per_video_lock_that_run_uses(session_kit) -> None:
     assert {call.video_id for call in yt.labels("metadata")} == {PUBLIC_2}
 
 
-def test_cooldown_doubles_on_repeats_and_is_capped(session_kit) -> None:
+def test_cooldown_doubles_on_repeats_and_is_capped(session_kit: SessionKit) -> None:
     now = NOW
     durations: list[float] = []
     for _ in range(7):
@@ -352,7 +361,9 @@ def test_cooldown_doubles_on_repeats_and_is_capped(session_kit) -> None:
         (None, AuthState.AUTH_UNCERTAIN),
     ],
 )
-def test_not_member_only_after_a_logged_in_probe(session_kit, probe_error, expected) -> None:
+def test_not_member_only_after_a_logged_in_probe(
+    session_kit: SessionKit, probe_error: Signal | None, expected: AuthState
+) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
     yt.failures[("metadata", True)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
@@ -366,24 +377,26 @@ def test_not_member_only_after_a_logged_in_probe(session_kit, probe_error, expec
     assert ":ytfav" in probe.args
 
 
-def test_per_run_cap_limits_expansion_and_videos(session_kit) -> None:
+def test_per_run_cap_limits_expansion_and_videos(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.playlist = [f"plVideo{n:04d}" for n in range(5)]
-    report = run(session_kit, yt, ["https://www.youtube.com/playlist?list=PLsynthetic"], max_videos=2)
+    report = run(
+        session_kit, yt, ["https://www.youtube.com/playlist?list=PLsynthetic"], options=FetchOptions(max_videos=2)
+    )
     assert [v.video_id for v in report.videos] == ["plVideo0000", "plVideo0001"]
     assert report.capped
     (expand,) = yt.labels("expand")
     assert expand.args[expand.args.index("--playlist-end") + 1] == "2"
 
 
-def test_sleep_args_depend_on_video_count(session_kit) -> None:
+def test_sleep_args_depend_on_video_count(session_kit: SessionKit) -> None:
     run(session_kit, session_kit.yt(), [PUBLIC])
     assert session_kit.sleep_args[-1] == ("--sleep-requests", "0.75", "--sleep-subtitles", "5")
     run(session_kit, session_kit.yt(), [PUBLIC, PUBLIC_2])
     assert session_kit.sleep_args[-1] == SLEEP_PRESET
 
 
-def test_members_playlist_and_cookie_channels_use_cookies_first(session_kit) -> None:
+def test_members_playlist_and_cookie_channels_use_cookies_first(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.playlist = [MEMBERS]
     run(session_kit, yt, ["https://www.youtube.com/playlist?list=UUMOxxxxxxxxxxxxxxxxxxxxxx"])
@@ -393,12 +406,17 @@ def test_members_playlist_and_cookie_channels_use_cookies_first(session_kit) -> 
 
     yt = session_kit.yt()
     yt.playlist = [PUBLIC]
-    run(session_kit, yt, ["https://www.youtube.com/@SyntheticChannel"], cookie_channels=("@syntheticchannel",))
+    run(
+        session_kit,
+        yt,
+        ["https://www.youtube.com/@SyntheticChannel"],
+        options=FetchOptions(cookie_channels=("@syntheticchannel",)),
+    )
     assert yt.labels("expand")[0].cookies is None
     assert yt.labels("metadata", cookied=False) == []
 
 
-def test_resume_skips_validated_artifacts(session_kit) -> None:
+def test_resume_skips_validated_artifacts(session_kit: SessionKit) -> None:
     run(session_kit, session_kit.yt(), [PUBLIC])
     yt = session_kit.yt()
     outcome = only(run(session_kit, yt, [PUBLIC]))
@@ -415,7 +433,7 @@ def test_resume_skips_validated_artifacts(session_kit) -> None:
     assert (session_kit.out / PUBLIC / "audio.wav").is_file()
 
 
-def test_video_without_captions_records_an_empty_track_list(session_kit) -> None:
+def test_video_without_captions_records_an_empty_track_list(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.no_captions.add(PUBLIC)
     outcome = only(run(session_kit, yt, [PUBLIC]))
@@ -429,7 +447,7 @@ def test_video_without_captions_records_an_empty_track_list(session_kit) -> None
     assert yt.calls == []
 
 
-def test_permanent_failure_is_recorded_and_the_batch_continues(session_kit) -> None:
+def test_permanent_failure_is_recorded_and_the_batch_continues(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [
         session_kit.fail(Signal.UNAVAILABLE, preview="ERROR: [youtube] x: Video unavailable")
@@ -465,7 +483,9 @@ def _files_text(root: Path) -> str:
     return "\n".join(p.read_text("utf-8", errors="replace") for p in root.rglob("*") if p.is_file())
 
 
-def test_premium_parsed_from_verbose_and_never_written_raw(session_kit, caplog: pytest.LogCaptureFixture) -> None:
+def test_premium_parsed_from_verbose_and_never_written_raw(
+    session_kit: SessionKit, caplog: pytest.LogCaptureFixture
+) -> None:
     caplog.set_level(logging.DEBUG)
     yt = session_kit.yt()
     yt.availability[MEMBERS] = "subscriber_only"
@@ -481,7 +501,7 @@ def test_premium_parsed_from_verbose_and_never_written_raw(session_kit, caplog: 
     assert SECRET not in caplog.text
 
 
-def test_failed_verbose_call_drops_debug_lines(session_kit) -> None:
+def test_failed_verbose_call_drops_debug_lines(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
     preview = f"{VERBOSE_STDERR}ERROR: [youtube] {MEMBERS}: something new and unclassified"
@@ -492,7 +512,7 @@ def test_failed_verbose_call_drops_debug_lines(session_kit) -> None:
     assert SECRET not in _files_text(session_kit.out) + _files_text(session_kit.home)
 
 
-PINNED = {
+PINNED: dict[str, object] = {
     "is_pinned": True,
     "author_is_uploader": True,
     "text": "Correction: the figure is 12%.",
@@ -502,32 +522,32 @@ PINNED = {
 }
 
 
-def test_comments_are_asked_for_only_when_the_creator_note_is_on(session_kit) -> None:
+def test_comments_are_asked_for_only_when_the_creator_note_is_on(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     run(session_kit, yt, [PUBLIC])
     assert yt.labels("metadata")[0].args == ["-J", "--no-playlist", f"https://www.youtube.com/watch?v={PUBLIC}"]
 
     yt = session_kit.yt()
-    run(session_kit, yt, [PUBLIC_2], creator_note=True)
+    run(session_kit, yt, [PUBLIC_2], options=FetchOptions(creator_note=True))
     (call,) = yt.labels("metadata")
     assert call.args[:3] == ["-J", "--no-playlist", "--get-comments"]
     assert call.args[-1].endswith(PUBLIC_2)
 
 
-def test_the_note_rides_on_the_cookied_extraction_too(session_kit) -> None:
+def test_the_note_rides_on_the_cookied_extraction_too(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.availability[MEMBERS] = "subscriber_only"
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
-    run(session_kit, yt, [MEMBERS], creator_note=True)
+    run(session_kit, yt, [MEMBERS], options=FetchOptions(creator_note=True))
     (cookied,) = yt.labels("metadata", cookied=True)
     assert "--get-comments" in cookied.args
     assert "-v" in cookied.args
 
 
-def test_the_note_is_read_from_the_extraction(session_kit) -> None:
+def test_the_note_is_read_from_the_extraction(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.comments[PUBLIC] = [{**PINNED, "is_pinned": False}, PINNED]
-    run(session_kit, yt, [PUBLIC], creator_note=True)
+    run(session_kit, yt, [PUBLIC], options=FetchOptions(creator_note=True))
     metadata = json.loads((session_kit.out / PUBLIC / "metadata.json").read_text())
     assert metadata["creator_note"] == {
         "text": "Correction: the figure is 12%.",
@@ -536,11 +556,11 @@ def test_the_note_is_read_from_the_extraction(session_kit) -> None:
         "published": "1 day ago",
     }
 
-    run(session_kit, yt, [PUBLIC_2], creator_note=True)
+    run(session_kit, yt, [PUBLIC_2], options=FetchOptions(creator_note=True))
     assert json.loads((session_kit.out / PUBLIC_2 / "metadata.json").read_text())["creator_note"] is None
 
 
-def test_turning_the_note_on_re_extracts_once(session_kit) -> None:
+def test_turning_the_note_on_re_extracts_once(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.comments[PUBLIC] = [PINNED]
     run(session_kit, yt, [PUBLIC])
@@ -548,25 +568,25 @@ def test_turning_the_note_on_re_extracts_once(session_kit) -> None:
     assert len(yt.labels("metadata")) == 1
     assert json.loads((session_kit.out / PUBLIC / "metadata.json").read_text())["creator_note"] is None
 
-    run(session_kit, yt, [PUBLIC], creator_note=True)
+    run(session_kit, yt, [PUBLIC], options=FetchOptions(creator_note=True))
     assert len(yt.labels("metadata")) == 2
     assert "--get-comments" in yt.labels("metadata")[1].args
     assert json.loads((session_kit.out / PUBLIC / "metadata.json").read_text())["creator_note"] is not None
 
-    outcome = only(run(session_kit, yt, [PUBLIC], creator_note=True))
+    outcome = only(run(session_kit, yt, [PUBLIC], options=FetchOptions(creator_note=True)))
     assert len(yt.labels("metadata")) == 2
     assert "info" in outcome.reused
 
 
-def test_a_video_without_comments_is_not_re_extracted_every_run(session_kit) -> None:
+def test_a_video_without_comments_is_not_re_extracted_every_run(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
-    yt.comments[PUBLIC] = []
+    yt.comments[PUBLIC] = list[dict[str, object]]()
     for _ in range(2):
-        run(session_kit, yt, [PUBLIC], creator_note=True)
+        run(session_kit, yt, [PUBLIC], options=FetchOptions(creator_note=True))
     assert len(yt.labels("metadata")) == 1
 
 
-def test_without_the_option_no_video_is_requested(session_kit) -> None:
+def test_without_the_option_no_video_is_requested(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     outcome = only(run(session_kit, yt, [PUBLIC]))
     assert [c.label for c in yt.calls] == ["metadata", "captions", "audio"]
@@ -574,9 +594,9 @@ def test_without_the_option_no_video_is_requested(session_kit) -> None:
     assert "video" not in outcome.reused
 
 
-def test_the_option_adds_one_video_request_after_the_audio(session_kit) -> None:
+def test_the_option_adds_one_video_request_after_the_audio(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
-    outcome = only(run(session_kit, yt, [PUBLIC], video=True))
+    outcome = only(run(session_kit, yt, [PUBLIC], options=FetchOptions(video=True)))
     assert outcome.status is VideoStatus.OK
     assert [c.label for c in yt.calls] == ["metadata", "captions", "audio", "video"]
     (call,) = yt.labels("video")
@@ -594,12 +614,12 @@ def test_the_option_adds_one_video_request_after_the_audio(session_kit) -> None:
     assert (session_kit.out / PUBLIC / "video.mp4").is_file()
 
 
-def test_the_video_uses_the_cookie_path_the_audio_took(session_kit) -> None:
+def test_the_video_uses_the_cookie_path_the_audio_took(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.availability[MEMBERS] = "subscriber_only"
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
     yt.secondary[("metadata", True)] = (Signal.AUTH_COOKIES_FOUND,)
-    outcome = only(run(session_kit, yt, [MEMBERS], video=True))
+    outcome = only(run(session_kit, yt, [MEMBERS], options=FetchOptions(video=True)))
 
     assert outcome.status is VideoStatus.OK, outcome
     (snap,) = session_kit.snapshots.taken
@@ -608,31 +628,31 @@ def test_the_video_uses_the_cookie_path_the_audio_took(session_kit) -> None:
     assert yt.labels("video", cookied=False) == []
 
 
-def test_an_anonymous_video_takes_no_snapshot(session_kit) -> None:
+def test_an_anonymous_video_takes_no_snapshot(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
-    run(session_kit, yt, [PUBLIC], video=True)
+    run(session_kit, yt, [PUBLIC], options=FetchOptions(video=True))
     assert session_kit.snapshots.taken == []
     assert yt.labels("video")[0].cookies is None
 
 
-def test_a_valid_video_is_reused(session_kit) -> None:
-    run(session_kit, session_kit.yt(), [PUBLIC], video=True)
+def test_a_valid_video_is_reused(session_kit: SessionKit) -> None:
+    run(session_kit, session_kit.yt(), [PUBLIC], options=FetchOptions(video=True))
     yt = session_kit.yt()
-    outcome = only(run(session_kit, yt, [PUBLIC], video=True))
+    outcome = only(run(session_kit, yt, [PUBLIC], options=FetchOptions(video=True)))
     assert yt.calls == []
     assert outcome.reused == ("info", "captions", "audio", "wav", "video")
 
 
-def test_turning_the_option_on_fetches_only_the_video_from_a_saved_extraction(session_kit) -> None:
+def test_turning_the_option_on_fetches_only_the_video_from_a_saved_extraction(session_kit: SessionKit) -> None:
     run(session_kit, session_kit.yt(), [PUBLIC])
     yt = session_kit.yt()
-    outcome = only(run(session_kit, yt, [PUBLIC], video=True))
+    outcome = only(run(session_kit, yt, [PUBLIC], options=FetchOptions(video=True)))
     assert [c.label for c in yt.calls] == ["video"]
     assert outcome.reused == ("info", "captions", "audio", "wav")
 
 
-def test_a_corrupt_video_is_replaced(session_kit, fake_proc) -> None:
-    run(session_kit, session_kit.yt(), [PUBLIC], video=True)
+def test_a_corrupt_video_is_replaced(session_kit: SessionKit, fake_proc: FakeProc) -> None:
+    run(session_kit, session_kit.yt(), [PUBLIC], options=FetchOptions(video=True))
     target = session_kit.out / PUBLIC / "video.mp4"
     target.write_bytes(b"corrupt")
     healthy = fake_proc.responses["ffprobe"]
@@ -644,16 +664,16 @@ def test_a_corrupt_video_is_replaced(session_kit, fake_proc) -> None:
 
     fake_proc.responses["ffprobe"] = probe
     yt = session_kit.yt()
-    outcome = only(run(session_kit, yt, [PUBLIC], video=True))
+    outcome = only(run(session_kit, yt, [PUBLIC], options=FetchOptions(video=True)))
     assert outcome.status is VideoStatus.OK
     assert "video" not in outcome.reused
     assert [c.label for c in yt.calls] == ["video"]
     assert target.read_bytes() == b"fake video"
 
 
-def test_a_failed_video_download_fails_the_video(session_kit) -> None:
+def test_a_failed_video_download_fails_the_video(session_kit: SessionKit) -> None:
     yt = session_kit.yt()
     yt.failures[("video", False)] = [session_kit.fail(Signal.NO_FORMATS)]
-    outcome = only(run(session_kit, yt, [PUBLIC], video=True))
+    outcome = only(run(session_kit, yt, [PUBLIC], options=FetchOptions(video=True)))
     assert outcome.status is VideoStatus.ERROR
     assert outcome.error == Signal.NO_FORMATS.value

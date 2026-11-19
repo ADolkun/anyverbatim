@@ -10,8 +10,8 @@ from anyverbatim.acquire import local
 from anyverbatim.acquire.voicememos import Memo, MemoCache
 from anyverbatim.errors import MediaValidationError
 
-AAC = {"codec_name": "aac", "duration": "12.5"}
-APAC = {"codec_name": "apac", "duration": "12.5"}
+AAC: dict[str, object] = {"codec_name": "aac", "duration": "12.5"}
+APAC: dict[str, object] = {"codec_name": "apac", "duration": "12.5"}
 
 
 class FakeMedia:
@@ -35,7 +35,9 @@ class FakeMedia:
     def __call__(self, argv: list[str], *, timeout_s: float, cwd: Path | None = None, **_: object) -> proc.ProcResult:
         self.calls.append(argv)
         given = argv[argv.index("-i") + 1] if "-i" in argv else argv[-1]
-        assert cwd is not None and given.startswith("./") and "/" not in given[2:], "ffmpeg sees only ./<name>"
+        assert cwd is not None
+        assert given.startswith("./"), "ffmpeg sees only ./<name>"
+        assert "/" not in given[2:], "ffmpeg sees only ./<name>"
         source = cwd / given
         if argv[0] == "ffprobe":
             return proc.ProcResult(0, json.dumps(self.probes[source.name]), "", 0.0)
@@ -127,7 +129,7 @@ def test_metadata_precedence_and_no_date_rather_than_the_mtime(tmp_path: Path, m
 
 
 def test_a_stream_date_is_read_when_the_container_has_none(tmp_path: Path, media: FakeMedia) -> None:
-    stream = {**AAC, "tags": {"creation_time": "2026-11-03T06:05:00Z"}}
+    stream: dict[str, object] = {**AAC, "tags": {"creation_time": "2026-11-03T06:05:00Z"}}
     path = media.add(tmp_path / "s.m4a", "a", streams=[stream], tags={})
     assert local.open_recording(path).recorded_at == datetime(2026, 11, 3, 6, 5, tzinfo=UTC)
 

@@ -8,9 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
+from acquire_fixture import SessionKit, llm_ready
+from click.testing import CliRunner, Result
 from test_pipeline_files import (  # noqa: F401
     SPOKEN,
+    Diarizer,
     FakeLLM,
     Media,
     Worker,
@@ -23,7 +25,7 @@ from test_pipeline_files import (  # noqa: F401
 )
 from voicememos_fakes import Row, make_library
 
-from anyverbatim import pipeline
+from anyverbatim import config, pipeline
 from anyverbatim.acquire import local, voicememos
 from anyverbatim.acquire.voicememos import MemoCache, select
 from anyverbatim.asr import runner as asr_runner
@@ -62,7 +64,7 @@ def memo_row(uid: str, packets: str, *, unix: float | None = NEWEST, title: str 
     return Row(uid, title=title, unix=unix, path=f"{uid}.m4a", audio=audio(packets))
 
 
-def cli(kit, *args: str):
+def cli(kit: SessionKit, *args: str) -> Result:
     return CliRunner().invoke(main, ["run", "--out", str(kit.out), "--llm", "none", *args])
 
 
@@ -70,18 +72,18 @@ def names(output: str) -> list[str]:
     return [line.split()[1] for line in output.splitlines() if line.startswith("✓")]
 
 
-def context(kit, packets: str) -> Path:
+def context(kit: SessionKit, packets: str) -> Path:
     return kit.out / rec_id(packets) / "context.json"
 
 
-def source_of(kit, packets: str) -> RecordingSource:
+def source_of(kit: SessionKit, packets: str) -> RecordingSource:
     source = load_document(context(kit, packets)).source
     assert isinstance(source, RecordingSource)
     return source
 
 
 def test_latest_runs_the_newest_local_memo_with_its_title_and_date(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(
         tmp_path,
@@ -106,7 +108,7 @@ def test_latest_runs_the_newest_local_memo_with_its_title_and_date(
 
 
 def test_the_container_title_and_then_the_file_name_stand_in_for_a_missing_memo_title(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(
         tmp_path,
@@ -121,7 +123,7 @@ def test_the_container_title_and_then_the_file_name_stand_in_for_a_missing_memo_
 
 
 def test_all_runs_every_local_memo_and_skips_the_rest_without_hashing(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(
         tmp_path,
@@ -142,7 +144,7 @@ def test_all_runs_every_local_memo_and_skips_the_rest_without_hashing(
 
 
 def test_new_runs_only_untranscribed_memos_and_hashes_only_uncached_local_ones(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     folder = library(
         tmp_path,
@@ -183,7 +185,7 @@ def test_new_runs_only_untranscribed_memos_and_hashes_only_uncached_local_ones(
 
 
 def test_a_run_remembers_the_memo_so_the_listing_calls_it_transcribed(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha")], media)
     assert cli(session_kit, "memos:latest").exit_code == 0
@@ -194,7 +196,7 @@ def test_a_run_remembers_the_memo_so_the_listing_calls_it_transcribed(
 
 
 def test_an_id_prefix_picks_one_memo_whatever_its_case(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(
         tmp_path,
@@ -209,7 +211,7 @@ def test_an_id_prefix_picks_one_memo_whatever_its_case(
 
 
 def test_an_ambiguous_prefix_is_refused_with_the_ids_to_choose_from(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(
         tmp_path,
@@ -226,7 +228,7 @@ def test_an_ambiguous_prefix_is_refused_with_the_ids_to_choose_from(
 
 
 def test_an_unknown_or_empty_prefix_is_refused_with_a_fix(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(tmp_path, monkeypatch, [memo_row("ABCD1111", "alpha")], media)
     unknown = cli(session_kit, "memos:zzzz")
@@ -241,7 +243,7 @@ def test_an_unknown_or_empty_prefix_is_refused_with_a_fix(
 
 
 def test_a_prefix_naming_a_memo_that_is_not_downloaded_says_how_to_get_it(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(tmp_path, monkeypatch, [Row("CLOUD-0001", path=None), memo_row("ABCD1111", "alpha")], media)
     result = cli(session_kit, "memos:cloud")
@@ -251,7 +253,7 @@ def test_a_prefix_naming_a_memo_that_is_not_downloaded_says_how_to_get_it(
 
 
 def test_latest_and_all_without_a_local_memo_are_errors_and_new_is_not(
-    session_kit, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(tmp_path, monkeypatch, [Row("CLOUD-0001", path=None)])
     for selector in ("memos:latest", "memos:all"):
@@ -266,7 +268,9 @@ def test_latest_and_all_without_a_local_memo_are_errors_and_new_is_not(
     assert not (session_kit.out / "batch_report.json").exists()
 
 
-def test_the_sync_fix_comes_through_run(session_kit, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_sync_fix_comes_through_run(
+    session_kit: SessionKit, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(voicememos, "default_recordings_dir", lambda: tmp_path / "no-container" / "Recordings")
     result = cli(session_kit, "memos:new")
     assert result.exit_code == 1
@@ -274,7 +278,9 @@ def test_the_sync_fix_comes_through_run(session_kit, tmp_path: Path, monkeypatch
     assert "Fix: Voice Memos is not syncing to this Mac: turn on Voice Memos in iCloud settings" in result.output
 
 
-def test_the_access_fix_comes_through_run(session_kit, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_access_fix_comes_through_run(
+    session_kit: SessionKit, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     folder = library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha")])
     folder.chmod(0)
     try:
@@ -288,7 +294,7 @@ def test_the_access_fix_comes_through_run(session_kit, tmp_path: Path, monkeypat
 
 
 def test_memos_mix_with_files_but_not_with_youtube(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha")], media)
     both = cli(session_kit, "memos:latest", str(media.add(tmp_path / "talk.m4a", "beta")))
@@ -334,7 +340,7 @@ def test_a_missing_ffmpeg_is_not_swallowed_by_selection(tmp_path: Path) -> None:
 
 
 def test_a_memo_another_run_is_transcribing_is_skipped_not_failed(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha"), memo_row("BBBB2222", "beta", unix=MIDDLE)], media)
     with video_lock(session_kit.out / rec_id("alpha")):
@@ -348,7 +354,7 @@ def test_a_memo_another_run_is_transcribing_is_skipped_not_failed(
 
 
 def test_quiet_prints_nothing_when_every_memo_is_done_busy_or_not_downloaded(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha"), Row("CLOUD-0001", path=None)], media)
     first = cli(session_kit, "--quiet", "memos:new")
@@ -369,14 +375,14 @@ def test_quiet_prints_nothing_when_every_memo_is_done_busy_or_not_downloaded(
     assert (busy.exit_code, busy.output) == (0, "")
 
 
-def test_quiet_is_for_local_targets(session_kit) -> None:
+def test_quiet_is_for_local_targets(session_kit: SessionKit) -> None:
     result = cli(session_kit, "--quiet", "pubVideo001")
     assert result.exit_code == 1
     assert "--quiet only applies to local and Voice Memos targets" in result.output
 
 
 def test_new_with_a_folder_that_has_no_media_is_still_an_error(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha")], media)
     empty = tmp_path / "empty"
@@ -388,7 +394,7 @@ def test_new_with_a_folder_that_has_no_media_is_still_an_error(
 
 
 def test_selectors_are_case_insensitive(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha"), memo_row("BBBB2222", "beta", unix=MIDDLE)], media)
     assert names(cli(session_kit, "memos:LATEST").output) == ["AAAA1111.m4a"]
@@ -398,7 +404,7 @@ def test_selectors_are_case_insensitive(
 
 
 def test_overlapping_selectors_run_each_memo_once_newest_first(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(
         tmp_path,
@@ -417,7 +423,7 @@ def test_overlapping_selectors_run_each_memo_once_newest_first(
 
 
 def test_the_container_date_stands_in_for_a_missing_memo_date(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     library(
         tmp_path,
@@ -435,7 +441,7 @@ def test_the_container_date_stands_in_for_a_missing_memo_date(
 
 
 def test_an_unreadable_composition_memo_gets_its_own_notice(
-    session_kit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, media: Media, worker: Worker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     folder = library(
         tmp_path,
@@ -456,7 +462,7 @@ def test_an_unreadable_composition_memo_gets_its_own_notice(
 
 
 def test_a_rerun_with_new_provenance_rebuilds_only_the_context_record(
-    session_kit, media: Media, worker: Worker, diarizer, tmp_path: Path
+    session_kit: SessionKit, media: Media, worker: Worker, diarizer: Diarizer, tmp_path: Path
 ) -> None:
     path = media.add(tmp_path / "memo.m4a", "alpha", tags={"title": "Container title"})
     llm = FakeLLM()
@@ -495,7 +501,12 @@ class SecondOpinionWorker(Worker):
 
 
 def test_no_title_file_name_memo_title_or_speaker_name_reaches_the_llm_but_the_glossary_does(
-    session_kit, media: Media, worker: Worker, diarizer, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit,
+    media: Media,
+    worker: Worker,
+    diarizer: Diarizer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha")], media)
     media.tags["AAAA1111.m4a"] = {"title": "Container secret title"}
@@ -506,8 +517,12 @@ def test_no_title_file_name_memo_title_or_speaker_name_reaches_the_llm_but_the_g
     config_file.write_text(config_file.read_text() + '[text]\nnumeric_second_opinion = "w-vad"\n')
     monkeypatch.setattr(asr_runner, "run_worker", SecondOpinionWorker())
     llm = FakeLLM()
-    monkeypatch.setattr(pipeline, "check_ready", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(pipeline, "client_from_options", lambda *_args, **_kwargs: llm)
+
+    def client_from_options(_options: config.LLMOptions, *, interactive: bool = False) -> FakeLLM:
+        return llm
+
+    monkeypatch.setattr(pipeline, "check_ready", llm_ready)
+    monkeypatch.setattr(pipeline, "client_from_options", client_from_options)
 
     def run(*args: str) -> None:
         argv = ["run", "--out", str(session_kit.out), "--llm", "claude-cli:fake-model", *args, "memos:latest"]

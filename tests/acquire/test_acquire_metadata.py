@@ -3,6 +3,7 @@ import stat
 from pathlib import Path
 
 import pytest
+from acquire_fixture import Fakes
 
 from anyverbatim.acquire import metadata
 from anyverbatim.acquire.creator_note import CreatorNote
@@ -87,7 +88,7 @@ def test_to_dict_is_json_serializable() -> None:
     assert json.loads(json.dumps(payload))["chapters"][0]["title"] == "Intro"
 
 
-def test_fetch_info_runs_one_extraction_and_saves_the_raw_json(fakes, tmp_path: Path) -> None:
+def test_fetch_info_runs_one_extraction_and_saves_the_raw_json(fakes: Fakes, tmp_path: Path) -> None:
     raw = json.dumps(info_dict())
     runner = fakes.runner(lambda _args, _label: fakes.ok(raw))
     cookies = tmp_path / "cookies.txt"
@@ -107,7 +108,7 @@ def test_fetch_info_runs_one_extraction_and_saves_the_raw_json(fakes, tmp_path: 
     assert meta.creator_note is None
 
 
-def test_saved_info_json_drops_cookie_values(fakes, tmp_path: Path) -> None:
+def test_saved_info_json_drops_cookie_values(fakes: Fakes, tmp_path: Path) -> None:
     secret = "PREF=fake-cookie-value; Domain=.youtube.com"
     info = {
         **info_dict(),
@@ -128,7 +129,7 @@ def test_saved_info_json_drops_cookie_values(fakes, tmp_path: Path) -> None:
 PINNED = {"is_pinned": True, "author_is_uploader": True, "text": "Correction: 12%.", "author": "@example"}
 
 
-def test_creator_note_rides_on_the_same_extraction(fakes, tmp_path: Path) -> None:
+def test_creator_note_rides_on_the_same_extraction(fakes: Fakes, tmp_path: Path) -> None:
     runner = fakes.runner(lambda _args, _label: fakes.ok(json.dumps(info_dict(comments=[PINNED]))))
 
     meta = metadata.fetch_info(runner, VIDEO_ID, tmp_path / "stage", creator_note=True, max_comments=5)
@@ -143,7 +144,7 @@ def test_creator_note_rides_on_the_same_extraction(fakes, tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize("signal", [Signal.BOT_CHECK, Signal.RATE_LIMITED, Signal.CAPTCHA, Signal.IP_BLOCKED])
-def test_push_back_signals_propagate_when_the_note_is_requested(fakes, tmp_path: Path, signal: Signal) -> None:
+def test_push_back_signals_propagate_when_the_note_is_requested(fakes: Fakes, tmp_path: Path, signal: Signal) -> None:
     runner = fakes.runner(fakes.raises(fakes.fail(signal)))
     with pytest.raises(YtDlpError) as raised:
         metadata.fetch_info(runner, VIDEO_ID, tmp_path / "stage", creator_note=True)
@@ -151,7 +152,7 @@ def test_push_back_signals_propagate_when_the_note_is_requested(fakes, tmp_path:
 
 
 @pytest.mark.parametrize(("live_status", "kind"), [("is_live", "live"), ("is_upcoming", "upcoming")])
-def test_live_and_upcoming_videos_are_unavailable(fakes, tmp_path: Path, live_status: str, kind: str) -> None:
+def test_live_and_upcoming_videos_are_unavailable(fakes: Fakes, tmp_path: Path, live_status: str, kind: str) -> None:
     runner = fakes.runner(lambda _args, _label: fakes.ok(json.dumps(info_dict(live_status=live_status))))
     with pytest.raises(UnavailableError) as raised:
         metadata.fetch_info(runner, VIDEO_ID, tmp_path / "stage")
@@ -159,14 +160,14 @@ def test_live_and_upcoming_videos_are_unavailable(fakes, tmp_path: Path, live_st
     assert not metadata.info_path(tmp_path / "stage").exists()
 
 
-def test_info_for_a_different_video_is_rejected(fakes, tmp_path: Path) -> None:
+def test_info_for_a_different_video_is_rejected(fakes: Fakes, tmp_path: Path) -> None:
     runner = fakes.runner(lambda _args, _label: fakes.ok(json.dumps(info_dict(id="bbbbbbbbbbb"))))
     with pytest.raises(YtDlpError):
         metadata.fetch_info(runner, VIDEO_ID, tmp_path / "stage")
 
 
 @pytest.mark.parametrize("stdout", ["not json", "[1, 2]", ""])
-def test_non_object_output_raises(fakes, tmp_path: Path, stdout: str) -> None:
+def test_non_object_output_raises(fakes: Fakes, tmp_path: Path, stdout: str) -> None:
     runner = fakes.runner(lambda _args, _label: fakes.ok(stdout))
     with pytest.raises(YtDlpError):
         metadata.fetch_info(runner, VIDEO_ID, tmp_path / "stage")

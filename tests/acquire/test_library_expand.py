@@ -1,9 +1,10 @@
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from acquire_fixture import FakeYtDlp, SessionKit
 
 import anyverbatim
 from anyverbatim import config, paths
@@ -12,7 +13,7 @@ from anyverbatim.auth import snapshot
 from anyverbatim.auth.cooldown import read_cooldown, start_cooldown, utcnow
 from anyverbatim.auth.state import AuthState
 from anyverbatim.errors import AuthError, BatchStopError, YtDlpError
-from anyverbatim.ytdlp.types import Signal
+from anyverbatim.ytdlp.types import Signal, YtDlpRunner
 
 LIST_URL = "https://www.youtube.com/playlist?list=PLsynthetic"
 MEMBERS_URL = "https://www.youtube.com/playlist?list=UUMOxxxxxxxxxxxxxxxxxxxxxx"
@@ -21,9 +22,13 @@ COOKIE_FILE = "cookie-file:/nonexistent/cookies.txt"
 
 
 @pytest.fixture
-def yt(session_kit, monkeypatch: pytest.MonkeyPatch):
+def yt(session_kit: SessionKit, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
     fake = session_kit.yt()
-    monkeypatch.setattr(session, "default_runner", lambda _sleep: fake)
+
+    def runner(_sleep: Sequence[str]) -> YtDlpRunner:
+        return fake
+
+    monkeypatch.setattr(session, "default_runner", runner)
     return fake
 
 
@@ -36,13 +41,13 @@ def test_it_is_part_of_the_library_surface() -> None:
     assert "expand" in anyverbatim.__all__
 
 
-def test_a_video_costs_no_request_even_during_a_cooldown(session_kit, yt) -> None:
+def test_a_video_costs_no_request_even_during_a_cooldown(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     start_cooldown(Signal.BOT_CHECK, utcnow())
     assert session.expand("https://youtu.be/aaaaaaaaaaa") == ["aaaaaaaaaaa"]
     assert yt.calls == []
 
 
-def test_a_cooldown_refuses_before_any_request(session_kit, yt) -> None:
+def test_a_cooldown_refuses_before_any_request(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     start_cooldown(Signal.BOT_CHECK, utcnow())
     yt.playlist = ["aaaaaaaaaaa"]
     with pytest.raises(BatchStopError) as stopped:
@@ -53,13 +58,13 @@ def test_a_cooldown_refuses_before_any_request(session_kit, yt) -> None:
     assert yt.calls == []
 
 
-def test_an_ended_cooldown_does_not_refuse(session_kit, yt) -> None:
+def test_an_ended_cooldown_does_not_refuse(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     start_cooldown(Signal.BOT_CHECK, utcnow() - timedelta(hours=3))
     yt.playlist = ["aaaaaaaaaaa"]
     assert session.expand(LIST_URL) == ["aaaaaaaaaaa"]
 
 
-def test_ids_come_back_in_order_without_repeats_and_uncapped(session_kit, yt) -> None:
+def test_ids_come_back_in_order_without_repeats_and_uncapped(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     listed = [f"vid{n:08d}" for n in range(60)]
     yt.playlist = [*listed, listed[0]]
     assert options().ytdlp.max_videos_per_run < len(listed)
@@ -67,7 +72,7 @@ def test_ids_come_back_in_order_without_repeats_and_uncapped(session_kit, yt) ->
     assert "--playlist-end" not in yt.calls[0].args
 
 
-def test_limit_becomes_playlist_end(session_kit, yt) -> None:
+def test_limit_becomes_playlist_end(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     yt.playlist = ["aaaaaaaaaaa"]
     session.expand(LIST_URL, limit=5)
     args = yt.calls[0].args
@@ -75,14 +80,14 @@ def test_limit_becomes_playlist_end(session_kit, yt) -> None:
     assert yt.calls[0].label == "expand"
 
 
-def test_a_public_playlist_is_listed_anonymously(session_kit, yt) -> None:
+def test_a_public_playlist_is_listed_anonymously(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     yt.playlist = ["aaaaaaaaaaa"]
     session.expand(LIST_URL, auth=COOKIE_FILE)
     assert yt.calls[0].cookies is None
     assert session_kit.snapshots.taken == []
 
 
-def test_a_members_playlist_is_listed_with_a_cookie_snapshot(session_kit, yt) -> None:
+def test_a_members_playlist_is_listed_with_a_cookie_snapshot(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     yt.playlist = ["aaaaaaaaaaa"]
     assert session.expand(MEMBERS_URL, auth=COOKIE_FILE) == ["aaaaaaaaaaa"]
     assert yt.calls[0].cookies is not None
@@ -90,7 +95,9 @@ def test_a_members_playlist_is_listed_with_a_cookie_snapshot(session_kit, yt) ->
     assert not Path(session_kit.snapshots.taken[0]).exists(), "the snapshot is deleted once listed"
 
 
-def test_a_members_playlist_without_a_source_is_refused_not_listed_anonymously(session_kit, yt) -> None:
+def test_a_members_playlist_without_a_source_is_refused_not_listed_anonymously(
+    session_kit: SessionKit, yt: FakeYtDlp
+) -> None:
     with pytest.raises(AuthError) as refused:
         session.expand(MEMBERS_URL)
     assert refused.value.state is AuthState.NO_SOURCE
@@ -98,7 +105,7 @@ def test_a_members_playlist_without_a_source_is_refused_not_listed_anonymously(s
     assert yt.calls == []
 
 
-def test_policy_always_without_a_source_is_refused(session_kit, yt) -> None:
+def test_policy_always_without_a_source_is_refused(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     with pytest.raises(AuthError) as refused:
         session.expand(LIST_URL, options=options(policy="always"))
     assert refused.value.state is AuthState.NO_SOURCE
@@ -107,7 +114,7 @@ def test_policy_always_without_a_source_is_refused(session_kit, yt) -> None:
 
 
 def test_a_failing_cookie_snapshot_raises_with_a_fix_and_never_falls_back_to_anonymous(
-    session_kit, yt, monkeypatch: pytest.MonkeyPatch
+    session_kit: SessionKit, yt: FakeYtDlp, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     @contextmanager
     def denied(_source: object, **_: object) -> Generator[None]:
@@ -122,20 +129,20 @@ def test_a_failing_cookie_snapshot_raises_with_a_fix_and_never_falls_back_to_ano
     assert yt.calls == []
 
 
-def test_policy_never_lists_a_members_playlist_anonymously(session_kit, yt) -> None:
+def test_policy_never_lists_a_members_playlist_anonymously(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     yt.playlist = ["aaaaaaaaaaa"]
     session.expand(MEMBERS_URL, auth=COOKIE_FILE, options=options(policy="never"))
     assert yt.calls[0].cookies is None
     assert session_kit.snapshots.taken == []
 
 
-def test_a_cookie_channel_is_still_listed_anonymously(session_kit, yt) -> None:
+def test_a_cookie_channel_is_still_listed_anonymously(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     yt.playlist = ["aaaaaaaaaaa"]
     session.expand(CHANNEL_URL, auth=COOKIE_FILE, options=options(cookie_channels=("@syntheticchannel",)))
     assert yt.calls[0].cookies is None
 
 
-def test_a_bot_check_writes_the_cooldown_and_raises(session_kit, yt) -> None:
+def test_a_bot_check_writes_the_cooldown_and_raises(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     yt.failures[("expand", False)] = [session_kit.fail(Signal.BOT_CHECK)]
     with pytest.raises(BatchStopError) as stopped:
         session.expand(LIST_URL)
@@ -150,7 +157,7 @@ def test_a_bot_check_writes_the_cooldown_and_raises(session_kit, yt) -> None:
     assert len(yt.calls) == 1, "the second call is refused before any request"
 
 
-def test_a_stop_signal_on_a_successful_listing_also_raises(session_kit, yt) -> None:
+def test_a_stop_signal_on_a_successful_listing_also_raises(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     yt.playlist = ["aaaaaaaaaaa"]
     yt.secondary[("expand", False)] = (Signal.RATE_LIMITED,)
     with pytest.raises(BatchStopError) as stopped:
@@ -162,7 +169,7 @@ def test_a_stop_signal_on_a_successful_listing_also_raises(session_kit, yt) -> N
     assert cooldown.active(utcnow())
 
 
-def test_a_failed_listing_raises_with_a_fix(session_kit, yt) -> None:
+def test_a_failed_listing_raises_with_a_fix(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     yt.failures[("expand", False)] = [session_kit.fail(Signal.PRIVATE)]
     with pytest.raises(YtDlpError) as failed:
         session.expand(LIST_URL)
@@ -171,7 +178,7 @@ def test_a_failed_listing_raises_with_a_fix(session_kit, yt) -> None:
     assert not paths.cooldown_file().exists()
 
 
-def test_a_target_that_is_not_youtube_is_refused(session_kit, yt) -> None:
+def test_a_target_that_is_not_youtube_is_refused(session_kit: SessionKit, yt: FakeYtDlp) -> None:
     with pytest.raises(ValueError, match="not a YouTube"):
         session.expand("https://example.com/watch?v=aaaaaaaaaaa")
     assert yt.calls == []

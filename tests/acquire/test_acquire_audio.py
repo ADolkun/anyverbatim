@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import pytest
+from acquire_fixture import FakeProc, Fakes
 
 from anyverbatim import proc
 from anyverbatim.acquire import audio
@@ -31,7 +32,7 @@ def stage(tmp_path: Path) -> Path:
 # --- validation ---
 
 
-def test_validate_accepts_a_complete_file(tmp_path: Path, fake_proc) -> None:
+def test_validate_accepts_a_complete_file(tmp_path: Path, fake_proc: FakeProc) -> None:
     media = tmp_path / "audio.webm"
     media.write_bytes(b"x")
     fake_proc.probe_returns("540.2\n")
@@ -40,7 +41,7 @@ def test_validate_accepts_a_complete_file(tmp_path: Path, fake_proc) -> None:
     assert fake_proc.calls[0][-1] == str(media)
 
 
-def test_validate_rejects_a_file_under_ninety_percent(tmp_path: Path, fake_proc) -> None:
+def test_validate_rejects_a_file_under_ninety_percent(tmp_path: Path, fake_proc: FakeProc) -> None:
     media = tmp_path / "audio.webm"
     media.write_bytes(b"x")
     fake_proc.probe_returns("539.9\n")
@@ -48,14 +49,14 @@ def test_validate_rejects_a_file_under_ninety_percent(tmp_path: Path, fake_proc)
         audio.validate_audio(media, expected_duration=600.0)
 
 
-def test_validate_without_an_expected_duration_only_needs_a_decodable_file(tmp_path: Path, fake_proc) -> None:
+def test_validate_without_an_expected_duration_only_needs_a_decodable_file(tmp_path: Path, fake_proc: FakeProc) -> None:
     media = tmp_path / "audio.webm"
     media.write_bytes(b"x")
     fake_proc.probe_returns("3.0\n")
     assert audio.validate_audio(media, expected_duration=None) == 3.0
 
 
-def test_validate_rejects_missing_and_empty_files_without_probing(tmp_path: Path, fake_proc) -> None:
+def test_validate_rejects_missing_and_empty_files_without_probing(tmp_path: Path, fake_proc: FakeProc) -> None:
     with pytest.raises(MediaValidationError, match="missing"):
         audio.validate_audio(tmp_path / "nope.webm", expected_duration=1.0)
     empty = tmp_path / "audio.webm"
@@ -70,7 +71,7 @@ def test_validate_rejects_missing_and_empty_files_without_probing(tmp_path: Path
     [("", 1, "unreadable"), ("N/A\n", 0, "no readable duration"), ("0.000000\n", 0, "no readable duration")],
 )
 def test_validate_rejects_undecodable_files(
-    tmp_path: Path, fake_proc, stdout: str, returncode: int, message: str
+    tmp_path: Path, fake_proc: FakeProc, stdout: str, returncode: int, message: str
 ) -> None:
     media = tmp_path / "audio.webm"
     media.write_bytes(b"x")
@@ -109,7 +110,9 @@ def test_find_audio_is_none_when_only_wav_exists(tmp_path: Path) -> None:
 # --- fetch ---
 
 
-def test_fetch_audio_loads_the_saved_info_and_keeps_the_native_container(fakes, tmp_path: Path, fake_proc) -> None:
+def test_fetch_audio_loads_the_saved_info_and_keeps_the_native_container(
+    fakes: Fakes, tmp_path: Path, fake_proc: FakeProc
+) -> None:
     stage_dir = stage(tmp_path)
     out_dir = tmp_path / "out"
     (out_dir).mkdir()
@@ -136,7 +139,7 @@ def test_fetch_audio_loads_the_saved_info_and_keeps_the_native_container(fakes, 
     [(None, 3600.0), (0.0, 3600.0), (float("nan"), 3600.0), (600.0, 3600.0), (4 * 3600.0, 7200.0)],
 )
 def test_the_audio_download_limit_scales_with_the_duration(
-    fakes, tmp_path: Path, fake_proc, duration: float | None, timeout_s: float
+    fakes: Fakes, tmp_path: Path, fake_proc: FakeProc, duration: float | None, timeout_s: float
 ) -> None:
     runner = fakes.runner(lambda args, _label: (write_audio(args), fakes.ok())[1])
     fake_proc.probe_returns(f"{timeout_s * 2}\n")
@@ -150,7 +153,7 @@ def test_the_download_limit_never_passes_the_ceiling() -> None:
     assert audio.download_timeout_s(float("inf"), audio.VIDEO_DOWNLOAD_S_PER_MEDIA_S) == ceiling
 
 
-def test_a_truncated_download_is_deleted_and_raises(fakes, tmp_path: Path, fake_proc) -> None:
+def test_a_truncated_download_is_deleted_and_raises(fakes: Fakes, tmp_path: Path, fake_proc: FakeProc) -> None:
     out_dir = tmp_path / "out"
     runner = fakes.runner(lambda args, _label: (write_audio(args), fakes.ok())[1])
     fake_proc.probe_returns("100\n")
@@ -159,13 +162,13 @@ def test_a_truncated_download_is_deleted_and_raises(fakes, tmp_path: Path, fake_
     assert audio.find_audio(out_dir) is None
 
 
-def test_no_output_file_raises(fakes, tmp_path: Path) -> None:
+def test_no_output_file_raises(fakes: Fakes, tmp_path: Path) -> None:
     runner = fakes.runner(lambda _args, _label: fakes.ok())
     with pytest.raises(MediaValidationError, match="no audio file"):
         audio.fetch_audio(runner, VIDEO_ID, stage(tmp_path), tmp_path / "out", expected_duration=None)
 
 
-def test_403_with_stale_info_re_extracts_once_then_retries(fakes, tmp_path: Path, fake_proc) -> None:
+def test_403_with_stale_info_re_extracts_once_then_retries(fakes: Fakes, tmp_path: Path, fake_proc: FakeProc) -> None:
     stage_dir = stage(tmp_path)
     old = info_path(stage_dir).stat().st_mtime - 2 * 3600
     os.utime(info_path(stage_dir), (old, old))
@@ -189,7 +192,7 @@ def test_403_with_stale_info_re_extracts_once_then_retries(fakes, tmp_path: Path
     assert info_path(stage_dir).stat().st_mtime > old
 
 
-def test_403_with_fresh_info_is_not_re_extracted(fakes, tmp_path: Path) -> None:
+def test_403_with_fresh_info_is_not_re_extracted(fakes: Fakes, tmp_path: Path) -> None:
     def handler(_args: list[str], _label: str) -> YtDlpResult:
         raise fakes.fail(Signal.HTTP_403)
 
@@ -199,7 +202,7 @@ def test_403_with_fresh_info_is_not_re_extracted(fakes, tmp_path: Path) -> None:
     assert len(runner.calls) == 1
 
 
-def test_other_download_failures_propagate_even_with_stale_info(fakes, tmp_path: Path) -> None:
+def test_other_download_failures_propagate_even_with_stale_info(fakes: Fakes, tmp_path: Path) -> None:
     stage_dir = stage(tmp_path)
     old = info_path(stage_dir).stat().st_mtime - 2 * 3600
     os.utime(info_path(stage_dir), (old, old))
@@ -216,7 +219,7 @@ def test_other_download_failures_propagate_even_with_stale_info(fakes, tmp_path:
 # --- wav ---
 
 
-def converting_ffmpeg(fake_proc, *, returncode: int = 0) -> None:
+def converting_ffmpeg(fake_proc: FakeProc, *, returncode: int = 0) -> None:
     def ffmpeg(argv: list[str]) -> proc.ProcResult:
         if returncode == 0:
             Path(argv[-1]).write_bytes(b"RIFF")
@@ -225,7 +228,7 @@ def converting_ffmpeg(fake_proc, *, returncode: int = 0) -> None:
     fake_proc.responses["ffmpeg"] = ffmpeg
 
 
-def test_to_wav16k_converts_to_the_asr_format_and_writes_atomically(tmp_path: Path, fake_proc) -> None:
+def test_to_wav16k_converts_to_the_asr_format_and_writes_atomically(tmp_path: Path, fake_proc: FakeProc) -> None:
     source = tmp_path / "audio.webm"
     source.write_bytes(b"x")
     destination = tmp_path / "audio.wav"
@@ -245,7 +248,7 @@ def test_to_wav16k_converts_to_the_asr_format_and_writes_atomically(tmp_path: Pa
     assert "-map" not in argv, "without a stream ffmpeg keeps choosing the audio, as for YouTube"
 
 
-def test_to_wav16k_converts_the_chosen_audio_stream(tmp_path: Path, fake_proc) -> None:
+def test_to_wav16k_converts_the_chosen_audio_stream(tmp_path: Path, fake_proc: FakeProc) -> None:
     source = tmp_path / "memo.qta"
     source.write_bytes(b"x")
     converting_ffmpeg(fake_proc)
@@ -255,7 +258,7 @@ def test_to_wav16k_converts_the_chosen_audio_stream(tmp_path: Path, fake_proc) -
 
 
 def test_probe_stderr_shows_the_home_directory_as_tilde(
-    tmp_path: Path, fake_proc, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, fake_proc: FakeProc, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     media = tmp_path / "audio.webm"
@@ -267,7 +270,7 @@ def test_probe_stderr_shows_the_home_directory_as_tilde(
     assert "~/audio.webm: Invalid data" in str(caught.value)
 
 
-def test_failed_conversion_leaves_no_partial_wav(tmp_path: Path, fake_proc) -> None:
+def test_failed_conversion_leaves_no_partial_wav(tmp_path: Path, fake_proc: FakeProc) -> None:
     source = tmp_path / "audio.webm"
     source.write_bytes(b"x")
     converting_ffmpeg(fake_proc, returncode=1)
@@ -276,7 +279,7 @@ def test_failed_conversion_leaves_no_partial_wav(tmp_path: Path, fake_proc) -> N
     assert sorted(p.name for p in tmp_path.iterdir()) == ["audio.webm"]
 
 
-def test_a_short_conversion_is_not_published(tmp_path: Path, fake_proc) -> None:
+def test_a_short_conversion_is_not_published(tmp_path: Path, fake_proc: FakeProc) -> None:
     source = tmp_path / "audio.webm"
     source.write_bytes(b"x")
     destination = tmp_path / "audio.wav"
