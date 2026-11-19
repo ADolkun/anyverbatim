@@ -216,7 +216,7 @@ def session_from_spans(
     population: dict[str, int] = defaultdict(int)
     for span in spans:
         population[cell_name(span.file, stratum(span))] += 1
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # noqa: S311  # seeded, reproducible sampling
     picked = sample_spans(spans, n, rng, numeric_share)
     sampled: dict[str, int] = defaultdict(int)
     for span in picked:

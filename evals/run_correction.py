@@ -10,7 +10,7 @@ import contextlib
 import importlib
 import os
 from contextlib import AbstractContextManager
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -222,7 +222,7 @@ def cleanup(candidate_id: str, hf_cache: Path | None) -> None:
 @click.option("--seed", default=0, show_default=True)
 @click.option("--max-calls", type=int, default=None, help="Stop after this many judge calls (quota).")
 @click.option("--no-judge", is_flag=True, help="Use the cached verdicts only; make no judge call.")
-def screen(candidates: str | None, judge_n: int, seed: int, max_calls: int | None, no_judge: bool) -> None:
+def screen(candidates: str | None, judge_n: int, seed: int, max_calls: int | None, *, no_judge: bool) -> None:
     """Find every candidate's edits, have the blind judge sample them, and pick the candidate to test."""
     store, manifest = layout(), load_manifest()
     screened, unfinished = resolve_candidates(store, manifest, _files(candidates))
@@ -312,7 +312,7 @@ def decide_command(day: str | None) -> None:
     result = Report.model_validate_json(path.read_text(encoding="utf-8"))
     decision = decide(result.correction)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    written = RESULTS_DIR / f"correction-{day or date.today().isoformat()}.md"
+    written = RESULTS_DIR / f"correction-{day or datetime.now().astimezone().date().isoformat()}.md"
     atomic.write_text(written, render_markdown(result) + "\n" + render_decision(decision))
     click.echo(decision.model_dump_json(indent=2))
     click.echo(f"wrote {written}", err=True)

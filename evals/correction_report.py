@@ -520,9 +520,11 @@ def _generic_run_dir(candidate_id: str) -> str:
 
 def candidate_table(candidates: Sequence[CandidateScreen]) -> list[str]:
     lines = [
-        "| candidate | run | audible edits | judged | needs audio | fix precision [95% CI] "
-        "| over-correction [95% CI] | net errors removed/h [95% CI] | number violations "
-        "| first-try valid JSON | invalid JSON after retry |",
+        (
+            "| candidate | run | audible edits | judged | needs audio | fix precision [95% CI] "
+            "| over-correction [95% CI] | net errors removed/h [95% CI] | number violations "
+            "| first-try valid JSON | invalid JSON after retry |"
+        ),
         "|" + "---|" * 11,
     ]
     for c in candidates:
@@ -553,8 +555,10 @@ def _timing_note(judge: JudgeRun) -> list[str]:
     if not judge.unaligned_units:
         return []
     return [
-        f"{judge.unaligned_units} units of stretches without word times had no timing donor word, so the clips of "
-        "edits near them are placed only approximately and may miss the edit."
+        (
+            f"{judge.unaligned_units} units of stretches without word times had no timing donor word, so the clips of "
+            "edits near them are placed only approximately and may miss the edit."
+        )
     ]
 
 
@@ -562,8 +566,10 @@ def screen_text(screen: CorrectionScreen) -> str:
     """Summarize a screening for the console."""
     j = screen.judge
     lines = [
-        f"{j.spans} disputed spans ({j.format_only_spans} differ only in written form and are excluded); judge "
-        f"{j.model}, {j.answered} of {j.sample} sampled spans answered.",
+        (
+            f"{j.spans} disputed spans ({j.format_only_spans} differ only in written form and are excluded); judge "
+            f"{j.model}, {j.answered} of {j.sample} sampled spans answered."
+        ),
         *candidate_table(screen.candidates),
         *pick_lines(screen.candidates, screen.pick),
     ]
@@ -588,11 +594,15 @@ def _human_rows(report: Report) -> list[str]:
         return [head, "", "No decided spans."]
     lines = [
         head,
-        "Fix precision and over-correction are weighted back from the stratified sample; Δ errors per hour is negative "
-        "when the candidate leaves fewer errors.",
+        (
+            "Fix precision and over-correction are weighted back from the stratified sample; Δ errors per hour is "
+            "negative when the candidate leaves fewer errors."
+        ),
         "",
-        "| slice | decided | effective n | fix precision [95% CI] | over-correction [95% CI] | both fine | both wrong "
-        "| audible edits | hours | Δ errors/h [95% CI] |",
+        (
+            "| slice | decided | effective n | fix precision [95% CI] | over-correction [95% CI] | both fine "
+            "| both wrong | audible edits | hours | Δ errors/h [95% CI] |"
+        ),
         "|" + "---|" * 10,
     ]
     for name, e in [("overall", human.overall), *human.by_language.items()]:
@@ -632,9 +642,11 @@ def render_markdown(report: Report) -> str:
         "",
         "## Judge screening",
         "",
-        f"{j.spans} disputed spans over the base and the candidates' texts ({j.format_only_spans} differ only in "
-        f"written form and are excluded). Judge: {j.model} ({j.prompt_version}), seed {j.seed}, {j.answered} of "
-        f"{j.sample} sampled spans answered. The judge ranks the candidates; it does not decide.",
+        (
+            f"{j.spans} disputed spans over the base and the candidates' texts ({j.format_only_spans} differ only in "
+            f"written form and are excluded). Judge: {j.model} ({j.prompt_version}), seed {j.seed}, {j.answered} of "
+            f"{j.sample} sampled spans answered. The judge ranks the candidates; it does not decide."
+        ),
         "",
         *candidate_table(candidates),
         "",
@@ -642,9 +654,11 @@ def render_markdown(report: Report) -> str:
         "",
         "## Guard false-rejects",
         "",
-        f"Disputes sampled from rejected proposals: {j.rejection_sample}, {j.rejection_answered} answered. A false "
-        "reject is a proposal whose every audible dispute went to the proposed reading. Numeric guards are "
-        "informational: a text judge cannot verify numbers.",
+        (
+            f"Disputes sampled from rejected proposals: {j.rejection_sample}, {j.rejection_answered} answered. A false "
+            "reject is a proposal whose every audible dispute went to the proposed reading. Numeric guards are "
+            "informational: a text judge cannot verify numbers."
+        ),
         "",
         "| guard | sampled proposals | judged | false rejects | share [95% CI] | note |",
         "|---|---|---|---|---|---|",
@@ -660,9 +674,11 @@ def render_markdown(report: Report) -> str:
         "",
         "## Manual reference check",
         "",
-        "Errors against the manual captions, before → after correction. Correction never touches the regions the "
-        "captions rewrite, so the difference isolates its edits. One file only, so it validates the judge and gates "
-        "nothing.",
+        (
+            "Errors against the manual captions, before → after correction. Correction never touches the regions the "
+            "captions rewrite, so the difference isolates its edits. One file only, so it validates the judge and "
+            "gates nothing."
+        ),
         "",
         "| candidate | CER (itn) | CER (raw, case kept) | MER (itn) | judge net errors removed/h on these files |",
         "|---|---|---|---|---|",
@@ -692,11 +708,15 @@ def render_markdown(report: Report) -> str:
 
 def _limits(report: Report) -> list[str]:
     lines = [
-        f"- Punctuation parity: production punctuates with the same `[llm]` model that corrects, but here every "
-        f"candidate corrects a base punctuated once by {report.punctuation_llm}, so a local winner's own "
-        "punctuation is not measured.",
-        "- The intervals cover edit sampling and labelling, not variation between videos; the set is a few videos "
-        "from a few channels. Recall (errors correction missed) is not measured.",
+        (
+            f"- Punctuation parity: production punctuates with the same `[llm]` model that corrects, but here every "
+            f"candidate corrects a base punctuated once by {report.punctuation_llm}, so a local winner's own "
+            "punctuation is not measured."
+        ),
+        (
+            "- The intervals cover edit sampling and labelling, not variation between videos; the set is a few videos "
+            "from a few channels. Recall (errors correction missed) is not measured."
+        ),
         *(f"- {line}" for line in _timing_note(report.judge)),
     ]
     if report.unsampled_cells:
@@ -717,12 +737,15 @@ def render_decision(decision: CorrectionDecision) -> str:
         "|---|---|---|",
         *(f"| {c.name} | {'pass' if c.passed else 'fail'} | {c.detail} |" for c in decision.checks),
         "",
-        "Rule: the judge picks the best eligible candidate by net errors removed per hour (a local one whose interval "
-        "overlaps it is preferred); only that candidate's edits go to the owner. It ships default-on only if every "
-        f"session span is decided and at least {MIN_DECIDED} are, over-correction is at most "
-        f"{OVER_CORRECTION_MAX:.0%}, the upper 95% bound of the change in errors per hour is below "
-        f"{DELTA_UPPER_BOUND:g}, no number changed and no correction call raised `LLMOutputError`. Otherwise "
-        "correction stays default-off.",
+        (
+            "Rule: the judge picks the best eligible candidate by net errors removed per hour (a local one whose "
+            "interval overlaps it is preferred); only that candidate's edits go to the owner. It ships default-on only "
+            "if every "
+            f"session span is decided and at least {MIN_DECIDED} are, over-correction is at most "
+            f"{OVER_CORRECTION_MAX:.0%}, the upper 95% bound of the change in errors per hour is below "
+            f"{DELTA_UPPER_BOUND:g}, no number changed and no correction call raised `LLMOutputError`. Otherwise "
+            "correction stays default-off."
+        ),
         "",
     ]
     return "\n".join(lines)

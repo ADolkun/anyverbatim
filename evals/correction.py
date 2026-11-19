@@ -854,7 +854,7 @@ def rejection_spans(
     limit = per_guard
     while sum(min(len(p), limit) for p in proposals.values()) > total:
         limit -= 1
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # noqa: S311  # seeded, reproducible sampling
     drawn = [
         group
         for guard in sorted(proposals)

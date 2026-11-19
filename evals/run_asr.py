@@ -10,7 +10,7 @@ import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -19,11 +19,20 @@ from anyverbatim import atomic, config, paths
 from anyverbatim.acquire.captions import CaptionKind, parse_json3
 from anyverbatim.acquire.metadata import trim_info
 from anyverbatim.asr import registry
-from anyverbatim.asr.chunks import DEFAULT_MAX_CHUNK_S, Region, alignment_windows, plan_chunks
+from anyverbatim.asr.audio import frame_energy, load_wav
+from anyverbatim.asr.chunks import (
+    DEFAULT_MAX_CHUNK_S,
+    DEFAULT_VAD_PARAMS,
+    SILERO_REVISION,
+    Region,
+    alignment_windows,
+    plan_chunks,
+)
 from anyverbatim.asr.context import context_from_metadata
 from anyverbatim.asr.models import ChunkHypothesis, FileJob, WorkerRequest
 from anyverbatim.asr.protocol import EngineDef
 from anyverbatim.asr.runner import WorkerResult, memory_cap_bytes, run_worker
+from anyverbatim.asr.vad import speech_regions
 from anyverbatim.contract.models import Word
 from anyverbatim.errors import AnyverbatimError, ConfigError
 from anyverbatim.llm import ClaudeCLIClient
@@ -84,17 +93,11 @@ def layout() -> Layout:
 
 
 def _vad_regions(wav: Path) -> tuple[list[Region], float, list[float]]:
-    # The audio and VAD modules need numpy and MLX from the asr extra; only this command uses them.
-    from anyverbatim.asr.audio import frame_energy, load_wav
-    from anyverbatim.asr.vad import speech_regions
-
     audio = load_wav(wav)
     return speech_regions(audio), audio.duration, frame_energy(audio)
 
 
 def plan_file(store: Layout, video: Video, regions: Regions = _vad_regions) -> Plan:
-    from anyverbatim.asr.vad import DEFAULT_VAD_PARAMS, SILERO_REVISION
-
     speech, duration, energy = regions(store.wav(video))
     chunks = plan_chunks(speech, duration, max_chunk_s=DEFAULT_MAX_CHUNK_S, frame_energy=energy)
     windows = [(w.start, w.end) for w in alignment_windows(chunks)]
@@ -351,7 +354,7 @@ def captions() -> None:
 @click.option("--seed", default=0, show_default=True)
 @click.option("--max-calls", type=int, default=None, help="Stop after this many judge calls (quota).")
 @click.option("--no-judge", is_flag=True, help="Automatic metrics only; uses cached verdicts if any.")
-def screen(hyps: str | None, judge_n: int, seed: int, max_calls: int | None, no_judge: bool) -> None:
+def screen(hyps: str | None, judge_n: int, seed: int, max_calls: int | None, *, no_judge: bool) -> None:
     """Disputes, automatic metrics and the blind judge sample; recommends the control and the challenger."""
     store, manifest = layout(), load_manifest()
     hypotheses = _files(hyps) or hypotheses_on_disk(store)
@@ -428,7 +431,9 @@ def decide_command(day: str | None) -> None:
     if not path.exists():
         raise ConfigError("no report; run `report` first")
     written, summary = write_decision(
-        Report.model_validate_json(path.read_text(encoding="utf-8")), RESULTS_DIR, day or date.today().isoformat()
+        Report.model_validate_json(path.read_text(encoding="utf-8")),
+        RESULTS_DIR,
+        day or datetime.now().astimezone().date().isoformat(),
     )
     click.echo(f"{summary}\nwrote {written}")
 
