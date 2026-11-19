@@ -13,15 +13,17 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from pyannote.core import Annotation, Segment, Timeline
-from pyannote.metrics.diarization import DiarizationErrorRate
 
 from anyverbatim import atomic
 from anyverbatim.contract.models import Word
 from anyverbatim.errors import ConfigError
 from evals.metrics import percentile_index
+
+if TYPE_CHECKING:
+    from pyannote.metrics.diarization import DiarizationErrorRate
 
 # One-sided forgiveness around each reference boundary, the NIST/dscore reading of "collar 0.25". pyannote.metrics
 # counts the full width (half before, half after a boundary), so it is handed twice this.
@@ -93,6 +95,14 @@ def speaker_count_error(reference: Sequence[Turn], hypothesis: Sequence[Turn]) -
     return speaker_count(hypothesis) - speaker_count(reference)
 
 
+def _der_metric(*, collar: float = 0.0, skip_overlap: bool = False) -> DiarizationErrorRate:
+    # Imported on first use: pyannote.metrics pulls in scipy and pandas, seconds on a cold start, and every test worker
+    # would pay that just to collect tests.
+    from pyannote.metrics.diarization import DiarizationErrorRate  # noqa: PLC0415
+
+    return DiarizationErrorRate(collar=collar, skip_overlap=skip_overlap)
+
+
 def _annotation(turns: Iterable[Turn]) -> Annotation:
     annotation = Annotation()
     # The index keeps two speakers with identical boundaries apart; keyed by segment alone, the second would replace
@@ -133,7 +143,7 @@ def der(
         raise ConfigError("the reference has no turns")
     truth, guess = _annotation(reference), _annotation(hypothesis)
     uem = Timeline([truth.get_timeline().extent() | guess.get_timeline().extent()])
-    metric = DiarizationErrorRate(collar=2 * collar_s, skip_overlap=skip_overlap)
+    metric = _der_metric(collar=2 * collar_s, skip_overlap=skip_overlap)
     detail = cast(Mapping[str, float], metric(truth, guess, uem=uem, detailed=True))
     return DerScore(
         total=detail["total"],
@@ -266,7 +276,7 @@ def wder(reference: Sequence[Turn], words: Sequence[Word], assigned: Sequence[st
         segment = Segment(word.start, word.start + max(word.end - word.start, _MIN_SPAN_S))
         truth[segment, index] = speaker
         guess[segment, index] = label
-    mapping = cast(Mapping[str, str], cast(Any, DiarizationErrorRate()).optimal_mapping(truth, guess))
+    mapping = cast(Mapping[str, str], cast(Any, _der_metric()).optimal_mapping(truth, guess))
     errors = sum(
         assigned[index] is None or mapping.get(cast(str, assigned[index])) != speaker
         for index, speaker in eligible.items()
@@ -297,7 +307,7 @@ def align_labels(candidates: Mapping[str, Sequence[Turn]]) -> dict[str, list[Tur
     names = list(candidates)
     base = _annotation(candidates[names[0]])
     mapped: dict[str, list[Turn]] = {names[0]: list(candidates[names[0]])}
-    metric = cast(Any, DiarizationErrorRate())
+    metric = cast(Any, _der_metric())
     for name in names[1:]:
         mapping = cast(Mapping[str, str], metric.optimal_mapping(base, _annotation(candidates[name])))
         mapped[name] = [Turn(t.start, t.end, mapping.get(t.speaker, f"{name}:{t.speaker}")) for t in candidates[name]]
