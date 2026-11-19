@@ -250,7 +250,7 @@ def caption_quality(
 
 
 def _base(code: str) -> str:
-    return code.split("-")[0].lower()
+    return code.split("-", maxsplit=1)[0].lower()
 
 
 def _dropped(captions_dir: Path) -> CaptionsResult:

@@ -23,7 +23,7 @@ NOW = 1_800_000_000.0
 
 
 def _anchors() -> set[str]:
-    headings = re.findall(r"^#+ (.+)$", DOCS.read_text(encoding="utf-8"), flags=re.M)
+    headings = re.findall(r"^#+ (.+)$", DOCS.read_text(encoding="utf-8"), flags=re.MULTILINE)
     return {re.sub(r"[^\w\- ]", "", h).strip().lower().replace(" ", "-") for h in headings}
 
 
@@ -53,7 +53,8 @@ def test_fix_context_fills_slots() -> None:
 def test_ok_probe_reports_signed_in(kit) -> None:
     runner = kit.ok()
     report = preflight.preflight(DEFAULT, runner, now=NOW)
-    assert report.state is AuthState.OK and report.ok
+    assert report.state is AuthState.OK
+    assert report.ok
     assert report.profile == "Default"
     assert report.logged_in is True
     assert report.premium is None
@@ -82,13 +83,15 @@ def test_missing_browser(kit) -> None:
     report = preflight.preflight(BrowserSource("brave", "Default"), runner, now=NOW)
     assert report.state is AuthState.BROWSER_NOT_FOUND
     assert "brave data not found" in report.fix
-    assert runner.calls == [] and kit.snapshot.sources == []
+    assert runner.calls == []
+    assert kit.snapshot.sources == []
 
 
 def test_unknown_profile_lists_the_choices(kit) -> None:
     report = preflight.preflight(BrowserSource("chrome", "Nope"), kit.ok(), now=NOW)
     assert report.state is AuthState.PROFILE_NOT_FOUND
-    assert "'Default' (Person 1)" in report.detail and "'Work'" in report.detail
+    assert "'Default' (Person 1)" in report.detail
+    assert "'Work'" in report.detail
     assert "chrome profile 'Nope'" in report.fix
     assert "example.com" not in report.detail
 
@@ -159,19 +162,25 @@ def test_a_stop_signal_on_the_probe_starts_a_cooldown(
     primary, *secondary = signals
     runner = kit.ok(*[s for s in signals if s is not None]) if exit_ok else kit.fail(primary, *secondary)
     report = preflight.preflight(DEFAULT, runner, now=NOW)
-    assert report.state is state and not report.probe_skipped
+    assert report.state is state
+    assert not report.probe_skipped
     cooldown = read_cooldown()
-    assert cooldown is not None and report.cooldown == cooldown
+    assert cooldown is not None
+    assert report.cooldown == cooldown
     assert cooldown.until == datetime.fromtimestamp(NOW, UTC) + timedelta(hours=1)
-    assert "Wait until " in report.fix and "an hour has passed" not in report.fix
+    assert "Wait until " in report.fix
+    assert "an hour has passed" not in report.fix
 
 
 def test_active_cooldown_skips_the_probe_unless_ignored(kit) -> None:
     started = start_cooldown(Signal.BOT_CHECK, datetime.fromtimestamp(NOW, UTC))
     runner = kit.ok()
     report = preflight.preflight(DEFAULT, runner, refresh=True, now=NOW + 60)
-    assert runner.calls == [] and report.probe_skipped and report.cooldown == started
-    assert report.state is AuthState.BOT_CHECK and report.logged_in is True
+    assert runner.calls == []
+    assert report.probe_skipped
+    assert report.cooldown == started
+    assert report.state is AuthState.BOT_CHECK
+    assert report.logged_in is True
     assert preflight.preflight(DEFAULT, runner, refresh=True, now=NOW + 60, ignore_cooldown=True).ok
     assert len(runner.calls) == 1
     assert preflight.preflight(DEFAULT, kit.ok(), refresh=True, now=NOW + 7200).ok
@@ -181,7 +190,9 @@ def test_a_stop_during_an_ignored_cooldown_extends_it(kit) -> None:
     start_cooldown(Signal.BOT_CHECK, datetime.fromtimestamp(NOW, UTC))
     report = preflight.preflight(DEFAULT, kit.fail(Signal.BOT_CHECK), now=NOW + 60, ignore_cooldown=True)
     cooldown = read_cooldown()
-    assert cooldown is not None and cooldown.hours == 2 and report.cooldown == cooldown
+    assert cooldown is not None
+    assert cooldown.hours == 2
+    assert report.cooldown == cooldown
 
 
 def test_unreadable_cooldown_refuses_the_probe(kit) -> None:
@@ -220,7 +231,8 @@ def test_real_cookie_file_snapshot_states(home: Path, fakes) -> None:
     report = preflight.preflight(CookieFileSource(good), runner, now=NOW)
     assert report.state is AuthState.OK
     assert report.source == "cookie-file:~/good.txt"
-    assert runner.calls[0].cookies is not None and runner.calls[0].cookies != good
+    assert runner.calls[0].cookies is not None
+    assert runner.calls[0].cookies != good
 
 
 def test_tooling_warnings(kit, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,10 +248,12 @@ def test_ok_result_is_cached_for_an_hour(kit) -> None:
     preflight.preflight(DEFAULT, first, now=NOW)
     second = kit.ok()
     cached = preflight.preflight(DEFAULT, second, now=NOW + preflight.TTL_S - 1)
-    assert cached.state is AuthState.OK and cached.cached
+    assert cached.state is AuthState.OK
+    assert cached.cached
     assert cached.counts == {"youtube.com": 12, "google.com": 30}
     assert cached.checked_at.timestamp() == NOW
-    assert second.calls == [] and len(kit.snapshot.sources) == 1
+    assert second.calls == []
+    assert len(kit.snapshot.sources) == 1
 
     expired = kit.ok()
     assert not preflight.preflight(DEFAULT, expired, now=NOW + preflight.TTL_S).cached
@@ -283,7 +297,8 @@ def test_recorded_premium_is_reported_and_outlives_the_ttl(kit) -> None:
     assert report.premium is True
     assert "Premium: yes" in report.fix
     later = preflight.preflight(DEFAULT, kit.ok(), now=NOW + 10 * preflight.TTL_S)
-    assert later.premium is True and not later.cached
+    assert later.premium is True
+    assert not later.cached
 
 
 def test_corrupt_cache_costs_one_probe(kit) -> None:

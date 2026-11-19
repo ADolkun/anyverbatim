@@ -163,9 +163,11 @@ def test_check_ready_for_chatgpt_names_login_and_llm_none(
     with pytest.raises(ConfigError, match=detail) as raised:
         check_ready(LLMOptions())
     message = str(raised.value)
-    assert "`anyverbatim login`" in message and "`--llm none`" in message
+    assert "`anyverbatim login`" in message
+    assert "`--llm none`" in message
     assert '`LLMOptions(provider="none")`' in message
-    assert "anyverbatim login" in raised.value.fix and "--llm none" in raised.value.fix
+    assert "anyverbatim login" in raised.value.fix
+    assert "--llm none" in raised.value.fix
 
 
 def test_check_ready_accepts_a_ready_account_without_a_request(config: Path) -> None:
@@ -283,7 +285,8 @@ def test_run_and_llm_test_pass_the_terminals_interactivity(
     monkeypatch.setattr(run_cli, "interactive", lambda: tty)
     monkeypatch.setattr(run_cli.pipeline, "process_many", process_many)
     result = CliRunner().invoke(main, ["run", "--llm", "none", "https://www.youtube.com/watch?v=BaW_jenozKc"])
-    assert result.exit_code == 1 and "stopped by the test" in result.output
+    assert result.exit_code == 1
+    assert "stopped by the test" in result.output
 
     store_account()
     probe = ProbeClient()
@@ -350,7 +353,8 @@ def test_llm_test_stops_before_a_call_when_the_llm_is_not_ready(config: Path, mo
     monkeypatch.setattr(llm_cli, "client_from_options", lambda *_a, **_k: pytest.fail("built a client"))
     result = CliRunner().invoke(main, ["llm", "test"])
     assert result.exit_code == 1
-    assert "not signed in" in result.output and "`anyverbatim login`" in result.output
+    assert "not signed in" in result.output
+    assert "`anyverbatim login`" in result.output
 
 
 @pytest.mark.parametrize(
@@ -362,10 +366,12 @@ def test_llm_test_stops_before_a_call_when_the_llm_is_not_ready(config: Path, mo
 )
 def test_llm_test_validates_effort_per_provider(config: Path, args: list[str], code: int, said: str) -> None:
     result = CliRunner().invoke(main, ["llm", "test", *args])
-    assert result.exit_code == code and said in result.output
+    assert result.exit_code == code
+    assert said in result.output
 
 
 def test_llm_test_without_a_provider_fails(config: Path) -> None:
     config.write_text('[llm]\nprovider = "none"\n', encoding="utf-8")
     result = CliRunner().invoke(main, ["llm", "test"])
-    assert result.exit_code == 1 and "no LLM provider configured" in result.output
+    assert result.exit_code == 1
+    assert "no LLM provider configured" in result.output

@@ -177,7 +177,8 @@ def test_new_runs_only_untranscribed_memos_and_hashes_only_uncached_local_ones(
     assert "1 memo(s) not downloaded, skipped" in result.output
 
     again = cli(session_kit, "memos:new")
-    assert again.exit_code == 0 and "no new memos to transcribe" in again.output
+    assert again.exit_code == 0
+    assert "no new memos to transcribe" in again.output
     assert len(hashed) == 2, "the second run hashed nothing"
 
 
@@ -220,7 +221,8 @@ def test_an_ambiguous_prefix_is_refused_with_the_ids_to_choose_from(
     assert result.exit_code == 1
     assert "'abcd' matches 2 memos: abcd1111-0, abcd1111-9" in result.output
     assert "Fix: give more characters of the id" in result.output
-    assert SECRET not in result.output and not worker.calls
+    assert SECRET not in result.output
+    assert not worker.calls
 
 
 def test_an_unknown_or_empty_prefix_is_refused_with_a_fix(
@@ -228,10 +230,13 @@ def test_an_unknown_or_empty_prefix_is_refused_with_a_fix(
 ) -> None:
     library(tmp_path, monkeypatch, [memo_row("ABCD1111", "alpha")], media)
     unknown = cli(session_kit, "memos:zzzz")
-    assert unknown.exit_code == 1 and "no Voice Memo has an id starting with 'zzzz'" in unknown.output
+    assert unknown.exit_code == 1
+    assert "no Voice Memo has an id starting with 'zzzz'" in unknown.output
     assert "Fix: `anyverbatim memos --all` lists every memo with its id" in unknown.output
     empty = cli(session_kit, "memos:")
-    assert empty.exit_code == 1 and "memos: needs new, latest, all" in empty.output and "Fix:" in empty.output
+    assert empty.exit_code == 1
+    assert "memos: needs new, latest, all" in empty.output
+    assert "Fix:" in empty.output
     assert not worker.calls
 
 
@@ -251,10 +256,12 @@ def test_latest_and_all_without_a_local_memo_are_errors_and_new_is_not(
     library(tmp_path, monkeypatch, [Row("CLOUD-0001", path=None)])
     for selector in ("memos:latest", "memos:all"):
         result = cli(session_kit, selector)
-        assert result.exit_code == 1 and "no Voice Memos are downloaded to this Mac" in result.output
+        assert result.exit_code == 1
+        assert "no Voice Memos are downloaded to this Mac" in result.output
         assert "Fix: open a memo once in Voice Memos to download it" in result.output
     nothing = cli(session_kit, "memos:new")
-    assert nothing.exit_code == 0 and "1 memo(s) not downloaded" in nothing.output
+    assert nothing.exit_code == 0
+    assert "1 memo(s) not downloaded" in nothing.output
     assert "no new memos to transcribe" in nothing.output
     assert not (session_kit.out / "batch_report.json").exists()
 
@@ -285,11 +292,14 @@ def test_memos_mix_with_files_but_not_with_youtube(
 ) -> None:
     library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha")], media)
     both = cli(session_kit, "memos:latest", str(media.add(tmp_path / "talk.m4a", "beta")))
-    assert both.exit_code == 0 and names(both.output) == ["talk.m4a", "AAAA1111.m4a"]
+    assert both.exit_code == 0
+    assert names(both.output) == ["talk.m4a", "AAAA1111.m4a"]
     youtube = cli(session_kit, "memos:latest", "pubVideo001")
-    assert youtube.exit_code == 1 and "run YouTube and local targets separately" in youtube.output
+    assert youtube.exit_code == 1
+    assert "run YouTube and local targets separately" in youtube.output
     flags = cli(session_kit, "--no-captions", "memos:latest")
-    assert flags.exit_code == 1 and "only apply to YouTube targets" in flags.output
+    assert flags.exit_code == 1
+    assert "only apply to YouTube targets" in flags.output
 
 
 def test_a_memo_that_cannot_be_hashed_stays_selected_for_new(tmp_path: Path) -> None:
@@ -342,14 +352,16 @@ def test_quiet_prints_nothing_when_every_memo_is_done_busy_or_not_downloaded(
 ) -> None:
     library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha"), Row("CLOUD-0001", path=None)], media)
     first = cli(session_kit, "--quiet", "memos:new")
-    assert first.exit_code == 0 and names(first.output) == ["AAAA1111.m4a"]
+    assert first.exit_code == 0
+    assert names(first.output) == ["AAAA1111.m4a"]
     assert "not downloaded" not in first.output
 
     idle = cli(session_kit, "--quiet", "memos:new")
     assert (idle.exit_code, idle.output) == (0, "")
 
     shown = cli(session_kit, "memos:new")
-    assert "no new memos to transcribe" in shown.output and "not downloaded" in shown.output
+    assert "no new memos to transcribe" in shown.output
+    assert "not downloaded" in shown.output
 
     library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha")], media, name="second")
     with video_lock(session_kit.out / rec_id("alpha")):
@@ -359,7 +371,8 @@ def test_quiet_prints_nothing_when_every_memo_is_done_busy_or_not_downloaded(
 
 def test_quiet_is_for_local_targets(session_kit) -> None:
     result = cli(session_kit, "--quiet", "pubVideo001")
-    assert result.exit_code == 1 and "--quiet only applies to local and Voice Memos targets" in result.output
+    assert result.exit_code == 1
+    assert "--quiet only applies to local and Voice Memos targets" in result.output
 
 
 def test_new_with_a_folder_that_has_no_media_is_still_an_error(
@@ -369,7 +382,8 @@ def test_new_with_a_folder_that_has_no_media_is_still_an_error(
     empty = tmp_path / "empty"
     empty.mkdir()
     result = cli(session_kit, "memos:new", str(empty))
-    assert result.exit_code == 1 and "no audio or video files found in the folders given" in result.output
+    assert result.exit_code == 1
+    assert "no audio or video files found in the folders given" in result.output
     assert not worker.calls
 
 
@@ -379,7 +393,8 @@ def test_selectors_are_case_insensitive(
     library(tmp_path, monkeypatch, [memo_row("AAAA1111", "alpha"), memo_row("BBBB2222", "beta", unix=MIDDLE)], media)
     assert names(cli(session_kit, "memos:LATEST").output) == ["AAAA1111.m4a"]
     result = cli(session_kit, "memos:New")
-    assert result.exit_code == 0 and names(result.output) == ["BBBB2222.m4a"]
+    assert result.exit_code == 0
+    assert names(result.output) == ["BBBB2222.m4a"]
 
 
 def test_overlapping_selectors_run_each_memo_once_newest_first(
@@ -430,11 +445,13 @@ def test_an_unreadable_composition_memo_gets_its_own_notice(
     )
     (folder / "edit.composition").mkdir()
     result = cli(session_kit, "memos:all")
-    assert result.exit_code == 0 and names(result.output) == ["AAAA1111.m4a"]
+    assert result.exit_code == 0
+    assert names(result.output) == ["AAAA1111.m4a"]
     assert "1 memo(s) cannot be read (a .composition folder, or a file outside the library), skipped" in result.output
     assert "not downloaded" not in result.output
     named = cli(session_kit, "memos:compose1")
-    assert named.exit_code == 1 and "memo compose1 cannot be read" in named.output
+    assert named.exit_code == 1
+    assert "memo compose1 cannot be read" in named.output
     assert "Fix: share the memo out of Voice Memos and pass the file" in named.output
 
 
@@ -445,7 +462,8 @@ def test_a_rerun_with_new_provenance_rebuilds_only_the_context_record(
     llm = FakeLLM()
     run_files(session_kit, [path], llm=llm)
     calls, requests, converted = len(worker.calls), len(llm.requests), list(media.converted)
-    assert calls == 1 and requests > 0
+    assert calls == 1
+    assert requests > 0
 
     known = {path: local.Provenance("voice_memos", "Renamed memo", datetime.fromtimestamp(NEWEST, UTC))}
     _, results, events = run_files(session_kit, [path], llm=llm, provenance=known)
@@ -453,13 +471,16 @@ def test_a_rerun_with_new_provenance_rebuilds_only_the_context_record(
     assert (source.title, source.origin) == ("Renamed memo", "voice_memos")
     assert source.recorded_at == datetime.fromtimestamp(NEWEST, UTC)
     assert (len(worker.calls), len(llm.requests), media.converted) == (calls, requests, converted)
-    assert len(diarizer.calls) == 1 and [s.id for s in load_document(context(session_kit, "alpha")).speakers] == ["S1"]
+    assert len(diarizer.calls) == 1
+    assert [s.id for s in load_document(context(session_kit, "alpha")).speakers] == ["S1"]
     assert "skip" not in [e.stage for e in events]
-    assert results[0].document is not None and results[0].document.source == source
+    assert results[0].document is not None
+    assert results[0].document.source == source
     assert (session_kit.out / rec_id() / "context.md").read_text(encoding="utf-8").startswith("# Renamed memo\n")
 
     _, again, events = run_files(session_kit, [path], llm=llm, provenance=known)
-    assert again[0].outcome.reused == ("context",) and [e.stage for e in events] == ["skip"]
+    assert again[0].outcome.reused == ("context",)
+    assert [e.stage for e in events] == ["skip"]
 
     _, plain, _ = run_files(session_kit, [path], llm=llm)
     assert plain[0].outcome.reused == ("context",), "a plain file never overwrites the memo's record"
@@ -488,7 +509,7 @@ def test_no_title_file_name_memo_title_or_speaker_name_reaches_the_llm_but_the_g
     monkeypatch.setattr(pipeline, "check_ready", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(pipeline, "client_from_options", lambda *_args, **_kwargs: llm)
 
-    def run(*args: str):
+    def run(*args: str) -> None:
         argv = ["run", "--out", str(session_kit.out), "--llm", "claude-cli:fake-model", *args, "memos:latest"]
         result = CliRunner().invoke(main, argv)
         assert result.exit_code == 0, result.output
@@ -504,7 +525,8 @@ def test_no_title_file_name_memo_title_or_speaker_name_reaches_the_llm_but_the_g
     for secret in (SECRET, "Container secret title", "AAAA1111", ".m4a", "Zelda", "Quentin"):
         assert not any(secret in text for text in sent), secret
     corrections = [text for text in sent if '"fixed"' in text and "SEGMENTS:" in text]
-    assert corrections and all("Prefer these domain terms when relevant: Zorblax, Quuxcorp." in t for t in corrections)
+    assert corrections
+    assert all("Prefer these domain terms when relevant: Zorblax, Quuxcorp." in t for t in corrections)
     assert [(s.id, s.name) for s in load_document(context(session_kit, "alpha")).speakers] == [
         ("S1", "Zelda"),
         ("S2", "Quentin"),

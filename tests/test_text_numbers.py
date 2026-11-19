@@ -712,7 +712,8 @@ def test_a_scaled_range_start_keeps_its_surface_and_offsets() -> None:
 
 
 def test_a_rough_figure_never_shares_a_value_with_an_exact_one() -> None:
-    assert itn("二十几岁") != itn("二十岁") and itn("二十几") != itn("二十")
+    assert itn("二十几岁") != itn("二十岁")
+    assert itn("二十几") != itn("二十")
 
 
 @pytest.mark.parametrize(
@@ -742,13 +743,15 @@ def test_a_digit_after_a_word_ending_in_shu_makes_an_exact_figure(text: str, val
 )
 def test_a_spoken_percent_takes_no_measure_word(text: str, surface: str) -> None:
     (token,) = quantity_tokens(text)
-    assert token.surface == surface and token.kind == "percent"
+    assert token.surface == surface
+    assert token.kind == "percent"
 
 
 @pytest.mark.parametrize("text", ["一百点二十", "三点五十年期", "二十五点三十"])
 def test_a_clock_time_needs_an_hour_and_minutes_and_no_unit(text: str) -> None:
     (quantity,) = _quantities(text)
-    assert "点" in quantity.token.surface and quantity.token.value_itn == quantity.token.surface
+    assert "点" in quantity.token.surface
+    assert quantity.token.value_itn == quantity.token.surface
     assert quantity.value is None
 
 

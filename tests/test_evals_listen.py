@@ -61,7 +61,8 @@ def test_scripted_keys_record_decisions_and_resume(session: tuple[Layout, Manife
     second = Harness("b0s12")
     rest = second.run(layout, manifest)
     assert not rest.quit
-    assert rest.decided == 4 and rest.remaining == 0
+    assert rest.decided == 4
+    assert rest.remaining == 0
     decisions = listen.read_decisions(layout.session_dir("main"))
     assert [d.choice for d in decisions] == ["1", "2", "both", "neither", "skip", "1", "2"]
     assert decisions[4].span == decisions[6].span
@@ -78,14 +79,16 @@ def test_skipped_spans_come_back_at_the_end_and_on_the_next_run(session: tuple[L
     skipped_span = decisions[0].span
     assert [d.choice for d in decisions] == ["skip", "1", "1", "1", "1", "1", "skip"]
     assert decisions[-1].span == skipped_span
-    assert result.remaining == 1 and not result.quit
+    assert result.remaining == 1
+    assert not result.quit
     assert any("still skipped" in line for line in first.output)
 
     second = Harness("b")
     rest = second.run(layout, manifest)
     assert "1 of 6 spans left" in second.output[0]
     assert any("1 skipped spans come back after the 0 new ones" in line for line in second.output)
-    assert rest.decided == 1 and rest.remaining == 0
+    assert rest.decided == 1
+    assert rest.remaining == 0
     assert listen.read_decisions(layout.session_dir("main"))[-1].span == skipped_span
 
 

@@ -28,7 +28,10 @@ def test_public_video_prints_one_line_and_exits_zero(session_kit, monkeypatch: p
     result = _invoke(session_kit, session_kit.yt(), monkeypatch, "pubVideo001")
     assert result.exit_code == 0, result.output
     line = next(line for line in result.output.splitlines() if line.startswith("✓"))
-    assert "pubVideo001" in line and "anonymous" in line and "2 chapters" in line and "audio 100s" in line
+    assert "pubVideo001" in line
+    assert "anonymous" in line
+    assert "2 chapters" in line
+    assert "audio 100s" in line
     assert "1 ok, 0 failed" in result.output
     assert str(session_kit.home) not in result.output
 
@@ -50,7 +53,8 @@ def test_members_without_source_exits_two_with_fix(session_kit, monkeypatch: pyt
     yt.failures[("metadata", False)] = [session_kit.fail(Signal.MEMBERS_ONLY)]
     result = _invoke(session_kit, yt, monkeypatch, "memVideo001")
     assert result.exit_code == 2, result.output
-    assert "auth_required" in result.output and "Fix:" in result.output
+    assert "auth_required" in result.output
+    assert "Fix:" in result.output
 
 
 def test_permanent_failure_exits_one(session_kit, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -69,7 +73,8 @@ def test_bot_check_exits_three_and_later_runs_are_refused(session_kit, monkeypat
 
     yt = session_kit.yt()
     refused = _invoke(session_kit, yt, monkeypatch, "pubVideo002")
-    assert refused.exit_code == 3 and "--ignore-cooldown" in refused.output
+    assert refused.exit_code == 3
+    assert "--ignore-cooldown" in refused.output
     assert yt.calls == []
     allowed = _invoke(session_kit, yt, monkeypatch, "pubVideo002", "--ignore-cooldown")
     assert allowed.exit_code == 0, allowed.output
@@ -102,4 +107,5 @@ def test_options_reach_the_session(session_kit, monkeypatch: pytest.MonkeyPatch)
 
 def test_invalid_target_exits_one(session_kit, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _invoke(session_kit, session_kit.yt(), monkeypatch, "https://example.com/nope")
-    assert result.exit_code == 1 and "not a YouTube" in result.output
+    assert result.exit_code == 1
+    assert "not a YouTube" in result.output

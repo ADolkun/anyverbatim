@@ -242,7 +242,8 @@ def test_end_to_end_with_a_fake_llm_punctuates_verifies_numbers_and_meters_token
     vdir = session_kit.out / ZH
     assert load_document(vdir / "context.json") == doc
 
-    assert doc.transcript.punctuation == "llm" and doc.transcript.language == "zh"
+    assert doc.transcript.punctuation == "llm"
+    assert doc.transcript.language == "zh"
     text = "".join(s.text for s in doc.segments)
     assert text == "大家好欢迎回来，今天聊聊这只股票，上周涨了50个百分点，非常强劲。"
     fixed = [(s, f) for s in doc.segments for f in s.flags if f.kind == "numeric_fixed"]
@@ -259,7 +260,8 @@ def test_end_to_end_with_a_fake_llm_punctuates_verifies_numbers_and_meters_token
     }
 
     markdown = (vdir / "context.md").read_text(encoding="utf-8")
-    assert "50个百分点[^1]" in markdown and "五十个百分点: context; was 15" in markdown
+    assert "50个百分点[^1]" in markdown
+    assert "五十个百分点: context; was 15" in markdown
     assert "punctuation: llm" in markdown
     assert "timing_interpolated" not in markdown
     assert [e.stage for e in events] == [
@@ -272,20 +274,25 @@ def test_end_to_end_with_a_fake_llm_punctuates_verifies_numbers_and_meters_token
         "numerals",
         "write",
     ]
-    assert results[0].notices == () and not (vdir / "audio.wav").exists()
+    assert results[0].notices == ()
+    assert not (vdir / "audio.wav").exists()
     assert {".lock", "audio.webm", "context.json", "context.md", ".stages"} <= {p.name for p in vdir.iterdir()}
 
 
 def test_without_an_llm_the_stages_degrade_and_say_so(session_kit, worker) -> None:
     _, results, _ = run(session_kit, zh_yt(session_kit))
     doc = only_document(results)
-    assert doc.transcript.punctuation == "none" and doc.llm_usage == ()
-    assert len(doc.segments) >= 1 and "，" not in "".join(s.text for s in doc.segments)
+    assert doc.transcript.punctuation == "none"
+    assert doc.llm_usage == ()
+    assert len(doc.segments) >= 1
+    assert "，" not in "".join(s.text for s in doc.segments)
     (disputed,) = [f for s in doc.segments for f in s.flags]
-    assert disputed.kind == "numeric_disputed" and "no LLM" in disputed.note
+    assert disputed.kind == "numeric_disputed"
+    assert "no LLM" in disputed.note
     notices = results[0].notices
     assert len(notices) == 2
-    assert notices[0].startswith("punctuation not restored") and notices[1].startswith("1 disputed number(s)")
+    assert notices[0].startswith("punctuation not restored")
+    assert notices[1].startswith("1 disputed number(s)")
     assert set(notices) <= set(doc.quality.warnings)
 
 
@@ -312,7 +319,8 @@ def test_an_option_change_recomputes_only_the_stages_downstream_of_it(session_ki
         "numerals": False,
     }
     assert len(worker.calls) == 1 and ffmpeg_calls(session_kit) == converted, "no audio once the ASR is stored"
-    assert len(yt.labels("audio")) == 1 and "asr" not in [e.stage for e in events]
+    assert len(yt.labels("audio")) == 1
+    assert "asr" not in [e.stage for e in events]
     assert only_document(second).transcript.punctuation == "llm"
 
     asked = len(llm.requests)
@@ -326,7 +334,8 @@ def test_an_option_change_recomputes_only_the_stages_downstream_of_it(session_ki
         "numeric": True,
         "numerals": True,
     }
-    assert len(llm.requests) == asked and only_document(third).chapters == ()
+    assert len(llm.requests) == asked
+    assert only_document(third).chapters == ()
 
     keep_script = config.load_options(overrides={"text": {"script": "keep"}})
     _, fourth, _ = run(session_kit, yt, options=keep_script, llm=llm)
@@ -348,21 +357,24 @@ def test_unchanged_options_reuse_the_document_without_any_stage(session_kit, wor
     run(session_kit, yt, llm=llm)
     calls, asked = len(yt.calls), len(llm.requests)
     _, again, events = run(session_kit, yt, llm=FakeLLM())
-    assert [e.stage for e in events] == ["skip"] and again[0].outcome.reused == ("context",)
-    assert len(yt.calls) == calls and len(llm.requests) == asked
+    assert [e.stage for e in events] == ["skip"]
+    assert again[0].outcome.reused == ("context",)
+    assert len(yt.calls) == calls
+    assert len(llm.requests) == asked
 
     (session_kit.out / ZH / "context.json").write_text("{}", encoding="utf-8")
     _, edited, events = run(session_kit, yt, llm=FakeLLM())
     assert "skip" not in [e.stage for e in events], "a context.json that is not the one written is rebuilt"
-    assert all(stored(edited[0]).values()) and len(worker.calls) == 1
+    assert all(stored(edited[0]).values())
+    assert len(worker.calls) == 1
 
 
 def test_an_llm_failure_fails_the_video_and_keeps_every_finished_stage(session_kit, worker) -> None:
     yt = zh_yt(session_kit)
     report, results, _ = run(session_kit, yt, llm=FakeLLM(fail=True))
-    assert (
-        report.exit_code == 1 and results[0].outcome.error == "llm" and "synthetic outage" in results[0].outcome.detail
-    )
+    assert report.exit_code == 1
+    assert results[0].outcome.error == "llm"
+    assert "synthetic outage" in results[0].outcome.detail
     stages_dir = session_kit.out / ZH / ".stages"
     assert {p.name for p in stages_dir.iterdir() if p.is_file()} == {"asr.json", "normalize.json"}
     assert not (session_kit.out / ZH / "context.json").exists()
@@ -376,7 +388,8 @@ def test_an_llm_failure_fails_the_video_and_keeps_every_finished_stage(session_k
         "numeric": False,
         "numerals": False,
     }
-    assert len(worker.calls) == 1 and len(yt.labels("audio")) == 1
+    assert len(worker.calls) == 1
+    assert len(yt.labels("audio")) == 1
 
 
 def test_force_discards_every_stored_stage(session_kit, worker) -> None:
@@ -385,7 +398,8 @@ def test_force_discards_every_stored_stage(session_kit, worker) -> None:
     llm = FakeLLM()
     _, forced, _ = run(session_kit, yt, llm=llm, force=True)
     assert not any(stored(forced[0]).values())
-    assert len(worker.calls) == 2 and llm.stages() == ["punctuate", "correct", "numeric"]
+    assert len(worker.calls) == 2
+    assert llm.stages() == ["punctuate", "correct", "numeric"]
 
 
 def test_captions_mode_trusts_the_manual_track_and_skips_the_audio(session_kit, worker) -> None:
@@ -394,9 +408,12 @@ def test_captions_mode_trusts_the_manual_track_and_skips_the_audio(session_kit, 
     options = config.load_options(overrides={"asr": {"source": "captions"}})
     _, results, events = run(session_kit, yt, [EN], options=options)
     doc = only_document(results)
-    assert worker.calls == [] and yt.labels("audio") == [] and ffmpeg_calls(session_kit) == 0
+    assert worker.calls == []
+    assert yt.labels("audio") == []
+    assert ffmpeg_calls(session_kit) == 0
     assert [e.stage for e in events] == ["fetch", "captions", "normalize", "punctuate", "numeric", "write"]
-    assert doc.transcript.runs[0].kind == "caption_manual" and doc.transcript.punctuation == "caption"
+    assert doc.transcript.runs[0].kind == "caption_manual"
+    assert doc.transcript.punctuation == "caption"
     assert [s.text for s in doc.segments] == ["Markets rose today.", "Then they fell sharply."]
     assert [s.chapter for s in doc.segments] == [0, 1]
     assert "Transcript: manual captions" in (session_kit.out / EN / "context.md").read_text(encoding="utf-8")
@@ -431,9 +448,11 @@ def test_correction_is_skipped_without_an_llm_and_the_notice_says_so(session_kit
     yt = zh_yt(session_kit)
     _, results, events = run(session_kit, yt)
     doc = only_document(results)
-    assert doc.transcript.correction_llm is None and "correct" not in [e.stage for e in events]
+    assert doc.transcript.correction_llm is None
+    assert "correct" not in [e.stage for e in events]
     notice = results[0].notices[0]
-    assert notice.startswith("punctuation not restored") and "correction is skipped" in notice
+    assert notice.startswith("punctuation not restored")
+    assert "correction is skipped" in notice
     assert notice in doc.quality.warnings
     assert len(doc.quality.warnings) == len(results[0].notices)
 
@@ -442,7 +461,8 @@ def test_an_explicit_off_skips_correction_even_with_an_llm(session_kit, worker) 
     llm = FakeLLM()
     _, results, events = run(session_kit, zh_yt(session_kit), options=with_correct(False), llm=llm)
     assert only_document(results).transcript.correction_llm is None
-    assert llm.stages() == ["punctuate", "numeric"] and "correct" not in [e.stage for e in events]
+    assert llm.stages() == ["punctuate", "numeric"]
+    assert "correct" not in [e.stage for e in events]
 
 
 @pytest.mark.parametrize(
@@ -471,7 +491,8 @@ def test_the_resolved_value_is_what_the_stored_document_depends_on(session_kit, 
     assert [e.stage for e in events] == ["skip"], "unset with an LLM and True are the same identity"
 
     _, off, events = run(session_kit, yt, options=with_correct(False), llm=llm)
-    assert "skip" not in [e.stage for e in events] and only_document(off).transcript.correction_llm is None
+    assert "skip" not in [e.stage for e in events]
+    assert only_document(off).transcript.correction_llm is None
     assert stored(off[0]) == {"asr": True, "normalize": True, "punctuate": True, "numeric": True, "numerals": True}
 
     _, on, _ = run(session_kit, yt, llm=llm)
@@ -495,9 +516,11 @@ def test_cli_correct_flag_is_tri_state(session_kit, worker, monkeypatch) -> None
     assert correction_requests("--no-correct") == 0
 
     without = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH, "--force")
-    assert without.exit_code == 0 and "correction is skipped" in without.output
+    assert without.exit_code == 0
+    assert "correction is skipped" in without.output
     refused = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH, "--force", "--correct")
-    assert refused.exit_code == 1 and "correction needs an LLM" in refused.output
+    assert refused.exit_code == 1
+    assert "correction needs an LLM" in refused.output
 
 
 def test_a_whole_file_engine_is_refused_as_the_numeric_second_opinion(session_kit, worker) -> None:
@@ -520,8 +543,10 @@ def invoke(kit, yt, monkeypatch: pytest.MonkeyPatch, *args: str):
 def test_cli_without_an_llm_prints_a_notice_per_degraded_stage(session_kit, worker, monkeypatch) -> None:
     result = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH)
     assert result.exit_code == 0, result.output
-    assert "! punctuation not restored" in result.output and "punctuation: none" in result.output
-    assert "stages: fetch" in result.output and "asr 0s" in result.output
+    assert "! punctuation not restored" in result.output
+    assert "punctuation: none" in result.output
+    assert "stages: fetch" in result.output
+    assert "asr 0s" in result.output
 
 
 def test_cli_llm_spec_reaches_the_pipeline(session_kit, worker, monkeypatch) -> None:
@@ -537,15 +562,15 @@ def test_cli_llm_spec_reaches_the_pipeline(session_kit, worker, monkeypatch) -> 
     result = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH, "--llm", "claude-cli:claude-sonnet-5-5")
     assert result.exit_code == 0, result.output
     assert (built[0].provider, built[0].model) == ("claude-cli", "claude-sonnet-5-5")
-    assert (
-        "punctuation: llm" in result.output
-        and "document LLM tokens: punctuation 1 call(s), 100 in / 20 out" in result.output
-    )
+    assert "punctuation: llm" in result.output
+    assert "document LLM tokens: punctuation 1 call(s), 100 in / 20 out" in result.output
 
     bad = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH, "--llm", "sonnet")
-    assert bad.exit_code == 1 and "PROVIDER:MODEL" in bad.output
+    assert bad.exit_code == 1
+    assert "PROVIDER:MODEL" in bad.output
     refused = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH, "--llm", "none", "--correct")
-    assert refused.exit_code == 1 and "correction needs an LLM" in refused.output
+    assert refused.exit_code == 1
+    assert "correction needs an LLM" in refused.output
 
 
 def test_render_rewrites_the_markdown_from_context_json(session_kit, worker, monkeypatch) -> None:
@@ -569,7 +594,8 @@ def test_only_the_unpunctuated_stretch_of_a_punctuated_video_goes_to_the_llm(ses
     (asked,) = [r for r in llm.requests if '"items"' in r.user]
     sent = [item["text"] for item in json.loads(asked.user.split("SEGMENTS:\n", 1)[1])]
     assert len(sent) >= 2 and " ".join(sent) in EN_OPENING, "only the unpunctuated opening is sent"
-    assert doc.segments[0].text.startswith("So today") and doc.transcript.punctuation == "llm"
+    assert doc.segments[0].text.startswith("So today")
+    assert doc.transcript.punctuation == "llm"
     assert [s.text for s in doc.segments[-2:]] == ["Then they fell sharply.", EN_REST[44:]]
 
 
@@ -596,9 +622,11 @@ def test_a_changed_asr_request_decodes_into_a_fresh_folder_and_prunes_the_old_on
     store.StageStore(session_kit.out / ZH).discard("context")
     report, results, _ = run(session_kit, yt)
     assert report.exit_code == 0, results[0].outcome
-    assert stored(results[0])["asr"] is False and len(worker.calls) == 2
+    assert stored(results[0])["asr"] is False
+    assert len(worker.calls) == 2
     (second,) = worker_dirs(session_kit)
-    assert second != first and worker.calls[1].files[0].language == "zh-Hant"
+    assert second != first
+    assert worker.calls[1].files[0].language == "zh-Hant"
     assert not (legacy / "fingerprint.json").exists(), "stale folders go once the new stage is stored"
 
 
@@ -635,8 +663,10 @@ def test_an_asr_version_bump_rereads_the_kept_rows_without_audio_or_decoding(ses
     )
     report, results, _ = run(session_kit, yt)
     assert report.exit_code == 0, results[0].outcome
-    assert stored(results[0])["asr"] is False and len(worker.calls) == 1
-    assert ffmpeg_calls(session_kit) == converted and len(yt.labels("audio")) == fetched
+    assert stored(results[0])["asr"] is False
+    assert len(worker.calls) == 1
+    assert ffmpeg_calls(session_kit) == converted
+    assert len(yt.labels("audio")) == fetched
     assert "re-derived" in only_document(results).quality.warnings
     assert worker_dirs(session_kit) == [folder]
 
@@ -651,7 +681,8 @@ def test_a_folder_of_the_same_request_under_an_older_name_is_adopted(session_kit
     bump(monkeypatch, "asr")
     report, results, _ = run(session_kit, yt)
     assert report.exit_code == 0, results[0].outcome
-    assert len(worker.calls) == 1 and worker_dirs(session_kit) == [folder]
+    assert len(worker.calls) == 1
+    assert worker_dirs(session_kit) == [folder]
 
 
 def test_a_moved_library_rereads_its_kept_rows_after_an_asr_bump(session_kit, worker, monkeypatch, tmp_path) -> None:
@@ -663,7 +694,8 @@ def test_a_moved_library_rereads_its_kept_rows_after_an_asr_bump(session_kit, wo
     bump(monkeypatch, "asr")
     report, results, _ = run(session_kit, yt)
     assert report.exit_code == 0, results[0].outcome
-    assert stored(results[0])["asr"] is False and len(worker.calls) == 1
+    assert stored(results[0])["asr"] is False
+    assert len(worker.calls) == 1
     assert worker_dirs(session_kit) == [folder]
 
 
@@ -677,7 +709,8 @@ def test_a_relative_out_reuses_the_folder_an_absolute_out_made(session_kit, work
     bump(monkeypatch, "asr")
     report, results, _ = run(session_kit, yt)
     assert report.exit_code == 0, results[0].outcome
-    assert len(worker.calls) == 1 and worker_dirs(session_kit) == [folder]
+    assert len(worker.calls) == 1
+    assert worker_dirs(session_kit) == [folder]
 
 
 def test_an_interrupted_run_resumes_its_folder_after_the_library_moves(session_kit, worker, tmp_path) -> None:
@@ -707,7 +740,8 @@ def test_adoption_prefers_the_complete_folder_of_two_with_the_same_request(sessi
     bump(monkeypatch, "asr")
     report, results, _ = run(session_kit, yt)
     assert report.exit_code == 0, results[0].outcome
-    assert len(worker.calls) == 1 and worker_dirs(session_kit) == [folder]
+    assert len(worker.calls) == 1
+    assert worker_dirs(session_kit) == [folder]
 
 
 def test_a_second_opinion_with_nothing_to_check_drops_that_engines_folders(session_kit, worker, monkeypatch) -> None:
@@ -737,7 +771,8 @@ def test_the_second_opinion_folder_follows_its_request_not_the_stage_versions(se
     bump(monkeypatch, "asr", "second_opinion")
     report, results, _ = run(session_kit, yt, options=options)
     assert report.exit_code == 0, results[0].outcome
-    assert stored(results[0])["second_opinion"] is False and len(worker.calls) == 2
+    assert stored(results[0])["second_opinion"] is False
+    assert len(worker.calls) == 2
     assert ffmpeg_calls(session_kit) == converted
     assert worker_dirs(session_kit, stage="second_opinion") == [folder]
 
@@ -747,7 +782,8 @@ def test_the_second_opinion_folder_follows_its_request_not_the_stage_versions(se
     assert report.exit_code == 0, results[0].outcome
     assert [call.files[0].language for call in worker.calls[2:]] == ["zh-Hant", "zh-Hant"]
     (moved,) = worker_dirs(session_kit, stage="second_opinion")
-    assert moved != folder and moved.startswith("w-vad/")
+    assert moved != folder
+    assert moved.startswith("w-vad/")
 
 
 def test_an_interrupted_asr_run_resumes_in_its_own_folder(session_kit, worker) -> None:
@@ -758,7 +794,8 @@ def test_an_interrupted_asr_run_resumes_in_its_own_folder(session_kit, worker) -
     worker.error = None
     report, _, _ = run(session_kit, yt)
     assert report.exit_code == 0
-    assert worker.calls[0].out_dir == worker.calls[1].out_dir and len(worker_dirs(session_kit)) == 1
+    assert worker.calls[0].out_dir == worker.calls[1].out_dir
+    assert len(worker_dirs(session_kit)) == 1
 
 
 def test_the_memory_cap_reaches_the_worker_but_does_not_miss_the_stored_asr(session_kit, worker) -> None:
@@ -768,7 +805,8 @@ def test_the_memory_cap_reaches_the_worker_but_does_not_miss_the_stored_asr(sess
     assert worker.calls[0].memory_cap_bytes == 1 << 30
     store.StageStore(session_kit.out / ZH).discard("context")
     _, results, _ = run(session_kit, yt)
-    assert stored(results[0])["asr"] is True and len(worker.calls) == 1
+    assert stored(results[0])["asr"] is True
+    assert len(worker.calls) == 1
 
 
 def test_a_module_version_bump_redoes_its_stage_and_the_document(session_kit, worker, monkeypatch) -> None:
@@ -842,7 +880,8 @@ def test_the_numerals_stage_is_stored_and_reused(session_kit, worker) -> None:
     assert (session_kit.out / ZH / ".stages" / "numerals.json").is_file()
     store.StageStore(session_kit.out / ZH).discard("context")
     _, again, events = run(session_kit, yt, llm=llm)
-    assert stored(again[0])["numerals"] is True and "numerals" not in [e.stage for e in events]
+    assert stored(again[0])["numerals"] is True
+    assert "numerals" not in [e.stage for e in events]
     assert "50个百分点" in "".join(s.text for s in only_document(again).segments)
 
 
@@ -863,7 +902,8 @@ def test_keep_skips_the_numerals_stage_and_reruns_nothing_before_it(session_kit,
 
 def test_a_transcript_in_another_language_skips_the_numerals_stage(session_kit, worker) -> None:
     _, results, events = run(session_kit, session_kit.yt(), [EN], llm=FakeLLM())
-    assert "numerals" not in stored(results[0]) and "numerals" not in [e.stage for e in events]
+    assert "numerals" not in stored(results[0])
+    assert "numerals" not in [e.stage for e in events]
     assert not (session_kit.out / EN / ".stages" / "numerals.json").exists()
 
 
@@ -883,7 +923,8 @@ def test_a_numerals_rule_change_reruns_only_numerals_and_the_document(session_ki
         "numeric": True,
         "numerals": False,
     }
-    assert len(llm.requests) == asked and len(worker.calls) == 1
+    assert len(llm.requests) == asked
+    assert len(worker.calls) == 1
 
 
 def test_correction_reruns_when_its_glossary_changes(session_kit, worker) -> None:
@@ -893,7 +934,8 @@ def test_correction_reruns_when_its_glossary_changes(session_kit, worker) -> Non
     set_info(session_kit, ZH, tags=["估值"])
     store.StageStore(session_kit.out / ZH).discard("context")
     _, results, _ = run(session_kit, yt, options=correct, llm=FakeLLM())
-    assert stored(results[0])["correct"] is False and stored(results[0])["punctuate"] is True
+    assert stored(results[0])["correct"] is False
+    assert stored(results[0])["punctuate"] is True
 
 
 NOTE_TEXT = "Correction: the revenue figure is 12 million."
@@ -914,7 +956,8 @@ def test_the_creator_note_reaches_correction_only_when_the_option_is_on(session_
     yt.comments[ZH] = [PINNED]
     llm = FakeLLM()
     note_run(session_kit, yt, llm, note=False)
-    assert correct_prompts(llm) and not any(NOTE_TEXT in prompt for prompt in correct_prompts(llm))
+    assert correct_prompts(llm)
+    assert not any(NOTE_TEXT in prompt for prompt in correct_prompts(llm))
 
     llm = FakeLLM()
     _, results, _ = note_run(session_kit, yt, llm, note=True)
@@ -932,7 +975,8 @@ def test_the_creator_note_reaches_correction_only_when_the_option_is_on(session_
 
     llm = FakeLLM()
     _, results, events = note_run(session_kit, yt, llm, note=True)
-    assert llm.requests == [] and [e.stage for e in events] == ["skip"]
+    assert llm.requests == []
+    assert [e.stage for e in events] == ["skip"]
 
     _, results, _ = note_run(session_kit, yt, FakeLLM(), note=False)
     assert stored(results[0])["correct"] is False
@@ -973,7 +1017,8 @@ def test_a_run_without_captions_does_not_count_for_a_run_with_them(session_kit, 
     run(session_kit, yt, captions=False)
     assert yt.labels("captions") == []
     _, results, events = run(session_kit, yt)
-    assert "skip" not in [e.stage for e in events] and len(yt.labels("captions")) == 1
+    assert "skip" not in [e.stage for e in events]
+    assert len(yt.labels("captions")) == 1
     assert any(f.kind == "numeric_disputed" for s in only_document(results).segments for f in s.flags)
 
 
@@ -1009,7 +1054,8 @@ def test_a_resumed_partial_stage_counts_every_batch(session_kit, worker, monkeyp
     _, results, _ = run(session_kit, yt, llm=llm)
     batches = len([r for r in llm.requests if '"items"' in r.user]) + 1
     (punctuation,) = [u for u in only_document(results).llm_usage if u.stage == "punctuation"]
-    assert batches >= 3 and punctuation.calls == batches
+    assert batches >= 3
+    assert punctuation.calls == batches
 
 
 def test_a_missing_claude_cli_fails_before_any_request(session_kit, worker, monkeypatch) -> None:
@@ -1018,7 +1064,8 @@ def test_a_missing_claude_cli_fails_before_any_request(session_kit, worker, monk
     options = config.load_options(overrides={"llm": {"provider": "claude-cli", "model": "claude-sonnet-5-5"}})
     with pytest.raises(DependencyError, match="claude CLI not found"):
         run(session_kit, yt, options=options)
-    assert yt.calls == [] and worker.calls == []
+    assert yt.calls == []
+    assert worker.calls == []
 
 
 def test_the_default_llm_without_a_chatgpt_sign_in_fails_before_any_request(session_kit, worker) -> None:
@@ -1026,7 +1073,8 @@ def test_the_default_llm_without_a_chatgpt_sign_in_fails_before_any_request(sess
     yt = zh_yt(session_kit)
     with pytest.raises(ConfigError, match=r"not signed in.*`anyverbatim login`.*`--llm none`"):
         run(session_kit, yt)
-    assert yt.calls == [] and worker.calls == []
+    assert yt.calls == []
+    assert worker.calls == []
 
 
 def test_an_unresolvable_model_family_fails_once_before_any_request(session_kit, worker, monkeypatch) -> None:
@@ -1043,7 +1091,8 @@ def test_an_unresolvable_model_family_fails_once_before_any_request(session_kit,
     with pytest.raises(ConfigError, match="lists no 'sol' model"):
         run(session_kit, yt, (ZH, EN))
     assert asked == ["gpt-sol"]
-    assert yt.calls == [] and worker.calls == []
+    assert yt.calls == []
+    assert worker.calls == []
 
 
 @pytest.mark.parametrize("interactive", [True, False])
@@ -1068,7 +1117,8 @@ def test_cli_default_llm_without_a_sign_in_names_login_and_llm_none(session_kit,
     (session_kit.home / ".config" / "anyverbatim" / "config.toml").unlink()
     refused = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH)
     assert refused.exit_code == 1
-    assert "anyverbatim login" in refused.output and "--llm none" in refused.output
+    assert "anyverbatim login" in refused.output
+    assert "--llm none" in refused.output
     without = invoke(session_kit, zh_yt(session_kit), monkeypatch, ZH, "--llm", "none")
     assert without.exit_code == 0, without.output
     assert worker.calls != []
@@ -1097,7 +1147,8 @@ def test_a_skipped_video_gets_its_markdown_back_and_an_unloadable_document_is_re
     expected = (vdir / "context.md").read_text(encoding="utf-8")
     (vdir / "context.md").unlink()
     _, _, events = run(session_kit, yt)
-    assert [e.stage for e in events] == ["skip"] and (vdir / "context.md").read_text(encoding="utf-8") == expected
+    assert [e.stage for e in events] == ["skip"]
+    assert (vdir / "context.md").read_text(encoding="utf-8") == expected
 
     broken = '{"schema_version": "9.0"}'
     (vdir / "context.json").write_text(broken, encoding="utf-8")
@@ -1105,7 +1156,8 @@ def test_a_skipped_video_gets_its_markdown_back_and_an_unloadable_document_is_re
     record["output"]["sha256"] = __import__("hashlib").sha256(broken.encode()).hexdigest()
     (vdir / ".stages" / "context.json").write_text(json.dumps(record), encoding="utf-8")
     report, results, events = run(session_kit, yt)
-    assert report.exit_code == 0 and "skip" not in [e.stage for e in events]
+    assert report.exit_code == 0
+    assert "skip" not in [e.stage for e in events]
     assert load_document(vdir / "context.json") == only_document(results)
 
 
@@ -1130,9 +1182,12 @@ def test_an_audio_fetch_that_fails_after_the_captions_fell_through_fails_the_vid
     report, results, events = run(session_kit, yt, options=captions_mode())
 
     (result,) = results
-    assert result.document is None and result.markdown is None
-    assert result.outcome.status is session.VideoStatus.ERROR and result.outcome.error == Signal.NO_FORMATS.value
-    assert [e.stage for e in events] == ["fetch", "fetch"] and worker.calls == []
+    assert result.document is None
+    assert result.markdown is None
+    assert result.outcome.status is session.VideoStatus.ERROR
+    assert result.outcome.error == Signal.NO_FORMATS.value
+    assert [e.stage for e in events] == ["fetch", "fetch"]
+    assert worker.calls == []
     assert report.exit_code == 1
     batch = json.loads((session_kit.out / "batch_report.json").read_text(encoding="utf-8"))
     (recorded,) = batch["videos"]
@@ -1154,7 +1209,8 @@ def test_tags_come_from_the_extraction_the_audio_fetch_refreshed(session_kit, wo
     llm = FakeLLM()
     _, results, events = run(session_kit, yt, options=captions_mode(), llm=llm)
 
-    assert len(yt.labels("metadata")) == 2 and [e.stage for e in events][:2] == ["fetch", "fetch"]
+    assert len(yt.labels("metadata")) == 2
+    assert [e.stage for e in events][:2] == ["fetch", "fetch"]
     assert only_youtube(results).tags == ("extraction2",)
     (correction,) = [r for r, stage in zip(llm.requests, llm.stages(), strict=True) if stage == "correct"]
     assert "extraction2" in correction.system + correction.user

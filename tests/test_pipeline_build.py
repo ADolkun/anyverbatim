@@ -138,12 +138,17 @@ def test_whisper_words_give_word_level_segments_and_a_valid_document() -> None:
     assert [s.text for s in doc.segments] == ["The market rose today.", "Then it fell sharply."]
     first, second = doc.segments
     assert (first.start, first.end, second.start, second.end) == (0.5, 2.5, 2.5, 4.5)
-    assert first.words is not None and [w.text for w in first.words] == ["The", "market", "rose", "today."]
-    assert first.words[0].start == 0.5 and first.words[-1].end == pytest.approx(2.5)
-    assert doc.transcript.punctuation == "engine" and doc.transcript.language == "en"
-    assert doc.transcript.script == "n/a" and doc.transcript.correction_llm is None
+    assert first.words is not None
+    assert [w.text for w in first.words] == ["The", "market", "rose", "today."]
+    assert first.words[0].start == 0.5
+    assert first.words[-1].end == pytest.approx(2.5)
+    assert doc.transcript.punctuation == "engine"
+    assert doc.transcript.language == "en"
+    assert doc.transcript.script == "n/a"
+    assert doc.transcript.correction_llm is None
     assert doc.quality.warnings == ()
-    assert doc.chapters == () and [s.chapter for s in doc.segments] == [None, None]
+    assert doc.chapters == ()
+    assert [s.chapter for s in doc.segments] == [None, None]
     again = load_document(dump_document(doc))
     assert again == doc
     assert "The market rose today." in render_markdown(doc)
@@ -152,9 +157,14 @@ def test_whisper_words_give_word_level_segments_and_a_valid_document() -> None:
 def test_run_records_the_engine_and_a_whole_file_run_has_no_vad_or_chunking() -> None:
     doc = build([row(0, " Hi.", 0, 1, chunk_words=words([" Hi."]))])
     (run,) = doc.transcript.runs
-    assert run.engine == "w-prod" and run.kind == "asr" and run.model_repo and run.model_revision
-    assert run.vad is None and run.chunking is None
-    assert run.params["mode"] == "whole_file" and run.params["language_hint"] == "en"
+    assert run.engine == "w-prod"
+    assert run.kind == "asr"
+    assert run.model_repo
+    assert run.model_revision
+    assert run.vad is None
+    assert run.chunking is None
+    assert run.params["mode"] == "whole_file"
+    assert run.params["language_hint"] == "en"
     assert {s.source.run for s in doc.segments} == {run.id}
 
 
@@ -162,8 +172,12 @@ def test_a_chunked_engine_records_vad_and_chunking() -> None:
     rows = [row(0, "Hello.", 0, 4, hypothesis="q-base"), row(1, "World.", 5, 9, hypothesis="q-base")]
     doc = build(rows, engine="q-base")
     (run,) = doc.transcript.runs
-    assert run.vad is not None and run.vad["threshold"] == 0.5 and "revision" in run.vad
-    assert run.chunking is not None and run.chunking["max_chunk_s"] == 30.0 and run.chunking["chunks"] == 2
+    assert run.vad is not None
+    assert run.vad["threshold"] == 0.5
+    assert "revision" in run.vad
+    assert run.chunking is not None
+    assert run.chunking["max_chunk_s"] == 30.0
+    assert run.chunking["chunks"] == 2
     assert doc.quality.speech_seconds == pytest.approx(8.0)
 
 
@@ -171,20 +185,25 @@ def test_engines_without_word_times_get_chunk_level_timing_and_a_warning() -> No
     text = "Alpha beta gamma. Delta epsilon zeta eta."
     doc = build([row(0, text, 10.0, 20.0, hypothesis="q-base")], engine="q-base")
     first, second = doc.segments
-    assert first.words is None and second.words is None
-    assert first.start == 10.0 and second.end == pytest.approx(20.0)
+    assert first.words is None
+    assert second.words is None
+    assert first.start == 10.0
+    assert second.end == pytest.approx(20.0)
     # 15 of the 35 non-space characters belong to the first sentence.
     assert first.end == pytest.approx(10.0 + 10.0 * 15 / 35, abs=1e-3)
     assert second.start == pytest.approx(first.end)
-    assert len(doc.quality.warnings) == 1 and "chunk-level" in doc.quality.warnings[0]
+    assert len(doc.quality.warnings) == 1
+    assert "chunk-level" in doc.quality.warnings[0]
     assert doc.segments[0].flags == ()
 
 
 def test_words_missing_from_the_end_are_interpolated_up_to_the_chunk_end() -> None:
     doc = build([row(0, "Alpha beta gamma.", 0, 3, chunk_words=words([" Alpha", " beta"]))])
     (segment,) = doc.segments
-    assert segment.text == "Alpha beta gamma." and (segment.start, segment.end) == (0.0, 3.0)
-    assert segment.words is not None and [(w.text, w.start, w.end) for w in segment.words] == [
+    assert segment.text == "Alpha beta gamma."
+    assert (segment.start, segment.end) == (0.0, 3.0)
+    assert segment.words is not None
+    assert [(w.text, w.start, w.end) for w in segment.words] == [
         ("Alpha", 0.0, 0.4),
         ("beta", 0.4, 0.8),
     ]
@@ -203,9 +222,11 @@ def test_one_dropped_word_mid_file_keeps_every_other_time_exact() -> None:
     timed = {w.text: (w.start, w.end) for s in doc.segments for w in s.words or ()}
     assert timed == {w.text.strip(): (w.start, w.end) for w in kept}
     first, second, third = doc.segments
-    assert first.flags == () and third.flags == ()
+    assert first.flags == ()
+    assert third.flags == ()
     assert [f.kind for f in second.flags] == ["timing_interpolated"]
-    assert second.words is not None and [w.text for w in second.words] == ["Then", "fell", "sharply."]
+    assert second.words is not None
+    assert [w.text for w in second.words] == ["Then", "fell", "sharply."]
     assert (second.start, second.end) == (ws[4].start, ws[7].end)
 
 
@@ -213,7 +234,8 @@ def test_words_that_match_nothing_still_fall_back_to_chunk_level_timing() -> Non
     text = "Alpha beta gamma. Delta epsilon."
     doc = build([row(0, text, 10.0, 20.0, chunk_words=words([" Something", " else"], 10.0))])
     first, second = doc.segments
-    assert first.words is None and second.words is None
+    assert first.words is None
+    assert second.words is None
     assert (first.start, second.end) == (10.0, 20.0)
     assert first.end == pytest.approx(10.0 + 10.0 * 15 / 28, abs=1e-3)
     assert all([f.kind for f in s.flags] == ["timing_interpolated"] for s in doc.segments)
@@ -230,8 +252,11 @@ def test_word_times_are_clamped_to_their_chunk() -> None:
         engine="w-vad",
     )
     one, three = doc.segments
-    assert one.words is not None and one.words[1].start == 10.0 and one.end == 10.0
-    assert three.words is not None and [(w.start, w.end) for w in three.words] == [(11.0, 11.5), (11.5, 12.0)]
+    assert one.words is not None
+    assert one.words[1].start == 10.0
+    assert one.end == 10.0
+    assert three.words is not None
+    assert [(w.start, w.end) for w in three.words] == [(11.0, 11.5), (11.5, 12.0)]
 
 
 def test_a_chapter_that_ends_before_it_starts_is_a_contract_error() -> None:
@@ -261,7 +286,8 @@ def test_mandarin_without_punctuation_is_cut_at_pauses_and_flagged_unpunctuated(
         meta=metadata(language="zh"),
     )
     assert [s.text for s in doc.segments] == ["今天我们聊聊财报", "营收增长很快", "估值也不低"]
-    assert doc.transcript.punctuation == "none" and doc.transcript.language == "zh"
+    assert doc.transcript.punctuation == "none"
+    assert doc.transcript.language == "zh"
     assert doc.transcript.script == "zh-Hans"
     assert all(s.words is not None for s in doc.segments)
 
@@ -451,7 +477,8 @@ def test_a_span_footnotes_only_the_words_inside_it() -> None:
     body = render_markdown(build([looped_row((3.0, 6.0))]))
     assert body.count("[^") == 2
     assert "Delta epsilon zeta.[^1]" in body
-    assert "gamma.[^" not in body and "iota.[^" not in body
+    assert "gamma.[^" not in body
+    assert "iota.[^" not in body
 
 
 def test_a_flag_covers_only_the_anomalous_chunks_part_of_a_shared_sentence() -> None:
@@ -473,7 +500,9 @@ def test_empty_chunks_are_counted_but_leave_no_segment() -> None:
 
 def test_a_silent_video_still_yields_a_valid_empty_document() -> None:
     doc = build([row(0, "", 0, 60)], meta=metadata(chapters=[Chapter("One", 0, 60)]))
-    assert doc.segments == () and doc.paragraphs == () and doc.chapters == ()
+    assert doc.segments == ()
+    assert doc.paragraphs == ()
+    assert doc.chapters == ()
     assert "no speech" in doc.quality.warnings[0]
     assert load_document(dump_document(doc)) == doc
     assert render_markdown(doc).startswith("# Synthetic title")
@@ -513,7 +542,8 @@ def test_chapters_can_be_turned_off() -> None:
         meta=metadata(chapters=[Chapter("A", 0.0, 3.0)]),
         chapters=False,
     )
-    assert doc.chapters == () and [s.chapter for s in doc.segments] == [None, None]
+    assert doc.chapters == ()
+    assert [s.chapter for s in doc.segments] == [None, None]
 
 
 def test_non_monotonic_word_starts_are_clamped_not_rejected() -> None:
@@ -524,7 +554,8 @@ def test_non_monotonic_word_starts_are_clamped_not_rejected() -> None:
     )
     doc = build([row(0, " One two. Three.", 0, 3, chunk_words=ws)])
     assert [s.start for s in doc.segments] == [1.0, 2.0]
-    assert doc.segments[0].words is not None and doc.segments[0].words[1].start == 1.0
+    assert doc.segments[0].words is not None
+    assert doc.segments[0].words[1].start == 1.0
 
 
 def test_language_comes_from_the_engine_else_the_declared_language_else_und() -> None:
@@ -541,18 +572,22 @@ def test_video_and_quality_fields() -> None:
     pieces = [" Hello", " there."]
     doc = build([row(0, "".join(pieces), 0, 4, chunk_words=words(pieces, 1.0, 0.5))])
     video = doc.source
-    assert isinstance(video, YouTubeSource) and video.access == ACCESS
+    assert isinstance(video, YouTubeSource)
+    assert video.access == ACCESS
     assert (video.id, video.url, video.title, video.channel) == (
         "synthVid001",
         "https://www.youtube.com/watch?v=synthVid001",
         "Synthetic title",
         "Synthetic channel",
     )
-    assert video.upload_date is not None and video.upload_date.isoformat() == "2030-01-01"
-    assert video.tags == ("synthetic",) and video.duration_s == 100.0
+    assert video.upload_date is not None
+    assert video.upload_date.isoformat() == "2030-01-01"
+    assert video.tags == ("synthetic",)
+    assert video.duration_s == 100.0
     assert doc.quality.transcribed_seconds == pytest.approx(1.0)
     assert doc.quality.speech_seconds == doc.quality.transcribed_seconds
-    assert doc.generator.name == "anyverbatim" and doc.created_at == NOW
+    assert doc.generator.name == "anyverbatim"
+    assert doc.created_at == NOW
 
 
 def test_an_unparseable_upload_date_becomes_none() -> None:
@@ -560,7 +595,8 @@ def test_an_unparseable_upload_date_becomes_none() -> None:
     bad = VideoMetadata(**{**meta.__dict__, "upload_date": "soon", "duration": None})
     doc = build([row(0, "Hi.", 0, 7, hypothesis="q-base")], engine="q-base", meta=bad)
     assert isinstance(doc.source, YouTubeSource)
-    assert doc.source.upload_date is None and doc.source.duration_s == 7.0
+    assert doc.source.upload_date is None
+    assert doc.source.duration_s == 7.0
 
 
 def test_the_library_surface_is_exported_lazily() -> None:
@@ -599,7 +635,8 @@ def test_configured_glossary_terms_come_before_the_tags_within_the_cap() -> None
 
     tags = tuple(f"tag{n}" for n in range(25))
     context = correction_context(metadata(), ("tag3", *tags), ("Acme", "tag3"))
-    assert context.glossary[:4] == ("Acme", "tag3", "tag0", "tag1") and len(context.glossary) == 20
+    assert context.glossary[:4] == ("Acme", "tag3", "tag0", "tag1")
+    assert len(context.glossary) == 20
     assert correction_context(metadata(), tags, ()).glossary == tags[:20]
 
 
@@ -629,7 +666,9 @@ def test_a_diarized_transcript_breaks_sentences_and_paragraphs_at_every_speaker_
     assert [(p.first_segment, p.speaker) for p in doc.paragraphs] == [(0, "S1"), (1, "S2"), (2, "S3")]
     assert [s.id for s in doc.speakers] == ["S1", "S2", "S3"]
     run = doc.transcript.diarization
-    assert run is not None and run.engine == "d-nemotron-8bit" and run.params["threshold"] == 0.5
+    assert run is not None
+    assert run.engine == "d-nemotron-8bit"
+    assert run.params["threshold"] == 0.5
 
 
 def test_a_text_stage_emptying_a_speaker_drops_it_without_renumbering_the_others() -> None:
@@ -661,7 +700,8 @@ def test_one_voice_is_one_listed_speaker_and_the_markdown_has_no_labels() -> Non
     spoken = words(THREE_VOICES)
     rows = [row(0, "".join(w.text for w in spoken), 0.0, 3.0, chunk_words=spoken)]
     doc = build(rows, diarized=diarized([(0.0, 2.8, 4)]))
-    assert [s.id for s in doc.speakers] == ["S1"] and {s.speaker for s in doc.segments} == {"S1"}
+    assert [s.id for s in doc.speakers] == ["S1"]
+    assert {s.speaker for s in doc.segments} == {"S1"}
     assert "Speaker" not in render_markdown(doc)
 
 
@@ -669,9 +709,11 @@ def test_a_diarizer_that_hears_nobody_leaves_the_transcript_unlabelled_with_a_wa
     spoken = words(THREE_VOICES)
     rows = [row(0, "".join(w.text for w in spoken), 0.0, 3.0, chunk_words=spoken)]
     source = from_asr_rows(rows, registry.get("w-prod"), "en", diarized([]))
-    assert source.diarization is None and source.assignment is None
+    assert source.diarization is None
+    assert source.assignment is None
     doc = assemble(source)
-    assert doc.speakers == () and doc.transcript.diarization is None
+    assert doc.speakers == ()
+    assert doc.transcript.diarization is None
     assert any("heard no speaker" in warning for warning in doc.quality.warnings)
 
 
@@ -681,13 +723,15 @@ def test_undiarized_stretches_and_transcripts_dump_exactly_as_before() -> None:
         [row(0, "".join(w.text for w in spoken), 0.0, 3.0, chunk_words=spoken)], registry.get("w-prod"), "en"
     )
     dumped = source.model_dump(mode="json")
-    assert "diarization" not in dumped and "assignment" not in dumped
+    assert "diarization" not in dumped
+    assert "assignment" not in dumped
     assert all("speaker" not in s and "language" not in s for s in dumped["stretches"])
 
     rows, voices = three_voices()
     attributed = from_asr_rows(rows, registry.get("w-prod"), "en", voices).model_dump(mode="json")
     assert [s["speaker"] for s in attributed["stretches"]] == ["S1", "S2", "S3"]
-    assert isinstance(attributed["assignment"], str) and attributed["diarization"]["engine"] == "d-nemotron-8bit"
+    assert isinstance(attributed["assignment"], str)
+    assert attributed["diarization"]["engine"] == "d-nemotron-8bit"
 
 
 def test_a_long_turn_repeats_its_label_on_each_paragraph_and_a_backchannel_is_its_own_line() -> None:

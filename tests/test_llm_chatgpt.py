@@ -191,7 +191,8 @@ def test_another_model_answering_is_refused(signed_in: list[str]) -> None:
 def test_a_completed_response_without_usage_is_refused(signed_in: list[str]) -> None:
     with pytest.raises(LLMUnavailableError, match="no token usage") as raised:
         client(stream(sse(completed([message("ok")], usage=None)))).complete(REQUEST)
-    assert raised.value.responded is True and raised.value.usage is None
+    assert raised.value.responded is True
+    assert raised.value.usage is None
 
 
 def test_a_failed_response_carries_its_code_and_is_not_retried(signed_in: list[str]) -> None:
@@ -207,7 +208,8 @@ def test_a_failed_response_carries_its_code_and_is_not_retried(signed_in: list[s
     with pytest.raises(LLMUnavailableError, match="server_is_overloaded") as raised:
         client(opener).complete(REQUEST)
     assert raised.value.code == "server_is_overloaded"
-    assert raised.value.responded is True and raised.value.usage == Usage(120, 45)
+    assert raised.value.responded is True
+    assert raised.value.usage == Usage(120, 45)
     assert raised.value.transient is True
     assert "secret server detail" not in str(raised.value)
     assert len(opener.requests) == 1
@@ -235,7 +237,8 @@ def test_an_incomplete_response_is_an_output_error_with_its_reason(signed_in: li
     with pytest.raises(LLMOutputError, match="max_output_tokens") as raised:
         client(stream(sse(incomplete))).complete(REQUEST)
     assert raised.value.code == "max_output_tokens"
-    assert raised.value.responded is True and raised.value.usage == Usage(120, 45)
+    assert raised.value.responded is True
+    assert raised.value.usage == Usage(120, 45)
 
 
 @pytest.mark.parametrize(
@@ -249,7 +252,8 @@ def test_an_error_event_raises_with_its_code(signed_in: list[str], event: dict[s
     with pytest.raises(LLMUnavailableError, match="rate_limit_exceeded") as raised:
         client(stream(sse(event))).complete(REQUEST)
     assert raised.value.code == "rate_limit_exceeded"
-    assert raised.value.responded is False and raised.value.usage is None
+    assert raised.value.responded is False
+    assert raised.value.usage is None
     assert raised.value.transient is False
 
 
@@ -265,7 +269,8 @@ def test_a_server_overload_error_event_is_transient(signed_in: list[str], event:
     with pytest.raises(LLMUnavailableError) as raised:
         client(stream(sse(event))).complete(REQUEST)
     assert raised.value.transient is True
-    assert raised.value.responded is False and raised.value.usage is None
+    assert raised.value.responded is False
+    assert raised.value.usage is None
 
 
 def test_a_stream_that_ends_without_completing_raises(signed_in: list[str]) -> None:
@@ -644,7 +649,8 @@ def test_a_lapsed_sign_in_signs_in_again_once_then_retries(monkeypatch: pytest.M
     signed_in: list[str] = []
     opener = stream(sse(completed([message("ok")])))
     assert reauth_client(opener, lambda: signed_in.append("browser")).complete(REQUEST).text == "ok"
-    assert signed_in == ["browser"] and tokens.calls == 2
+    assert signed_in == ["browser"]
+    assert tokens.calls == 2
     assert len(opener.requests) == 1
 
 
@@ -657,7 +663,9 @@ def test_a_second_failure_after_signing_in_again_raises_without_a_third_try(monk
     with pytest.raises(LLMUnavailableError, match="invalid_grant") as raised:
         chat.complete(REQUEST)
     assert raised.value.code == "invalid_grant"
-    assert signed_in == ["browser"] and tokens.calls == 2 and opener.requests == []
+    assert signed_in == ["browser"]
+    assert tokens.calls == 2
+    assert opener.requests == []
     with pytest.raises(LLMUnavailableError):
         chat.complete(REQUEST)
     assert signed_in == ["browser"], "a failed sign-in is not reopened on every later call"
@@ -703,7 +711,9 @@ def test_a_401_signs_in_again_once_and_resends(monkeypatch: pytest.MonkeyPatch) 
     signed_in: list[str] = []
     opener = responses(http_error(401, {"error": {"code": "invalid_token"}}), ok_stream)
     assert reauth_client(opener, lambda: signed_in.append("browser")).complete(REQUEST).text == "ok"
-    assert signed_in == ["browser"] and len(opener.requests) == 2 and tokens.calls == 2
+    assert signed_in == ["browser"]
+    assert len(opener.requests) == 2
+    assert tokens.calls == 2
 
 
 def test_a_second_401_is_not_answered_again(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -712,7 +722,8 @@ def test_a_second_401_is_not_answered_again(monkeypatch: pytest.MonkeyPatch) -> 
     opener = responses(http_error(401), http_error(401))
     with pytest.raises(LLMUnavailableError, match="anyverbatim login"):
         reauth_client(opener, lambda: signed_in.append("browser")).complete(REQUEST)
-    assert signed_in == ["browser"] and len(opener.requests) == 2
+    assert signed_in == ["browser"]
+    assert len(opener.requests) == 2
 
 
 def test_a_401_without_reauth_keeps_the_login_hint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -739,7 +750,8 @@ def test_a_sign_in_before_the_request_does_not_spend_its_deadline(monkeypatch: p
         reauth=slow_browser,
     )
     response = chat.complete(REQUEST)
-    assert response.text == "ok" and response.elapsed_s < 900.0
+    assert response.text == "ok"
+    assert response.elapsed_s < 900.0
 
 
 def test_a_401_waits_for_a_sign_in_another_thread_is_running(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -786,7 +798,8 @@ def test_threads_sharing_a_client_sign_in_once(monkeypatch: pytest.MonkeyPatch) 
         thread.start()
     for thread in threads:
         thread.join(5)
-    assert errors == [] and texts == ["ok", "ok"]
+    assert errors == []
+    assert texts == ["ok", "ok"]
     assert sign_ins == ["browser"]
 
 

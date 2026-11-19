@@ -48,7 +48,8 @@ def test_a_cooldown_refuses_before_any_request(session_kit, yt) -> None:
     with pytest.raises(BatchStopError) as stopped:
         session.expand(LIST_URL)
     assert stopped.value.signal is Signal.BOT_CHECK
-    assert stopped.value.fix and "Wait until" in stopped.value.fix
+    assert stopped.value.fix
+    assert "Wait until" in stopped.value.fix
     assert yt.calls == []
 
 
@@ -77,27 +78,31 @@ def test_limit_becomes_playlist_end(session_kit, yt) -> None:
 def test_a_public_playlist_is_listed_anonymously(session_kit, yt) -> None:
     yt.playlist = ["aaaaaaaaaaa"]
     session.expand(LIST_URL, auth=COOKIE_FILE)
-    assert yt.calls[0].cookies is None and session_kit.snapshots.taken == []
+    assert yt.calls[0].cookies is None
+    assert session_kit.snapshots.taken == []
 
 
 def test_a_members_playlist_is_listed_with_a_cookie_snapshot(session_kit, yt) -> None:
     yt.playlist = ["aaaaaaaaaaa"]
     assert session.expand(MEMBERS_URL, auth=COOKIE_FILE) == ["aaaaaaaaaaa"]
-    assert yt.calls[0].cookies is not None and len(session_kit.snapshots.taken) == 1
+    assert yt.calls[0].cookies is not None
+    assert len(session_kit.snapshots.taken) == 1
     assert not Path(session_kit.snapshots.taken[0]).exists(), "the snapshot is deleted once listed"
 
 
 def test_a_members_playlist_without_a_source_is_refused_not_listed_anonymously(session_kit, yt) -> None:
     with pytest.raises(AuthError) as refused:
         session.expand(MEMBERS_URL)
-    assert refused.value.state is AuthState.NO_SOURCE and "auth use" in refused.value.fix
+    assert refused.value.state is AuthState.NO_SOURCE
+    assert "auth use" in refused.value.fix
     assert yt.calls == []
 
 
 def test_policy_always_without_a_source_is_refused(session_kit, yt) -> None:
     with pytest.raises(AuthError) as refused:
         session.expand(LIST_URL, options=options(policy="always"))
-    assert refused.value.state is AuthState.NO_SOURCE and refused.value.fix
+    assert refused.value.state is AuthState.NO_SOURCE
+    assert refused.value.fix
     assert yt.calls == []
 
 
@@ -112,14 +117,16 @@ def test_a_failing_cookie_snapshot_raises_with_a_fix_and_never_falls_back_to_ano
     monkeypatch.setattr(snapshot, "cookie_snapshot", denied)
     with pytest.raises(AuthError) as failed:
         session.expand(MEMBERS_URL, auth=COOKIE_FILE)
-    assert failed.value.state is AuthState.COOKIE_FILE_INVALID and "Netscape" in failed.value.fix
+    assert failed.value.state is AuthState.COOKIE_FILE_INVALID
+    assert "Netscape" in failed.value.fix
     assert yt.calls == []
 
 
 def test_policy_never_lists_a_members_playlist_anonymously(session_kit, yt) -> None:
     yt.playlist = ["aaaaaaaaaaa"]
     session.expand(MEMBERS_URL, auth=COOKIE_FILE, options=options(policy="never"))
-    assert yt.calls[0].cookies is None and session_kit.snapshots.taken == []
+    assert yt.calls[0].cookies is None
+    assert session_kit.snapshots.taken == []
 
 
 def test_a_cookie_channel_is_still_listed_anonymously(session_kit, yt) -> None:
@@ -132,9 +139,12 @@ def test_a_bot_check_writes_the_cooldown_and_raises(session_kit, yt) -> None:
     yt.failures[("expand", False)] = [session_kit.fail(Signal.BOT_CHECK)]
     with pytest.raises(BatchStopError) as stopped:
         session.expand(LIST_URL)
-    assert stopped.value.signal is Signal.BOT_CHECK and "Do not add cookies" in stopped.value.fix
+    assert stopped.value.signal is Signal.BOT_CHECK
+    assert "Do not add cookies" in stopped.value.fix
     cooldown = read_cooldown()
-    assert cooldown is not None and cooldown.signal is Signal.BOT_CHECK and cooldown.active(utcnow())
+    assert cooldown is not None
+    assert cooldown.signal is Signal.BOT_CHECK
+    assert cooldown.active(utcnow())
     with pytest.raises(BatchStopError):
         session.expand(LIST_URL)
     assert len(yt.calls) == 1, "the second call is refused before any request"
@@ -145,16 +155,19 @@ def test_a_stop_signal_on_a_successful_listing_also_raises(session_kit, yt) -> N
     yt.secondary[("expand", False)] = (Signal.RATE_LIMITED,)
     with pytest.raises(BatchStopError) as stopped:
         session.expand(LIST_URL)
-    assert stopped.value.signal is Signal.RATE_LIMITED and stopped.value.fix
+    assert stopped.value.signal is Signal.RATE_LIMITED
+    assert stopped.value.fix
     cooldown = read_cooldown()
-    assert cooldown is not None and cooldown.active(utcnow())
+    assert cooldown is not None
+    assert cooldown.active(utcnow())
 
 
 def test_a_failed_listing_raises_with_a_fix(session_kit, yt) -> None:
     yt.failures[("expand", False)] = [session_kit.fail(Signal.PRIVATE)]
     with pytest.raises(YtDlpError) as failed:
         session.expand(LIST_URL)
-    assert failed.value.primary is Signal.PRIVATE and "Private" in failed.value.fix
+    assert failed.value.primary is Signal.PRIVATE
+    assert "Private" in failed.value.fix
     assert not paths.cooldown_file().exists()
 
 

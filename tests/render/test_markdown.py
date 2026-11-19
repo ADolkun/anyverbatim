@@ -230,7 +230,8 @@ def recording(**fields: object) -> dict[str, object]:
 def test_a_recording_has_plain_timestamps_and_no_links(make_doc, seg) -> None:
     doc = make_doc([seg("one", 5.0, 6.0, chapter=0)], chapters={0: "First"}, source=recording())
     body = render_markdown(doc)
-    assert "## [00:05] First" in body and "[00:05] one" in body
+    assert "## [00:05] First" in body
+    assert "[00:05] one" in body
     assert "youtu" not in body
 
 
@@ -320,7 +321,8 @@ def test_ids_that_all_share_one_name_get_no_labels(make_doc, seg) -> None:
         speakers={"S1": ("Alice", 1.0), "S2": ("Alice", 1.0)},
     )
     body = render_markdown(doc)
-    assert "Alice" not in body and "Speakers" not in body
+    assert "Alice" not in body
+    assert "Speakers" not in body
     assert "[00:00] Hi. Hello." in body
 
 
@@ -331,7 +333,8 @@ def test_names_are_escaped(make_doc, seg) -> None:
         speakers={"S1": ("*Al*", 1.0), "S2": (None, 1.0)},
     )
     body = render_markdown(doc)
-    assert "[00:00] **\\*Al\\*:** Hi." in body and "Speakers: \\*Al\\* (50%) · Speaker 2 (50%)" in body
+    assert "[00:00] **\\*Al\\*:** Hi." in body
+    assert "Speakers: \\*Al\\* (50%) · Speaker 2 (50%)" in body
 
 
 def test_overlapping_speech_stays_in_the_json(make_doc, seg, flag) -> None:
@@ -341,7 +344,9 @@ def test_overlapping_speech_stays_in_the_json(make_doc, seg, flag) -> None:
         [seg(text, 0.0, 2.0, flags=[overlap], speaker="S1")], source=recording(), speakers={"S1": (None, 2.0)}
     )
     body = render_markdown(doc)
-    assert "overlapping" not in body and "[^" not in body and "0 flags" in body
+    assert "overlapping" not in body
+    assert "[^" not in body
+    assert "0 flags" in body
     assert doc.segments[0].flags == (overlap,)
 
 
@@ -362,8 +367,10 @@ def test_timing_interpolated_stays_in_the_json(make_doc, seg, flag) -> None:
     disputed = flag("numeric_disputed", text, "12", note="heard 20")
     doc = make_doc([seg(text, 0.0, 2.0, flags=[timing, disputed])])
     body = render_markdown(doc)
-    assert "timing_interpolated" not in body and "interpolated" not in body
-    assert "Prices rose 12[^1] today" in body and "1 flag" in body
+    assert "timing_interpolated" not in body
+    assert "interpolated" not in body
+    assert "Prices rose 12[^1] today" in body
+    assert "1 flag" in body
     assert doc.segments[0].flags == (timing, disputed)
 
 
@@ -401,7 +408,8 @@ def test_a_numeric_fix_in_digits_shows_the_figure_it_replaced(make_doc, seg, fla
     edits = [Edit(stage="numeric", before="35", after="50", llm=None)]
     flags = [flag("numeric_fixed", text, "50个百分点", note="三十五个百分点 → 五十个百分点")]
     body = render_markdown(make_doc([seg(text, 0.0, 2.0, flags=flags, edits=edits)]))
-    assert "50个百分点[^1]" in body and "; was 35" in body
+    assert "50个百分点[^1]" in body
+    assert "; was 35" in body
 
 
 def test_an_edit_outside_the_flagged_span_shows_no_before_text(make_doc, seg, flag) -> None:

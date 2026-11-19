@@ -217,7 +217,8 @@ def test_round_trip_is_stable() -> None:
 
 def test_a_recording_round_trips() -> None:
     doc = ContextDocument.model_validate(make_recording())
-    assert isinstance(doc.source, RecordingSource) and doc.source.recorded_at is not None
+    assert isinstance(doc.source, RecordingSource)
+    assert doc.source.recorded_at is not None
     assert [s.speaker for s in doc.segments] == ["S1", "S2", "S1"]
     text = dump_document(doc)
     assert load_document(text) == doc
@@ -635,7 +636,8 @@ def test_a_later_speaker_id_may_speak_first() -> None:
     _renumber(raw, "S1", "S5")
     raw["speakers"].reverse()
     doc = ContextDocument.model_validate(raw)
-    assert [s.id for s in doc.speakers] == ["S2", "S5"] and doc.segments[0].speaker == "S5"
+    assert [s.id for s in doc.speakers] == ["S2", "S5"]
+    assert doc.segments[0].speaker == "S5"
 
 
 def test_speaker_ids_may_skip_numbers() -> None:
@@ -738,13 +740,17 @@ def test_a_1_0_document_is_upgraded() -> None:
     doc = load_document(V1_0_FIXTURE)
     assert doc.schema_version == SCHEMA_VERSION == "2.0"
     source = youtube(doc)
-    assert source.creator_note is None and source.id == "AAAAAAAAAAA"
+    assert source.creator_note is None
+    assert source.id == "AAAAAAAAAAA"
     assert source.access.availability == "public"
-    assert doc.speakers == () and doc.transcript.diarization is None
+    assert doc.speakers == ()
+    assert doc.transcript.diarization is None
     assert doc.transcript.languages == (doc.transcript.language,)
-    assert all(s.speaker is None for s in doc.segments) and all(p.speaker is None for p in doc.paragraphs)
+    assert all(s.speaker is None for s in doc.segments)
+    assert all(p.speaker is None for p in doc.paragraphs)
     dumped = json.loads(dump_document(doc))
-    assert "video" not in dumped and "access" not in dumped
+    assert "video" not in dumped
+    assert "access" not in dumped
     assert dumped["source"]["creator_note"] is None
     assert doc.segments[1].text == "Today we cover NVDA at 150 dollars."
 

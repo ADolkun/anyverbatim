@@ -126,7 +126,8 @@ def test_a_1_1_run_is_upgraded_by_rebuilding_only_the_context_record(out: Path, 
     before = {name: key for name, key in stage_keys(vdir).items() if name != "context"}
     llm = FakeLLM()
     result = run(video_id, out, llm, RefusingYtDlp())
-    assert result.document is not None and result.document.schema_version == "2.0"
+    assert result.document is not None
+    assert result.document.schema_version == "2.0"
     assert result.outcome.reused != ("context",)
     timings = {t.stage: t.reused for t in result.timings if t.stage not in ("fetch", "write")}
     assert timings == dict.fromkeys(STAGES[video_id], True)

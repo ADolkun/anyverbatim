@@ -125,7 +125,9 @@ def test_session_hides_engines_and_keeps_the_key_apart(pair: tuple[Layout, objec
     shown, key = build_session(layout, manifest, "w-prod", "q-base", n=20, seed=4)  # type: ignore[arg-type]
     assert write_session(layout, "main", shown, key)
     text = (layout.session_dir("main") / SPANS_FILE).read_text(encoding="utf-8")
-    assert "w-prod" not in text and "q-base" not in text and "challenger" not in text
+    assert "w-prod" not in text
+    assert "q-base" not in text
+    assert "challenger" not in text
     assert load_key(layout.session_dir("main")).control == "w-prod"
     for item, entry in zip(shown, key.entries, strict=True):
         assert item.id == entry.id

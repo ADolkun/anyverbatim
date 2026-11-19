@@ -247,7 +247,8 @@ NATIVE = CANDIDATES["o-gpt61-medium"]
 
 def test_the_native_candidate_runs_on_the_chatgpt_provider_under_its_own_identity() -> None:
     assert (NATIVE.model, NATIVE.effort, NATIVE.provider) == ("gpt-6.1-sol", "medium", "chatgpt")
-    assert not NATIVE.external and not NATIVE.local
+    assert not NATIVE.external
+    assert not NATIVE.local
     assert NATIVE.client_id == "chatgpt:gpt-6.1-sol@medium" == ChatGPTClient(model="gpt-6.1-sol", effort="medium").id
     assert NATIVE.client_id != MEDIUM.client_id
     with pytest.raises(ConfigError, match="no local weights"):

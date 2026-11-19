@@ -39,7 +39,8 @@ def test_the_download_asks_for_the_video_track_only_as_mp4(fakes, tmp_path: Path
         runner, VIDEO_ID, stage_dir, out_dir, expected_duration=600.0, cookies=cookies, timeout_s=99.0
     )
 
-    assert path == out_dir / "video.mp4" and video.VIDEO_NAME == "video.mp4"
+    assert path == out_dir / "video.mp4"
+    assert video.VIDEO_NAME == "video.mp4"
     (call,) = runner.calls
     assert call.args == [
         "--load-info-json",
@@ -86,7 +87,8 @@ def test_an_earlier_file_is_removed_so_yt_dlp_does_not_skip_the_download(fakes, 
 
     assert existed == [False]
     assert (out_dir / "video.mp4").stat().st_size == 500
-    assert not (out_dir / "video.webm").exists() and (out_dir / "audio.webm").exists()
+    assert not (out_dir / "video.webm").exists()
+    assert (out_dir / "audio.webm").exists()
 
 
 def test_a_truncated_download_is_deleted_and_raises(fakes, tmp_path: Path, fake_proc) -> None:

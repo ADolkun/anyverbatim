@@ -78,7 +78,8 @@ def test_login_signs_in_when_the_session_needs_it(
     result = CliRunner().invoke(main, ["login"])
     assert result.exit_code == 0, result.output
     assert login.calls == [False]
-    assert "https://auth.openai.com/api/accounts/authorize" in result.output and len(opened) == 1
+    assert "https://auth.openai.com/api/accounts/authorize" in result.output
+    assert len(opened) == 1
     assert f"chatgpt: signed in as {EMAIL}" in result.output
 
 
@@ -103,7 +104,8 @@ def test_login_failures_are_reported(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(chatgpt_auth, "login", fail)
     result = CliRunner().invoke(main, ["login", "--no-browser"])
-    assert result.exit_code == 1 and "sign-in timed out" in result.output
+    assert result.exit_code == 1
+    assert "sign-in timed out" in result.output
 
 
 @pytest.mark.parametrize(

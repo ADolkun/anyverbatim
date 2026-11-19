@@ -335,4 +335,5 @@ def test_p4_display_never_raises() -> None:
 
 @pytest.mark.parametrize("text", ["", "大家好，今天聊聊估值。", "NVDA rose 3.5% to $150", "1,500手和2026年"])
 def test_p5_text_without_chinese_numerals_comes_back_unchanged(text: str) -> None:
-    assert conversions(text) == [] and display(text) == text
+    assert conversions(text) == []
+    assert display(text) == text

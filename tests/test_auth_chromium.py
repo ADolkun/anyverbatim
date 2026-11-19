@@ -58,7 +58,8 @@ def test_list_profiles_reads_local_state_without_emails(root: Path) -> None:
     assert default.active_time == datetime.fromtimestamp(1_700_000_000.5, UTC)
     assert default.cookie_db == legacy
     assert work.cookie_db == network
-    assert work.last_used and not default.last_used
+    assert work.last_used
+    assert not default.last_used
     assert guest.cookie_db is None
     assert guest.active_time is None
     assert all(p.email is None for p in profiles)
@@ -162,7 +163,8 @@ def test_pin_holds_only_a_symlink_and_is_idempotent(root: Path) -> None:
     assert stat.S_IMODE(pin.stat().st_mode) == 0o700
     assert [entry.name for entry in pin.iterdir()] == ["Cookies"]
     link = pin / "Cookies"
-    assert link.is_symlink() and link.readlink() == store.resolve()
+    assert link.is_symlink()
+    assert link.readlink() == store.resolve()
     inode = link.lstat().st_ino
 
     assert chromium.pin_cookie_db(store) == pin

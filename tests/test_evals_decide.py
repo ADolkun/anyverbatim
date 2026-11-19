@@ -181,10 +181,13 @@ def test_the_report_and_results_hold_no_transcript_text_or_ids(tmp_path: Path, m
     han = {run for text in sources for run in re.findall(r"[一-鿿]{2,}", text)}
     words = {w for text in sources for w in text.split() if len(w) > 3}
     for text in texts:
-        assert ZH not in text and EN not in text and "Example title" not in text
+        assert ZH not in text
+        assert EN not in text
+        assert "Example title" not in text
         assert not any(run in text for run in han)
         assert not any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
-        assert "zh-01" in text and "en-01" in text
+        assert "zh-01" in text
+        assert "en-01" in text
 
 
 def test_skips_count_as_undecided_until_revisited(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,14 +211,18 @@ def test_skips_count_as_undecided_until_revisited(tmp_path: Path, monkeypatch: p
     for entry in rest[:-1]:
         log(entry.id, "1")
     partial = build_report(layout, manifest, screen, "main", "t")
-    assert partial.ab is not None and partial.ab.undecided == 2 and partial.ab.answered == len(key.entries) - 2
+    assert partial.ab is not None
+    assert partial.ab.undecided == 2
+    assert partial.ab.answered == len(key.entries) - 2
     with pytest.raises(ConfigError, match="2 of 6 spans without a decision"):
         run_asr.write_decision(partial, tmp_path / "results", "2025-01-01")
 
     log(rest[-1].id, "2")
     log(first.id, "both")
     complete = build_report(layout, manifest, screen, "main", "t")
-    assert complete.ab is not None and complete.ab.undecided == 0 and complete.ab.overall.skipped == 0
+    assert complete.ab is not None
+    assert complete.ab.undecided == 0
+    assert complete.ab.overall.skipped == 0
     run_asr.write_decision(complete, tmp_path / "results", "2025-01-01")
 
 

@@ -105,7 +105,8 @@ def test_login_registers_this_host_exchanges_the_code_and_stores_the_account(sta
     query = browser.query
     redirect = urllib.parse.urlsplit(query["redirect_uri"])
     assert (redirect.scheme, redirect.hostname, redirect.path) == ("http", "127.0.0.1", "/auth/callback")
-    assert redirect.port is not None and redirect.port > 0
+    assert redirect.port is not None
+    assert redirect.port > 0
     assert query["client_id"] == "dynamic_agent_client"
     assert query["agent_name_hint"] == "anyverbatim"
     assert query["ext_agent_host_id"].startswith("urn:uuid:")
@@ -113,7 +114,9 @@ def test_login_registers_this_host_exchanges_the_code_and_stores_the_account(sta
     assert query["resource"] == "https://api.openai.com/v1"
     assert query["scope"] == "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
     assert query["code_challenge_method"] == "S256"
-    assert query["state"] and query["nonce"] and query["state"] != query["nonce"]
+    assert query["state"]
+    assert query["nonce"]
+    assert query["state"] != query["nonce"]
     assert "prompt" not in query
     assert "login_hint" not in query, "nothing is stored before the first sign-in"
     assert browser.statuses == [200]
@@ -134,7 +137,8 @@ def test_login_registers_this_host_exchanges_the_code_and_stores_the_account(sta
     state = stored_state()
     assert state.host_id == query["ext_agent_host_id"]
     assert state.client_id == CLIENT_ID
-    assert state.account is not None and state.account.access_token == "access-1"
+    assert state.account is not None
+    assert state.account.access_token == "access-1"
     assert state.account.expires_at == NOW + 3600
     assert chatgpt_auth.status(clock=lambda: NOW) == "ready"
     assert stat.S_IMODE(state_dir.stat().st_mode) == 0o700
@@ -194,7 +198,8 @@ def test_a_denied_sign_in_keeps_the_stored_account() -> None:
         login(browser, FakeOpener())
     assert raised.value.code == "access_denied"
     account = stored_state().account
-    assert account is not None and account.access_token == "access-1"
+    assert account is not None
+    assert account.access_token == "access-1"
 
 
 def test_a_first_sign_in_without_an_assigned_client_id_is_refused() -> None:
@@ -331,7 +336,8 @@ def test_a_refresh_without_a_new_refresh_token_is_refused_and_keeps_the_old_one(
         chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
     assert raised.value.code == "invalid_credentials"
     account = stored_state().account
-    assert account is not None and account.refresh_token == "refresh-1"
+    assert account is not None
+    assert account.refresh_token == "refresh-1"
 
 
 @pytest.mark.parametrize("code", ["invalid_grant", "refresh_token_reused", "refresh_token_expired"])
@@ -340,7 +346,8 @@ def test_a_terminal_refresh_error_keeps_the_stored_sign_in(code: str) -> None:
     opener = FakeOpener({f"POST {TOKEN_URL}": http_error(400, {"error": code, "error_description": "secret detail"})})
     with pytest.raises(ChatGPTAuthError, match="anyverbatim login") as raised:
         chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
-    assert raised.value.code == code and raised.value.needs_sign_in
+    assert raised.value.code == code
+    assert raised.value.needs_sign_in
     assert "secret detail" not in str(raised.value)
     assert stored.account is not None
     assert stored_state() == dataclasses.replace(
@@ -355,7 +362,8 @@ def test_a_transient_refresh_failure_keeps_the_tokens() -> None:
         chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
     assert raised.value.code == "request_failed"
     account = stored_state().account
-    assert account is not None and account.refresh_token == "refresh-1"
+    assert account is not None
+    assert account.refresh_token == "refresh-1"
 
 
 def test_earliest_refresh_at_holds_off_a_refresh_while_the_token_still_works() -> None:
@@ -388,7 +396,8 @@ def test_logout_revokes_at_the_discovered_endpoint_and_clears_the_tokens() -> No
     (revoke,) = opener.to(REVOKE_URL)
     assert form(revoke) == {"token": "refresh-1", "token_type_hint": "refresh_token", "client_id": CLIENT_ID}
     state = stored_state()
-    assert state.account is not None and state.account.access_token == ""
+    assert state.account is not None
+    assert state.account.access_token == ""
     assert state.client_id == CLIENT_ID
     assert chatgpt_auth.status() == "signed_out"
 
@@ -406,7 +415,9 @@ def test_an_unconfirmed_revocation_still_clears_the_tokens(routes: dict[str, Rou
     opener = FakeOpener(routes)
     assert chatgpt_auth.logout(opener=opener) == "unconfirmed"
     account = stored_state().account
-    assert account is not None and account.access_token == "" and account.refresh_token == ""
+    assert account is not None
+    assert account.access_token == ""
+    assert account.refresh_token == ""
 
 
 def test_logout_says_when_there_was_nothing_to_revoke() -> None:
@@ -428,7 +439,8 @@ def test_a_revocation_response_cut_off_mid_body_still_clears_the_tokens() -> Non
     opener = FakeOpener({f"GET {DISCOVERY_URL}": json_response(DISCOVERY), f"POST {REVOKE_URL}": truncated})
     assert chatgpt_auth.logout(opener=opener) == "unconfirmed"
     account = stored_state().account
-    assert account is not None and account.access_token == account.refresh_token == ""
+    assert account is not None
+    assert account.access_token == account.refresh_token == ""
 
 
 def test_the_store_never_holds_more_than_one_account() -> None:
@@ -474,10 +486,14 @@ def test_invalid_grant_on_a_first_registration_reauthorizes_once_under_the_issue
 
     login(browsers, FakeOpener({f"POST {TOKEN_URL}": token}))  # type: ignore[arg-type]
     first, second = (b.query for b in browsers.rounds)
-    assert first["client_id"] == "dynamic_agent_client" and "agent_name_hint" in first
-    assert second["client_id"] == CLIENT_ID and "agent_name_hint" not in second
-    assert first["state"] != second["state"] and first["nonce"] != second["nonce"]
-    assert first["code_challenge"] != second["code_challenge"] and calls[0] != calls[1]
+    assert first["client_id"] == "dynamic_agent_client"
+    assert "agent_name_hint" in first
+    assert second["client_id"] == CLIENT_ID
+    assert "agent_name_hint" not in second
+    assert first["state"] != second["state"]
+    assert first["nonce"] != second["nonce"]
+    assert first["code_challenge"] != second["code_challenge"]
+    assert calls[0] != calls[1]
     assert chatgpt_auth.status(clock=lambda: NOW) == "ready"
 
 
@@ -487,7 +503,8 @@ def test_a_second_invalid_grant_is_not_retried_again() -> None:
     with pytest.raises(ChatGPTAuthError) as raised:
         login(browsers, opener)  # type: ignore[arg-type]
     assert raised.value.code == "invalid_grant"
-    assert len(browsers.rounds) == 2 and len(opener.requests) == 2
+    assert len(browsers.rounds) == 2
+    assert len(opener.requests) == 2
 
 
 def test_the_issued_client_id_is_kept_when_the_first_exchange_fails() -> None:
@@ -496,7 +513,8 @@ def test_the_issued_client_id_is_kept_when_the_first_exchange_fails() -> None:
         login(browser, FakeOpener({f"POST {TOKEN_URL}": http_error(503)}))
     assert raised.value.code == "request_failed"
     state = stored_state()
-    assert state.client_id == CLIENT_ID and state.account is None
+    assert state.client_id == CLIENT_ID
+    assert state.account is None
 
     again = Browser(lambda query: [{"code": "auth-code", "state": query["state"]}])
     login(again, token_endpoint(again))
@@ -544,7 +562,8 @@ def test_a_refresh_refused_for_its_client_forgets_only_the_client() -> None:
     assert chatgpt_auth.status(clock=lambda: NOW + 180) == "expired"
     with pytest.raises(ChatGPTAuthError) as raised:
         chatgpt_auth.access_token(opener=opener, clock=lambda: NOW + 180)
-    assert raised.value.code == "expired" and raised.value.needs_sign_in
+    assert raised.value.code == "expired"
+    assert raised.value.needs_sign_in
     assert stored_state().account == stored.account
 
 
@@ -563,7 +582,8 @@ def test_a_failed_refresh_with_time_left_returns_the_current_token(route: Route)
     assert chatgpt_auth.access_token(opener=opener, clock=lambda: NOW) == "access-1"
     assert len(opener.requests) == 1
     account = stored_state().account
-    assert account is not None and account.refresh_token == "refresh-1"
+    assert account is not None
+    assert account.refresh_token == "refresh-1"
 
 
 def test_a_failed_refresh_raises_once_the_token_is_nearly_gone() -> None:
@@ -571,7 +591,8 @@ def test_a_failed_refresh_raises_once_the_token_is_nearly_gone() -> None:
     opener = FakeOpener({f"POST {TOKEN_URL}": http_error(503)})
     with pytest.raises(ChatGPTAuthError) as raised:
         chatgpt_auth.access_token(opener=opener, clock=lambda: NOW)
-    assert raised.value.code == "request_failed" and not raised.value.needs_sign_in
+    assert raised.value.code == "request_failed"
+    assert not raised.value.needs_sign_in
 
 
 NEW_CLIENT = "app_new_client"
@@ -603,7 +624,8 @@ def test_an_exchange_refused_for_its_client_registers_afresh_within_one_login() 
     login(browsers, scripted_token_endpoint(browsers, "invalid_client", None))  # type: ignore[arg-type]
     first, second = (b.query for b in browsers.rounds)
     assert first["client_id"] == CLIENT_ID
-    assert second["client_id"] == chatgpt_auth.DYNAMIC_CLIENT and second["agent_name_hint"] == "anyverbatim"
+    assert second["client_id"] == chatgpt_auth.DYNAMIC_CLIENT
+    assert second["agent_name_hint"] == "anyverbatim"
     assert stored_state().client_id == NEW_CLIENT
     assert chatgpt_auth.status(clock=lambda: NOW) == "ready"
 
@@ -638,7 +660,9 @@ def test_logout_clears_the_tokens_even_when_revocation_fails_unexpectedly() -> N
     with pytest.raises(RuntimeError):
         chatgpt_auth.logout(opener=opener)
     account = stored_state().account
-    assert account is not None and account.access_token == "" and account.refresh_token == ""
+    assert account is not None
+    assert account.access_token == ""
+    assert account.refresh_token == ""
 
 
 def test_a_signed_out_account_still_hints_its_email_and_no_email_means_no_hint() -> None:
@@ -745,8 +769,10 @@ def test_interactive_login_says_why_prints_the_url_and_opens_the_browser(
     assert chatgpt_auth.interactive_login("ChatGPT sign-in lapsed").plan
     err = capsys.readouterr().err
     assert err.startswith("ChatGPT sign-in lapsed; opening the browser to sign in again (waiting up to 5 minutes)\n")
-    assert url in err and opened == [url]
-    assert "access-" not in err and "refresh-" not in err
+    assert url in err
+    assert opened == [url]
+    assert "access-" not in err
+    assert "refresh-" not in err
 
 
 def test_switch_shows_the_account_chooser_and_replaces_the_account_only_once_verified() -> None:
@@ -758,7 +784,8 @@ def test_switch_shows_the_account_chooser_and_replaces_the_account_only_once_ver
     assert "login_hint" not in browser.query
     assert result.email == "other@example.com"
     account = stored_state().account
-    assert account is not None and account.subject == "another-subject"
+    assert account is not None
+    assert account.subject == "another-subject"
 
 
 def test_a_failed_switch_keeps_the_current_account() -> None:
@@ -776,14 +803,16 @@ def test_a_refused_refresh_token_is_marked_and_never_sent_again() -> None:
         assert chatgpt_auth.access_token(opener=opener, clock=lambda: NOW) == "access-1"
     assert len(opener.requests) == 1, "the refused token is sent once, not on every call"
     account = stored_state().account
-    assert account is not None and account.refresh_refused
+    assert account is not None
+    assert account.refresh_refused
     assert (account.access_token, account.refresh_token) == ("access-1", "refresh-1")
     assert chatgpt_auth.session(clock=lambda: NOW).status == "refused"
     assert not chatgpt_auth.session(clock=lambda: NOW).usable
     assert chatgpt_auth.status(clock=lambda: NOW + 180) == "expired"
     with pytest.raises(ChatGPTAuthError) as raised:
         chatgpt_auth.access_token(opener=opener, clock=lambda: NOW + 180)
-    assert raised.value.code == "expired" and raised.value.needs_sign_in
+    assert raised.value.code == "expired"
+    assert raised.value.needs_sign_in
     assert len(opener.requests) == 1
 
 
@@ -793,7 +822,8 @@ def test_a_new_sign_in_clears_the_refusal_and_hints_the_account() -> None:
     login(browser, token_endpoint(browser))
     assert browser.query["login_hint"] == EMAIL
     account = stored_state().account
-    assert account is not None and not account.refresh_refused
+    assert account is not None
+    assert not account.refresh_refused
     assert chatgpt_auth.status(clock=lambda: NOW) == "ready"
 
 
@@ -804,7 +834,8 @@ def test_a_store_written_before_the_refusal_marker_reads_it_as_false() -> None:
     del raw["account"]["refresh_refused"]
     path.write_text(json.dumps(raw), encoding="utf-8")
     account = stored_state().account
-    assert account is not None and not account.refresh_refused
+    assert account is not None
+    assert not account.refresh_refused
     raw["account"]["refresh_refused"] = "yes"
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ChatGPTAuthError) as raised:
@@ -839,4 +870,5 @@ def test_logout_without_a_registration_says_the_refresh_token_was_not_revoked() 
     assert chatgpt_auth.logout(opener=opener) == "unregistered"
     assert opener.requests == []
     account = stored_state().account
-    assert account is not None and account.access_token == account.refresh_token == ""
+    assert account is not None
+    assert account.access_token == account.refresh_token == ""

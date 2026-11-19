@@ -203,7 +203,8 @@ def test_guard_names_a_lowercased_letter() -> None:
 def test_the_prompt_forbids_touching_punctuation_at_numbers(tmp_path: Path) -> None:
     client = FakeClient([reply((0, "Hello, everyone."))])
     run(["hello everyone"], client, tmp_path, "en")
-    assert "next to a number" in client.requests[0].system and "Never lowercase" in client.requests[0].system
+    assert "next to a number" in client.requests[0].system
+    assert "Never lowercase" in client.requests[0].system
 
 
 def test_guard_diff_names_the_change() -> None:

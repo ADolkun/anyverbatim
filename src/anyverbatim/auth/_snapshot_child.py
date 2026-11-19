@@ -22,15 +22,15 @@ from anyverbatim.ytdlp.runner import redact
 
 _KEYCHAIN = re.compile(
     r"find-generic-password failed|exception running find-generic-password|cannot decrypt v1[01] cookies: no key found",
-    re.I,
+    re.IGNORECASE,
 )
-_EXTRACTED = re.compile(r"extracted (\d+) cookies from \w+ \((\d+) could not be decrypted\)", re.I)
+_EXTRACTED = re.compile(r"extracted (\d+) cookies from \w+ \((\d+) could not be decrypted\)", re.IGNORECASE)
 _WARNING_KINDS = (
     ("keychain", _KEYCHAIN),
     # yt-dlp's per-cookie AES failures; with a wrong key every v10 cookie fails this way.
-    ("wrong_key", re.compile(r"possibly the key is wrong", re.I)),
-    ("unknown_cookie_version", re.compile(r"unknown cookie version", re.I)),
-    ("no_sqlite", re.compile(r"without sqlite3 support", re.I)),
+    ("wrong_key", re.compile(r"possibly the key is wrong", re.IGNORECASE)),
+    ("unknown_cookie_version", re.compile(r"unknown cookie version", re.IGNORECASE)),
+    ("no_sqlite", re.compile(r"without sqlite3 support", re.IGNORECASE)),
 )
 
 

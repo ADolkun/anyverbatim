@@ -183,7 +183,8 @@ def test_an_undiarized_batch_has_no_speaker_field_and_no_conversation_sentence(t
         [EN_BARE], client=client, language="en", context=CorrectionContext(), checkpoint_dir=tmp_path / "c"
     )
     for request in client.requests:
-        assert "speaker" not in request.user and "conversation" not in request.system
+        assert "speaker" not in request.user
+        assert "conversation" not in request.system
 
 
 def test_each_segment_is_punctuated_by_its_own_languages_rules(tmp_path: Path) -> None:
@@ -197,9 +198,11 @@ def test_each_segment_is_punctuated_by_its_own_languages_rules(tmp_path: Path) -
         assert rules in request.system
     # A neighbour's edge is cut by the neighbour's own language: sixteen Mandarin characters, four English words.
     english_in_en = items(client.requests[1])[0]
-    assert english_in_en["text"] == EN_BARE and english_in_en["before"] == ZH_BARE[-16:]
+    assert english_in_en["text"] == EN_BARE
+    assert english_in_en["before"] == ZH_BARE[-16:]
     mandarin_in_zh = items(client.requests[2])[0]
-    assert mandarin_in_zh["text"] == ZH_BARE and mandarin_in_zh["after"] == "so today we are"
+    assert mandarin_in_zh["text"] == ZH_BARE
+    assert mandarin_in_zh["after"] == "so today we are"
 
 
 def test_a_mixed_language_transcript_says_so_to_correction_and_to_the_numeric_verdicts(tmp_path: Path) -> None:
@@ -223,7 +226,8 @@ def test_a_mixed_language_transcript_says_so_to_correction_and_to_the_numeric_ve
     )
     line = "The transcript is mainly zh, with en mixed in; keep every word in the language it was spoken. "
     correction, verdicts = client.requests
-    assert line in correction.user and "The transcript language is" not in correction.user
+    assert line in correction.user
+    assert "The transcript language is" not in correction.user
     assert verdicts.user.startswith(line)
 
 

@@ -102,7 +102,8 @@ def test_a_pin_is_used_as_is_without_a_catalog_request(signed_in: list[str]) -> 
     opener = FakeOpener()
     assert resolve("gpt-6.1-sol", opener=opener) == "gpt-6.1-sol"
     assert resolve("gpt-6-sol", opener=opener) == "gpt-6-sol"
-    assert opener.requests == [] and signed_in == []
+    assert opener.requests == []
+    assert signed_in == []
 
 
 def test_the_catalog_request_carries_the_sign_in_and_nothing_else_is_asked() -> None:
@@ -148,7 +149,8 @@ def test_an_unreadable_catalog_or_an_empty_family_fails_loudly_with_a_fix(opener
     error = raised.value
     assert '--llm chatgpt:gpt-6.2-sol, or [llm] model = "gpt-6.2-sol"' in error.fix
     assert error.fix in str(error)
-    assert SECRET not in str(error) and "token-1" not in str(error)
+    assert SECRET not in str(error)
+    assert "token-1" not in str(error)
 
 
 def test_a_rejected_sign_in_says_to_log_in_or_pin() -> None:
@@ -182,7 +184,8 @@ def test_a_second_unauthorized_answer_is_an_error_after_one_sign_in() -> None:
     reauths: list[str] = []
     with pytest.raises(ConfigError, match="rejected the ChatGPT sign-in"):
         resolve("gpt-sol", opener=opener, reauth=lambda: reauths.append("again"))
-    assert reauths == ["again"] and len(opener.requests) == 2
+    assert reauths == ["again"]
+    assert len(opener.requests) == 2
 
 
 def test_a_failed_sign_in_again_is_the_error(monkeypatch: pytest.MonkeyPatch) -> None:

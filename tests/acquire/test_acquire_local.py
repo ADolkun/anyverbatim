@@ -62,11 +62,14 @@ def test_the_id_is_the_packet_hash_whatever_the_name_container_or_metadata(tmp_p
 
     a, b, c = (local.open_recording(path) for path in (first, renamed, other))
     digest = hashlib.sha256(b"alpha:0").hexdigest()
-    assert a.audio_sha256 == digest and a.id == f"rec-{digest[:16]}"
-    assert b.id == a.id and c.id != a.id
+    assert a.audio_sha256 == digest
+    assert a.id == f"rec-{digest[:16]}"
+    assert b.id == a.id
+    assert c.id != a.id
     assert local.recording_id(renamed) == a.id
     hashed = next(argv for argv in media.calls if "hash" in argv)
-    assert hashed[hashed.index("-map") + 1] == "0:a:0" and "copy" in hashed
+    assert hashed[hashed.index("-map") + 1] == "0:a:0"
+    assert "copy" in hashed
 
 
 def test_aac_is_preferred_over_an_undecodable_spatial_track(tmp_path: Path, media: FakeMedia) -> None:
@@ -100,8 +103,10 @@ def test_a_missing_file_is_an_error(tmp_path: Path, media: FakeMedia) -> None:
 
 def test_metadata_precedence_and_no_date_rather_than_the_mtime(tmp_path: Path, media: FakeMedia) -> None:
     plain = local.open_recording(media.add(tmp_path / "Team call.m4a", "a", streams=[AAC], tags={}))
-    assert plain.title == "Team call" and plain.recorded_at is None
-    assert plain.duration_s == 12.5 and plain.file_name == "Team call.m4a"
+    assert plain.title == "Team call"
+    assert plain.recorded_at is None
+    assert plain.duration_s == 12.5
+    assert plain.file_name == "Team call.m4a"
 
     both = {
         "creation_time": "2026-11-03T06:05:00.000000Z",

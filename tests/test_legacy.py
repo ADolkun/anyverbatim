@@ -212,7 +212,8 @@ def test_the_cli_reports_a_conflict_with_its_fix_before_any_command(home: Path) 
     new_roots(home)["state"].mkdir(parents=True)
     result = CliRunner().invoke(main, ["memos", "--help"])
     assert result.exit_code == 1
-    assert "both" in result.output and "Fix: merge" in result.output
+    assert "both" in result.output
+    assert "Fix: merge" in result.output
     assert old_roots(home)["state"].exists()
 
 

@@ -144,7 +144,8 @@ def test_a_figure_after_a_noun_ending_in_shu_is_still_verified(
         checkpoint_dir=tmp_path / "checkpoints",
     )
     (flag,) = result.flags[0]
-    assert flag.kind == "numeric_disputed" and span_text(result, 0, flag) == span
+    assert flag.kind == "numeric_disputed"
+    assert span_text(result, 0, flag) == span
 
 
 @pytest.mark.parametrize(
@@ -163,7 +164,8 @@ def test_a_chinese_figure_agrees_with_its_digit_form(asr: str, caption: str, tmp
     result = run(
         [TimedText(asr, 0.0, 3.0)], Evidence(PRIMARY, captions=(manual((0.0, 3.0, caption)),)), client, tmp_path
     )
-    assert result.flags == ((),) and result.stats.disputed == 0
+    assert result.flags == ((),)
+    assert result.stats.disputed == 0
     assert client.requests == []
 
 
@@ -266,7 +268,8 @@ def test_a_rough_figure_disputes_an_exact_one(tmp_path: Path) -> None:
         checkpoint_dir=tmp_path / "checkpoints",
     )
     (flag,) = result.flags[0]
-    assert flag.kind == "numeric_disputed" and span_text(result, 0, flag) == "二十"
+    assert flag.kind == "numeric_disputed"
+    assert span_text(result, 0, flag) == "二十"
 
 
 def test_without_an_llm_a_dispute_is_flagged_with_its_readings_and_nothing_changes(tmp_path: Path) -> None:
@@ -277,11 +280,15 @@ def test_without_an_llm_a_dispute_is_flagged_with_its_readings_and_nothing_chang
         client=None,
         checkpoint_dir=tmp_path / "checkpoints",
     )
-    assert result.texts == (DISPUTED[0].text,) and result.edits == ((),)
+    assert result.texts == (DISPUTED[0].text,)
+    assert result.edits == ((),)
     (flag,) = result.flags[0]
-    assert flag.kind == "numeric_disputed" and flag.readings == DISPUTED_READINGS
-    assert span_text(result, 0, flag) == "十五个百分点" and "no LLM" in flag.note
-    assert result.stats == NumericStats(disputed=1) and result.usage == ()
+    assert flag.kind == "numeric_disputed"
+    assert flag.readings == DISPUTED_READINGS
+    assert span_text(result, 0, flag) == "十五个百分点"
+    assert "no LLM" in flag.note
+    assert result.stats == NumericStats(disputed=1)
+    assert result.usage == ()
     assert not (tmp_path / "checkpoints").exists()
 
 

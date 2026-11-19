@@ -31,36 +31,36 @@ from evals.questions import (
 )
 
 
-def test_split_sentences_handles_both_scripts_and_decimals():
+def test_split_sentences_handles_both_scripts_and_decimals() -> None:
     assert split_sentences("It costs 3.5 dollars. Really? Yes!") == ["It costs 3.5 dollars.", "Really?", "Yes!"]
     assert split_sentences("你好。我们开始吧！好的") == ["你好。", "我们开始吧！", "好的"]
     assert split_sentences("   ") == []
 
 
-def test_limit_sentences_keeps_the_first_two():
+def test_limit_sentences_keeps_the_first_two() -> None:
     assert limit_sentences("One. Two. Three. Four.") == "One. Two."
     assert limit_sentences("Only one") == "Only one"
     assert sentence_count(f"{SPOT} and then. More.") == 2
 
 
-def test_spot_excerpt_adds_the_previous_sentence():
+def test_spot_excerpt_adds_the_previous_sentence() -> None:
     text = spot_excerpt("We shipped it. Then the price was ", " dollars. After that we left. Bye.")
     assert text == f"We shipped it. Then the price was {SPOT} dollars."
     assert sentence_count(text) == MAX_SENTENCES
 
 
-def test_spot_excerpt_falls_back_to_the_next_sentence_at_the_start():
+def test_spot_excerpt_falls_back_to_the_next_sentence_at_the_start() -> None:
     text = spot_excerpt("Then the price was ", " dollars. After that we left. Bye.")
     assert text == f"Then the price was {SPOT} dollars. After that we left."
 
 
-def test_spot_excerpt_at_a_sentence_boundary_keeps_the_marker_in_its_own_sentence():
+def test_spot_excerpt_at_a_sentence_boundary_keeps_the_marker_in_its_own_sentence() -> None:
     text = spot_excerpt("First one. Second one. ", "Third one. Fourth.")
     assert text == f"Second one. {SPOT}Third one."
     assert sentence_count(text) <= MAX_SENTENCES
 
 
-def test_spot_excerpt_never_exceeds_the_limit_whatever_the_context():
+def test_spot_excerpt_never_exceeds_the_limit_whatever_the_context() -> None:
     before = "A. B. C. D. e f g "
     after = " h i. J. K. L."
     assert sentence_count(spot_excerpt(before, after)) <= MAX_SENTENCES
@@ -68,16 +68,17 @@ def test_spot_excerpt_never_exceeds_the_limit_whatever_the_context():
     assert sentence_count(spot_excerpt("你说什么。我觉得", "不对。然后呢。")) <= MAX_SENTENCES
 
 
-def test_redact_hides_names_by_whole_word_and_in_cjk():
+def test_redact_hides_names_by_whole_word_and_in_cjk() -> None:
     assert redact("Anna told Joanna and anna's dog", ["Anna"]) == "[name] told Joanna and [name]'s dog"
     assert redact("小明说小明的书", ["小明"]) == "[name]说[name]的书"
     assert redact("nothing here", ["", "  "]) == "nothing here"
 
 
-def test_clock_and_anchor_text_cut_to_one_short_sentence():
+def test_clock_and_anchor_text_cut_to_one_short_sentence() -> None:
     assert clock(740.9) == "12:20"
     assert anchor_text("Short one. A second sentence.") == "Short one."
-    assert anchor_text("w" * 200).endswith("…") and len(anchor_text("w" * 200)) == 81
+    assert anchor_text("w" * 200).endswith("…")
+    assert len(anchor_text("w" * 200)) == 81
 
 
 def line(start, end, text, **speakers):
@@ -96,7 +97,7 @@ LINES = (
 )
 
 
-def test_pick_anchors_needs_agreement_distance_length_and_uniqueness():
+def test_pick_anchors_needs_agreement_distance_length_and_uniqueness() -> None:
     chosen = pick_anchors(LINES, ["A", "B"], 70, 76, CANDIDATES)
     assert chosen["A"].start == 10  # nearest agreed line outside the stretch; "Okay." is too short, 70-76 overlaps
     assert chosen["B"].start == 100  # the line at 60 is disputed; 100 is nearer than 40
@@ -125,7 +126,7 @@ def attribution(**overrides):
     return AttributionDispute(**{**base, **overrides})
 
 
-def test_attribution_question_offers_anchor_lines_and_never_a_speaker_id():
+def test_attribution_question_offers_anchor_lines_and_never_a_speaker_id() -> None:
     built = build_questions([attribution()], names=["Friday"])
     (question,) = built.questions
     (example,) = question.examples
@@ -141,7 +142,7 @@ def test_attribution_question_offers_anchor_lines_and_never_a_speaker_id():
     assert "n8" not in question.model_dump_json()
 
 
-def test_attribution_without_two_anchored_speakers_is_skipped_with_a_reason():
+def test_attribution_without_two_anchored_speakers_is_skipped_with_a_reason() -> None:
     built = build_questions([attribution(lines=LINES[:2])])
     assert built.questions == ()
     assert built.skipped == (("d1", "fewer than two speakers have an anchor line every candidate agrees on"),)
@@ -160,7 +161,7 @@ def text_dispute(item, start, group=None, **candidates):
     )
 
 
-def test_policy_groups_come_first_capped_at_three_examples_with_blind_options():
+def test_policy_groups_come_first_capped_at_three_examples_with_blind_options() -> None:
     disputes = [
         text_dispute("t1", 5),
         text_dispute("t2", 10, group="numerals"),
@@ -183,12 +184,12 @@ def test_policy_groups_come_first_capped_at_three_examples_with_blind_options():
     assert build_questions(disputes, seed=1) == built
 
 
-def test_text_options_are_deduplicated_so_the_owner_sees_each_form_once():
+def test_text_options_are_deduplicated_so_the_owner_sees_each_form_once() -> None:
     built = build_questions([text_dispute("t1", 5)])
     assert len(built.questions[0].examples[0].options) == 2 + 2
 
 
-def test_questions_contain_no_name_from_the_names_list_and_round_trip(tmp_path):
+def test_questions_contain_no_name_from_the_names_list_and_round_trip(tmp_path) -> None:
     dispute = TextDispute(
         id="t1",
         recording="rec-01",
@@ -213,24 +214,24 @@ def test_questions_contain_no_name_from_the_names_list_and_round_trip(tmp_path):
     assert loaded[0] == dispute
 
 
-def test_a_group_with_one_item_is_still_a_policy_question():
+def test_a_group_with_one_item_is_still_a_policy_question() -> None:
     built = build_questions([text_dispute("t1", 5, group="fillers")])
     assert [q.kind for q in built.questions] == ["policy"]
 
 
-def test_sentence_ends_close_over_quotes_and_brackets():
+def test_sentence_ends_close_over_quotes_and_brackets() -> None:
     assert split_sentences('He said "stop." Then (we left.) Done') == ['He said "stop."', "Then (we left.)", "Done"]
     assert split_sentences("他说“好。”然后走了") == ["他说“好。”", "然后走了"]
 
 
-def test_option_text_is_redacted_then_limited_in_sentences_and_characters():
+def test_option_text_is_redacted_then_limited_in_sentences_and_characters() -> None:
     long = "Maria said so. It was fine. Then more words " + "x" * 300
     shown = option_text(long, ["Maria"])
     assert shown == "[name] said so. It was fine."
     assert len(option_text("y" * 500)) <= MAX_OPTION_CHARS + 1
 
 
-def test_text_options_that_differ_only_beyond_the_limit_show_once():
+def test_text_options_that_differ_only_beyond_the_limit_show_once() -> None:
     built = build_questions(
         [text_dispute("t1", 5, a="Same start. Same second. Third one.", b="Same start. Same second. Other.")]
     )
@@ -238,7 +239,7 @@ def test_text_options_that_differ_only_beyond_the_limit_show_once():
     assert built.key[0].options[0][0] == (("a", "b"))
 
 
-def test_redaction_happens_before_truncation_so_no_name_fragment_shows():
+def test_redaction_happens_before_truncation_so_no_name_fragment_shows() -> None:
     name = "Bartholomew"
     text = "x" * (MAX_ANCHOR_CHARS - 4) + f" {name} spoke here"
     shown = anchor_text(text, [name])
@@ -246,7 +247,7 @@ def test_redaction_happens_before_truncation_so_no_name_fragment_shows():
     assert "[name]" in shown or len(shown) <= MAX_ANCHOR_CHARS + 1
 
 
-def test_the_cli_needs_names_or_an_explicit_no_names(tmp_path):
+def test_the_cli_needs_names_or_an_explicit_no_names(tmp_path) -> None:
     disputes = tmp_path / "d.jsonl"
     disputes.write_text(text_dispute("t1", 5).model_dump_json() + "\n", encoding="utf-8")
     runner = CliRunner()

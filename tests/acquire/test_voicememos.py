@@ -38,8 +38,10 @@ def test_lists_title_date_duration_and_presence_newest_first(tmp_path: Path) -> 
     assert newest.title == "Label"
     assert newest.recorded_at == datetime.fromtimestamp(1_760_000_000, UTC)
     assert newest.duration_s == 3.0
-    assert newest.audio == folder / "b.m4a" and newest.availability == "local"
-    assert memos[2].title is None and memos[2].recorded_at is None
+    assert newest.audio == folder / "b.m4a"
+    assert newest.availability == "local"
+    assert memos[2].title is None
+    assert memos[2].recorded_at is None
 
 
 def test_recently_deleted_rows_are_excluded(tmp_path: Path) -> None:
@@ -154,8 +156,10 @@ def test_permission_denied_gives_the_full_disk_access_fix(
     with pytest.raises(MemosAccessError) as caught:
         voicememos.list_memos(folder)
     fix = caught.value.fix
-    assert "Full Disk Access" in fix and "add iTerm (the app running anyverbatim)" in fix
-    assert "cron itself" in fix and "ProgramArguments" in fix
+    assert "Full Disk Access" in fix
+    assert "add iTerm (the app running anyverbatim)" in fix
+    assert "cron itself" in fix
+    assert "ProgramArguments" in fix
 
 
 def test_the_fix_for_an_unknown_host_app_is_generic(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -197,7 +201,8 @@ def test_the_cache_hashes_once_and_then_hits(tmp_path: Path) -> None:
     assert len(hasher.calls) == 1
     reloaded = MemoCache(cache_file)
     assert reloaded.lookup(memo) == first
-    assert reloaded.resolve(memo, hasher) == first and len(hasher.calls) == 1
+    assert reloaded.resolve(memo, hasher) == first
+    assert len(hasher.calls) == 1
     assert (cache_file.stat().st_mode & 0o777) == 0o600
     assert json.loads(cache_file.read_text())["A"]["id"] == first
 
@@ -217,7 +222,8 @@ def test_a_size_or_mtime_change_invalidates_the_entry(tmp_path: Path, change: st
     (changed,) = voicememos.list_memos(tmp_path / "Recordings")
     assert cache.lookup(changed) is None
     second = cache.resolve(changed, hasher)
-    assert second != first and len(hasher.calls) == 2
+    assert second != first
+    assert len(hasher.calls) == 2
     assert MemoCache(tmp_path / "voicememos.json").lookup(changed) == second
 
 
@@ -251,7 +257,8 @@ def test_an_unreadable_cache_is_an_empty_one(tmp_path: Path, content: str) -> No
 def test_reading_a_closed_wal_database_leaves_the_container_untouched(tmp_path: Path) -> None:
     folder = make_library(tmp_path, [Row("A", path="a.m4a")], wal=True)
     before = {p.name: p.stat().st_mtime_ns for p in folder.iterdir()}
-    assert voicememos.DATABASE in before and f"{voicememos.DATABASE}-wal" not in before
+    assert voicememos.DATABASE in before
+    assert f"{voicememos.DATABASE}-wal" not in before
     assert [m.unique_id for m in voicememos.list_memos(folder)] == ["A"]
     assert {p.name: p.stat().st_mtime_ns for p in folder.iterdir()} == before
 
@@ -333,7 +340,8 @@ def test_a_path_outside_the_library_is_unsupported(tmp_path: Path, zpath: str) -
 def test_a_missing_eviction_column_is_a_warning_not_silence(tmp_path: Path) -> None:
     folder = make_library(tmp_path, [Row("A", path="a.m4a")], drop=("ZEVICTIONDATE",))
     listing = voicememos.read_library(folder)
-    assert "ZEVICTIONDATE" in listing.warnings[0] and "Recently Deleted" in listing.warnings[0]
+    assert "ZEVICTIONDATE" in listing.warnings[0]
+    assert "Recently Deleted" in listing.warnings[0]
     assert voicememos.probe(folder).detail == listing.warnings[0]
     assert voicememos.read_library(make_library(tmp_path / "ok", [Row("A")])).warnings == ()
 

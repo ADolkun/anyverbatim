@@ -44,7 +44,7 @@ class FakeBackend:
 TURNS = [Turn(0, 30, "x"), Turn(30, 60, "y"), Turn(60, 90, "z")]
 
 
-def test_owner_ids_must_be_generic_labels_and_the_error_does_not_repeat_the_bad_one():
+def test_owner_ids_must_be_generic_labels_and_the_error_does_not_repeat_the_bad_one() -> None:
     assert OwnerEntry(id="rec-01").language == "zh+en"
     for bad in ("Alice-call", "rec-1", "rec-01-final"):
         with pytest.raises(ValidationError, match="generic labels") as raised:
@@ -52,7 +52,7 @@ def test_owner_ids_must_be_generic_labels_and_the_error_does_not_repeat_the_bad_
         assert bad not in raised.value.errors()[0]["msg"]
 
 
-def test_the_owner_index_lists_recordings_with_their_durations_and_optional_speaker_counts(tmp_path: Path):
+def test_the_owner_index_lists_recordings_with_their_durations_and_optional_speaker_counts(tmp_path: Path) -> None:
     make_owner(tmp_path, [("rec-01", 90, {"speakers": 3}), ("rec-02", 30, {"language": "en"})])
     first, second = load_owner(tmp_path / OWNER)
     assert (first.entry.id, first.duration_s, first.entry.speakers) == ("rec-01", 90.0, 3)
@@ -61,7 +61,7 @@ def test_the_owner_index_lists_recordings_with_their_durations_and_optional_spea
     assert wav_seconds(first.wav) == 90.0
 
 
-def test_the_owner_index_refuses_missing_files_duplicates_and_other_audio_formats(tmp_path: Path):
+def test_the_owner_index_refuses_missing_files_duplicates_and_other_audio_formats(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="no owner index"):
         load_owner(tmp_path / OWNER)
     make_owner(tmp_path, [("rec-01", 5, {})])
@@ -79,7 +79,7 @@ def test_the_owner_index_refuses_missing_files_duplicates_and_other_audio_format
         load_owner(folder)
 
 
-def test_errors_name_the_generic_id_and_never_a_title_or_file_name(tmp_path: Path):
+def test_errors_name_the_generic_id_and_never_a_title_or_file_name(tmp_path: Path) -> None:
     make_owner(tmp_path, [("rec-01", 5, {})])
     folder = tmp_path / OWNER
     for text in (
@@ -102,7 +102,7 @@ def test_errors_name_the_generic_id_and_never_a_title_or_file_name(tmp_path: Pat
     assert "audio.wav" not in str(raised.value)
 
 
-def test_a_stereo_or_wrong_rate_wav_is_refused_with_the_conversion(tmp_path: Path):
+def test_a_stereo_or_wrong_rate_wav_is_refused_with_the_conversion(tmp_path: Path) -> None:
     path = tmp_path / "a.wav"
     with wave.open(str(path), "wb") as handle:
         handle.setnchannels(2)
@@ -113,10 +113,11 @@ def test_a_stereo_or_wrong_rate_wav_is_refused_with_the_conversion(tmp_path: Pat
         wav_seconds(path)
 
 
-def test_an_owner_recording_has_no_reference_and_is_scored_by_speaker_count(tmp_path: Path):
+def test_an_owner_recording_has_no_reference_and_is_scored_by_speaker_count(tmp_path: Path) -> None:
     make_owner(tmp_path, [("rec-01", 90, {"speakers": 2})])
     (recording,) = recordings_of(OWNER, root=tmp_path)
-    assert recording.reference is None and recording.expected_speakers == 2
+    assert recording.reference is None
+    assert recording.expected_speakers == 2
     score = score_owner_recording(FakeBackend(TURNS), recording, tmp_path / "out")
     assert (score.hypothesis_speakers, score.expected_speakers, score.speaker_count_error) == (3, 2, 1)
     assert score.rtf == pytest.approx(0.05)
@@ -126,20 +127,22 @@ def test_an_owner_recording_has_no_reference_and_is_scored_by_speaker_count(tmp_
         score_recording(FakeBackend(TURNS), recording, tmp_path / "other")
 
 
-def test_without_the_owners_count_there_is_no_count_error(tmp_path: Path):
+def test_without_the_owners_count_there_is_no_count_error(tmp_path: Path) -> None:
     make_owner(tmp_path, [("rec-01", 90, {})])
     (recording,) = recordings_of(OWNER, root=tmp_path)
     score = score_owner_recording(FakeBackend(TURNS), recording, tmp_path / "out")
-    assert score.speaker_count_error is None and score.expected_speakers is None
+    assert score.speaker_count_error is None
+    assert score.expected_speakers is None
 
 
-def test_owner_runs_resume_and_rescore_when_words_appear(tmp_path: Path):
+def test_owner_runs_resume_and_rescore_when_words_appear(tmp_path: Path) -> None:
     make_owner(tmp_path, [("rec-01", 90, {"speakers": 3})])
     (recording,) = recordings_of(OWNER, root=tmp_path)
     backend = FakeBackend(TURNS)
     (first,) = run_owner(backend, "d-fake", [recording], tmp_path / "runs")
     (again,) = run_owner(backend, "d-fake", [recording], tmp_path / "runs")
-    assert backend.calls == 1 and again == first
+    assert backend.calls == 1
+    assert again == first
     before = input_digest(recording)
     recording.words.write_text(json.dumps([{"text": "a", "start": 1.0, "end": 2.0}]), encoding="utf-8")
     assert input_digest(recording) != before
@@ -149,7 +152,7 @@ def test_owner_runs_resume_and_rescore_when_words_appear(tmp_path: Path):
     assert after.diarize_s == first.diarize_s
 
 
-def test_the_owner_summary_lists_counts_by_generic_label_beside_the_other_corpora(tmp_path: Path):
+def test_the_owner_summary_lists_counts_by_generic_label_beside_the_other_corpora(tmp_path: Path) -> None:
     make_owner(tmp_path, [("rec-01", 90, {"speakers": 3}), ("rec-02", 90, {})])
     scores: list[OwnerScore] = run_owner(
         FakeBackend(TURNS), "d-fake", recordings_of(OWNER, root=tmp_path), tmp_path / "r"
@@ -161,7 +164,7 @@ def test_the_owner_summary_lists_counts_by_generic_label_beside_the_other_corpor
     assert summarize(scores)["primary_macro_der_collar_0"] is None
 
 
-def test_each_owner_recording_has_its_own_words_file(tmp_path: Path):
+def test_each_owner_recording_has_its_own_words_file(tmp_path: Path) -> None:
     make_owner(tmp_path, [("rec-01", 40, {}), ("rec-02", 40, {})])
     items = load_items(OWNER, root=tmp_path)
     rows = {
@@ -171,7 +174,8 @@ def test_each_owner_recording_has_its_own_words_file(tmp_path: Path):
     assert write_words_for(items, rows) == 2
     first = load_words(tmp_path / OWNER / "rec-01" / "words.json")
     second = load_words(tmp_path / OWNER / "rec-02" / "words.json")
-    assert first is not None and second is not None
+    assert first is not None
+    assert second is not None
     assert [w.text for w in first] == [" first"]
     assert [w.text for w in second] == [" second", " more"]
     recordings = recordings_of(OWNER, root=tmp_path)
@@ -179,11 +183,12 @@ def test_each_owner_recording_has_its_own_words_file(tmp_path: Path):
     assert [[w.text for w in disputes._words(item)] for item in items] == [[" first"], [" second", " more"]]
 
 
-def test_each_owner_recording_is_scored_against_its_own_words(tmp_path: Path):
+def test_each_owner_recording_is_scored_against_its_own_words(tmp_path: Path) -> None:
     make_owner(tmp_path, [("rec-01", 90, {}), ("rec-02", 90, {})])
     recordings = recordings_of(OWNER, root=tmp_path)
     recordings[0].words.write_text(json.dumps([{"text": "a", "start": 1.0, "end": 2.0}]), encoding="utf-8")
     recordings[1].words.write_text(json.dumps([{"text": "b", "start": 40.0, "end": 41.0}]), encoding="utf-8")
     first, second = run_owner(FakeBackend(TURNS), "d-fake", recordings, tmp_path / "runs")
-    assert first.attributed_speakers_smoothed == 1 and second.attributed_speakers_smoothed == 1
+    assert first.attributed_speakers_smoothed == 1
+    assert second.attributed_speakers_smoothed == 1
     assert input_digest(recordings[0]) != input_digest(recordings[1])

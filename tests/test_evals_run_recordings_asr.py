@@ -58,7 +58,7 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return recordings
 
 
-def test_recording_jobs_carry_no_language_hint_and_only_language_id_hypotheses_the_allowed_set(root: Path):
+def test_recording_jobs_carry_no_language_hint_and_only_language_id_hypotheses_the_allowed_set(root: Path) -> None:
     (item,) = load_items("ami", root=root)
     jobs = {h: recording_job(item, registry.get(h)) for h in E2_HYPOTHESES}
     assert all(job.language is None and job.chunks is None and job.context is None for job in jobs.values())
@@ -70,7 +70,7 @@ def test_recording_jobs_carry_no_language_hint_and_only_language_id_hypotheses_t
     }
 
 
-def test_each_long_recording_gets_its_own_worker_and_a_finished_one_is_not_decoded_again(root: Path):
+def test_each_long_recording_gets_its_own_worker_and_a_finished_one_is_not_decoded_again(root: Path) -> None:
     items = load_items("ami", root=root) + load_items("alimeeting", root=root)
     worker = FakeWorker(transcripts({}))
     layout = asr_layout("ami", root)
@@ -84,7 +84,7 @@ def test_each_long_recording_gets_its_own_worker_and_a_finished_one_is_not_decod
     assert finished_folders(layout, "w-vad", items) == {}
 
 
-def test_a_changed_request_is_decoded_again_in_a_fresh_folder_name_only_when_the_batch_changes(root: Path):
+def test_a_changed_request_is_decoded_again_in_a_fresh_folder_name_only_when_the_batch_changes(root: Path) -> None:
     make_clips(root, [("u1", "你好"), ("u2", "ok"), ("u3", "好的")])
     clips = load_items("ascend-utterances", root=root)
     worker = FakeWorker(transcripts({}))
@@ -99,7 +99,7 @@ def test_a_changed_request_is_decoded_again_in_a_fresh_folder_name_only_when_the
     assert batch_key(["u1"]) == "u1"
 
 
-def test_scoring_waits_for_a_finished_run(root: Path):
+def test_scoring_waits_for_a_finished_run(root: Path) -> None:
     (item,) = load_items("ami", root=root)
     with pytest.raises(ConfigError, match="not finished for 1 of 1 ami"):
         scored("ami", "w-prod", "itn", [item], root)
@@ -124,7 +124,7 @@ def invoke(*args: str) -> dict[str, object]:
     return json.loads(result.output)
 
 
-def test_score_prints_the_metric_per_corpus_without_recording_ids(root: Path):
+def test_score_prints_the_metric_per_corpus_without_recording_ids(root: Path) -> None:
     run_both(root)
     output = CliRunner().invoke(
         run_recordings_asr.main, ["score", "--hyp", "w-runs-lid", "--corpus", "ami", "--corpus", "alimeeting"]
@@ -132,13 +132,16 @@ def test_score_prints_the_metric_per_corpus_without_recording_ids(root: Path):
     assert output.exit_code == 0, output.output
     report = json.loads(output.output)["corpora"]
     assert (report["ami"]["metric"], report["alimeeting"]["metric"]) == ("wer", "cer")
-    assert report["ami"]["errors"] == 1 and report["ami"]["reference_units"] == 6
-    assert report["alimeeting"]["errors"] == 1 and report["alimeeting"]["reference_units"] == 12
+    assert report["ami"]["errors"] == 1
+    assert report["ami"]["reference_units"] == 6
+    assert report["alimeeting"]["errors"] == 1
+    assert report["alimeeting"]["reference_units"] == 12
     assert report["ami"]["windows"] == 2
-    assert "m1" not in output.output and "z1" not in output.output
+    assert "m1" not in output.output
+    assert "z1" not in output.output
 
 
-def test_compare_pairs_each_corpus_and_pools_the_two_meeting_corpora(root: Path):
+def test_compare_pairs_each_corpus_and_pools_the_two_meeting_corpora(root: Path) -> None:
     run_both(root)
     output = CliRunner().invoke(
         run_recordings_asr.main,
@@ -158,7 +161,7 @@ def choices(command: str, option: str) -> tuple[str, ...]:
     return tuple(param.type.choices)
 
 
-def test_every_e2_hypothesis_is_a_choice_of_every_command_that_names_one():
+def test_every_e2_hypothesis_is_a_choice_of_every_command_that_names_one() -> None:
     for command, option in (
         ("run", "hypothesis"),
         ("score", "hypothesis"),
@@ -168,7 +171,7 @@ def test_every_e2_hypothesis_is_a_choice_of_every_command_that_names_one():
         assert choices(command, option) == E2_HYPOTHESES
 
 
-def test_score_counts_rows_holding_a_special_token(root: Path):
+def test_score_counts_rows_holding_a_special_token(root: Path) -> None:
     table = {("w-runs-lid", "m1"): [pieces("hello there", 0.2), pieces("<|zh|> now we begin", 70.2)]}
     run_corpus(
         asr_layout("ami", root), "w-runs-lid", load_items("ami", root=root), worker=FakeWorker(transcripts(table))
@@ -179,7 +182,7 @@ def test_score_counts_rows_holding_a_special_token(root: Path):
     assert report["ami"]["chunk_incidents"]["clean_in_mixed_recordings"] == 0  # type: ignore[index]
 
 
-def test_words_writes_a_file_wder_can_read(root: Path):
+def test_words_writes_a_file_wder_can_read(root: Path) -> None:
     run_both(root)
     output = CliRunner().invoke(run_recordings_asr.main, ["words", "--hyp", "w-runs-lid", "--corpus", "ami"])
     assert output.exit_code == 0, output.output
@@ -188,7 +191,7 @@ def test_words_writes_a_file_wder_can_read(root: Path):
     assert [w.text.strip() for w in words][:3] == ["hello", "there", "everybody"]
 
 
-def test_the_owner_corpus_has_no_reference_and_reports_only_what_it_decoded(root: Path):
+def test_the_owner_corpus_has_no_reference_and_reports_only_what_it_decoded(root: Path) -> None:
     make_owner(root, [("rec-01", 60, {"language": "zh+en"})])
     (item,) = load_items("owner", root=root)
     assert item.reference is None
@@ -207,7 +210,7 @@ def test_the_owner_corpus_has_no_reference_and_reports_only_what_it_decoded(root
         scored("owner", "w-runs-lid", "itn", [item], root)
 
 
-def test_unknown_corpora_and_recordings_are_refused(root: Path):
+def test_unknown_corpora_and_recordings_are_refused(root: Path) -> None:
     assert "owner" in ASR_CORPORA
     with pytest.raises(ConfigError, match="unknown corpus"):
         load_items("nope", root=root)
@@ -219,7 +222,7 @@ def test_unknown_corpora_and_recordings_are_refused(root: Path):
         load_items("ascend-utterances", root=root)
 
 
-def test_a_different_batch_size_never_decodes_a_finished_clip_again(root: Path):
+def test_a_different_batch_size_never_decodes_a_finished_clip_again(root: Path) -> None:
     make_clips(root, [("u1", "你好"), ("u2", "ok"), ("u3", "好的")])
     clips = load_items("ascend-utterances", root=root)
     worker = FakeWorker(transcripts({}))
@@ -231,7 +234,7 @@ def test_a_different_batch_size_never_decodes_a_finished_clip_again(root: Path):
     assert set(finished_rows(layout, "w-prod", clips)) == {"u1", "u2", "u3"}
 
 
-def test_a_clip_finished_in_two_worker_folders_fails_loud_and_is_never_read_twice(root: Path):
+def test_a_clip_finished_in_two_worker_folders_fails_loud_and_is_never_read_twice(root: Path) -> None:
     make_clips(root, [("u1", "你好"), ("u2", "ok")])
     clips = load_items("ascend-utterances", root=root)
     layout = asr_layout("ascend-utterances", root)
@@ -242,7 +245,7 @@ def test_a_clip_finished_in_two_worker_folders_fails_loud_and_is_never_read_twic
         finished_rows(layout, "w-prod", clips)
 
 
-def test_replaced_audio_under_the_same_id_is_refused_not_scored_with_the_old_rows(root: Path):
+def test_replaced_audio_under_the_same_id_is_refused_not_scored_with_the_old_rows(root: Path) -> None:
     items = load_items("ami", root=root)
     layout = asr_layout("ami", root)
     worker = FakeWorker(transcripts({}))
@@ -255,7 +258,7 @@ def test_replaced_audio_under_the_same_id_is_refused_not_scored_with_the_old_row
     assert len(worker.requests) == 1
 
 
-def test_a_partial_run_of_other_audio_is_not_resumed(root: Path):
+def test_a_partial_run_of_other_audio_is_not_resumed(root: Path) -> None:
     items = load_items("ami", root=root)
     layout = asr_layout("ami", root)
     folder = layout.run_dir("w-prod") / "m1"
@@ -267,7 +270,7 @@ def test_a_partial_run_of_other_audio_is_not_resumed(root: Path):
     assert worker.requests == []
 
 
-def test_a_folder_decoded_with_another_job_is_refused(root: Path):
+def test_a_folder_decoded_with_another_job_is_refused(root: Path) -> None:
     items = load_items("ami", root=root)
     layout = asr_layout("ami", root)
     definition = registry.get("w-vad-lid")
@@ -282,7 +285,7 @@ def test_a_folder_decoded_with_another_job_is_refused(root: Path):
         finished_folders(layout, "w-vad-lid", items)
 
 
-def test_a_folder_made_by_another_engine_definition_is_refused(root: Path):
+def test_a_folder_made_by_another_engine_definition_is_refused(root: Path) -> None:
     items = load_items("ami", root=root)
     layout = asr_layout("ami", root)
     run_corpus(layout, "w-prod", items, worker=FakeWorker(transcripts({})))
@@ -294,7 +297,7 @@ def test_a_folder_made_by_another_engine_definition_is_refused(root: Path):
         finished_folders(layout, "w-prod", items)
 
 
-def test_the_owner_corpus_is_not_a_default_anywhere(root: Path):
+def test_the_owner_corpus_is_not_a_default_anywhere(root: Path) -> None:
     assert "owner" not in PUBLIC_CORPORA
     for command in (
         run_recordings_asr.run,
@@ -311,13 +314,13 @@ def test_the_owner_corpus_is_not_a_default_anywhere(root: Path):
     assert "owner" not in run_diarization.DEFAULT_CORPORA
 
 
-def test_every_selected_corpus_is_loaded_before_anything_runs(root: Path):
+def test_every_selected_corpus_is_loaded_before_anything_runs(root: Path) -> None:
     with pytest.raises(ConfigError, match="no prepared data"):
         _load_all(["ami", "ascend"], ())
     assert list(_load_all(["ami", "alimeeting"], ())) == ["ami", "alimeeting"]
 
 
-def test_compare_names_the_decision_interval_and_reports_the_meetings_macro_average(root: Path):
+def test_compare_names_the_decision_interval_and_reports_the_meetings_macro_average(root: Path) -> None:
     run_both(root)
     results = invoke("compare", "--a", "w-runs-lid", "--b", "w-prod", "--corpus", "ami", "--corpus", "alimeeting")
     assert results["decision_interval"] == "decision"
@@ -349,7 +352,7 @@ def decode_ascend(root: Path, hypothesis: str, translated: bool) -> None:
         )
 
 
-def test_compare_pairs_incidents_per_corpus_and_pools_the_ascend_sessions_with_the_clips(root: Path):
+def test_compare_pairs_incidents_per_corpus_and_pools_the_ascend_sessions_with_the_clips(root: Path) -> None:
     make_meeting(root, "ascend", "m1", ASCEND_LINES)
     make_clips(root, [("m1", "你好吗朋友 ok now")])
     decode_ascend(root, "w-runs-lid", translated=False)
@@ -372,7 +375,7 @@ def test_compare_pairs_incidents_per_corpus_and_pools_the_ascend_sessions_with_t
     assert pooled["recordings"] == 2
 
 
-def test_compare_leaves_out_incidents_for_corpora_without_a_mixed_recording(root: Path):
+def test_compare_leaves_out_incidents_for_corpora_without_a_mixed_recording(root: Path) -> None:
     run_both(root)
     results = invoke("compare", "--a", "w-runs-lid", "--b", "w-prod", "--corpus", "ami", "--corpus", "alimeeting")[
         "results"
@@ -434,7 +437,7 @@ def rescored(root: Path, tmp_path: Path, before: ChunkHypothesis, after: ChunkHy
     return json.loads(rescore_output(root, tmp_path, before, after))
 
 
-def test_rescore_counts_errors_before_and_after_and_pairs_the_windows(root: Path, tmp_path: Path):
+def test_rescore_counts_errors_before_and_after_and_pairs_the_windows(root: Path, tmp_path: Path) -> None:
     report = rescored(root, tmp_path, row(looped_before()), row(repaired_after(), "redecoded"))
     (file,) = report["files"]
     assert (report["metric"], file["item"]) == ("wer", "m2")
@@ -449,27 +452,33 @@ def test_rescore_counts_errors_before_and_after_and_pairs_the_windows(root: Path
 
 def test_rescore_finds_the_repaired_window_and_its_loop_and_leaves_other_differences_outside(
     root: Path, tmp_path: Path
-):
+) -> None:
     report = rescored(root, tmp_path, row(looped_before()), row(repaired_after(), "redecoded"))
     (file,) = report["files"]
     (window,) = file["repaired_windows"]
-    assert window["span"]["start"] == pytest.approx(10.2) and window["span"]["end"] == pytest.approx(18.2)
+    assert window["span"]["start"] == pytest.approx(10.2)
+    assert window["span"]["end"] == pytest.approx(18.2)
     assert (window["before_words"], window["after_words"]) == (20, 4)
-    assert window["loop"]["start"] == pytest.approx(10.2) and window["loop"]["end"] == pytest.approx(18.2)
+    assert window["loop"]["start"] == pytest.approx(10.2)
+    assert window["loop"]["end"] == pytest.approx(18.2)
     assert window["loop_offset_s"] == pytest.approx(0.0)
-    assert window["still_flagged"] is False and window["seam_duplicate"] is False
+    assert window["still_flagged"] is False
+    assert window["seam_duplicate"] is False
     # "everyone" became "everybody" in a window that never looped: a different decode, not a repair.
     assert file["outside"] == {"words": 8, "identical": 7, "share": pytest.approx(7 / 8)}
-    assert report["repair"]["looped_windows"] == 1 and report["repair"]["still_flagged"] == 0
+    assert report["repair"]["looped_windows"] == 1
+    assert report["repair"]["still_flagged"] == 0
     assert report["unavailable"]
 
 
-def test_rescore_needs_a_redecoded_row_to_call_a_difference_a_repair(root: Path, tmp_path: Path):
+def test_rescore_needs_a_redecoded_row_to_call_a_difference_a_repair(root: Path, tmp_path: Path) -> None:
     report = rescored(root, tmp_path, row(looped_before()), row(repaired_after()))
     assert report["files"][0]["repaired_windows"] == []
 
 
-def test_rescore_counts_a_seam_duplicate_only_when_the_repeated_word_follows_at_once(root: Path, tmp_path: Path):
+def test_rescore_counts_a_seam_duplicate_only_when_the_repeated_word_follows_at_once(
+    root: Path, tmp_path: Path
+) -> None:
     close_before = (
         pieces("hello there everyone", 0.2)
         + pieces("okay fine", 5.0)
@@ -489,28 +498,30 @@ def test_rescore_counts_a_seam_duplicate_only_when_the_repeated_word_follows_at_
     assert report["rules"]["rule_3"] == {"repaired_windows": 1, "seam_duplicates": 1, "share": 1.0, "plan_dedupe": True}
 
 
-def test_rescore_does_not_call_the_same_word_much_later_a_seam_duplicate():
+def test_rescore_does_not_call_the_same_word_much_later_a_seam_duplicate() -> None:
     after = row(repaired_after("please repeat that now"), "redecoded")
     (window,) = rescore_item("m2", [row(looped_before())], [after], [], []).repaired_windows
     assert window.seam_duplicate is False
 
 
-def test_rescore_reports_the_anomaly_rows_spans_and_what_the_repair_left_flagged(root: Path, tmp_path: Path):
+def test_rescore_reports_the_anomaly_rows_spans_and_what_the_repair_left_flagged(root: Path, tmp_path: Path) -> None:
     before = row(looped_before(), "decoder_anomaly")
     spans = (AnomalySpan(start=10.0, end=19.0), AnomalySpan(start=40.0, end=45.0))
     after = row(repaired_after(), "redecoded", "decoder_anomaly", spans=spans)
     report = rescored(root, tmp_path, before, after)
     (file,) = report["files"]
     (flagged_before,) = file["before_rows"]["decoder_anomaly"]
-    assert flagged_before["localized"] is False and flagged_before["spans"] == []
+    assert flagged_before["localized"] is False
+    assert flagged_before["spans"] == []
     (flagged_after,) = file["after_rows"]["decoder_anomaly"]
-    assert flagged_after["localized"] is True and len(flagged_after["spans"]) == 2
+    assert flagged_after["localized"] is True
+    assert len(flagged_after["spans"]) == 2
     assert file["repaired_windows"][0]["still_flagged"] is True
     assert file["unrepaired_spans"] == [{"start": 40.0, "end": 45.0}]
     assert (report["repair"]["looped_windows"], report["repair"]["still_flagged"]) == (2, 2)
 
 
-def test_rescore_flags_a_whole_row_anomaly_as_unlocalized(root: Path, tmp_path: Path):
+def test_rescore_flags_a_whole_row_anomaly_as_unlocalized(root: Path, tmp_path: Path) -> None:
     after = row(repaired_after(), "redecoded", "decoder_anomaly")
     report = rescored(root, tmp_path, row(looped_before()), after)
     (flagged,) = report["files"][0]["after_rows"]["decoder_anomaly"]
@@ -518,13 +529,13 @@ def test_rescore_flags_a_whole_row_anomaly_as_unlocalized(root: Path, tmp_path: 
     assert report["files"][0]["repaired_windows"][0]["still_flagged_unlocalized"] is True
 
 
-def test_rescore_prints_no_transcript_text(root: Path, tmp_path: Path):
+def test_rescore_prints_no_transcript_text(root: Path, tmp_path: Path) -> None:
     output = rescore_output(root, tmp_path, row(looped_before()), row(repaired_after(), "redecoded"))
     for text in ("hello", "everybody", "alpha", "please", "slowly", "okay"):
         assert text not in output
 
 
-def test_rescore_scores_alimeeting_by_characters(root: Path, tmp_path: Path):
+def test_rescore_scores_alimeeting_by_characters(root: Path, tmp_path: Path) -> None:
     before_dir = tmp_path / "before"
     short = spoken("w-prod", "z1", pieces("今天开会讨论预", 0.2) + pieces("明天继续", 70.2))
     full = spoken("w-prod", "z1", pieces("今天开会讨论预算", 0.2) + pieces("明天继续", 70.2))
@@ -543,7 +554,7 @@ def test_rescore_scores_alimeeting_by_characters(root: Path, tmp_path: Path):
 
 def test_rescore_refuses_windows_the_two_runs_were_not_both_scored_on(
     root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
+) -> None:
     make_meeting(root, "ami", "m2", LOOP_LINES)
     before_dir = tmp_path / "before"
     decode_rows(root, Layout(before_dir / "ami"), {"m2": row(looped_before())})
@@ -562,12 +573,13 @@ def test_rescore_refuses_windows_the_two_runs_were_not_both_scored_on(
         run_recordings_asr.rescored("ami", "w-prod", "itn", items, before_dir)
 
 
-def test_rescore_needs_the_flagged_recordings_named(root: Path, tmp_path: Path):
+def test_rescore_needs_the_flagged_recordings_named(root: Path, tmp_path: Path) -> None:
     result = CliRunner().invoke(
         run_recordings_asr.main,
         ["rescore", "--hyp", "w-prod", "--corpus", "ami", "--recordings", ",", "--before", str(tmp_path)],
     )
-    assert result.exit_code != 0 and "needs at least one id" in result.output
+    assert result.exit_code != 0
+    assert "needs at least one id" in result.output
 
 
 def at(text: str, start: float, step: float = 0.4) -> list[tuple[str, float, float]]:
@@ -587,7 +599,7 @@ FIXED_A = at("please repeat that slowly", 12.0, 1.0)
 LOOP_B = at(LOOP, 21.0)
 
 
-def test_windows_that_touch_at_a_seam_do_not_overlap_so_an_unrepaired_neighbour_is_its_own_looped_window():
+def test_windows_that_touch_at_a_seam_do_not_overlap_so_an_unrepaired_neighbour_is_its_own_looped_window() -> None:
     before = probe_row(HEAD + LOOP_A + LOOP_B + TAIL, "decoder_anomaly")
     after = probe_row(
         HEAD + FIXED_A + LOOP_B + TAIL, "redecoded", "decoder_anomaly", spans=(AnomalySpan(start=20.0, end=30.0),)
@@ -601,7 +613,9 @@ def test_windows_that_touch_at_a_seam_do_not_overlap_so_an_unrepaired_neighbour_
     assert (repair.looped_windows, repair.still_flagged) == (2, 1)
 
 
-def test_a_window_only_a_whole_row_flag_covers_is_unlocalized_and_left_out_of_rule_2(root: Path, tmp_path: Path):
+def test_a_window_only_a_whole_row_flag_covers_is_unlocalized_and_left_out_of_rule_2(
+    root: Path, tmp_path: Path
+) -> None:
     before = probe_row(looped_before(), "decoder_anomaly")
     after = probe_row(repaired_after(), "redecoded", "decoder_anomaly")
     report = rescored(root, tmp_path, before, after)
@@ -609,21 +623,22 @@ def test_a_window_only_a_whole_row_flag_covers_is_unlocalized_and_left_out_of_ru
     assert (window["still_flagged"], window["still_flagged_unlocalized"]) == (False, True)
     assert report["repair"]["still_flagged_unlocalized"] == 1
     rules = report["rules"]
-    assert (
-        rules["rule_2"]["judged_windows"] == 0 and rules["rule_2"]["share"] is None and rules["rule_2"]["stop"] is False
-    )
+    assert rules["rule_2"]["judged_windows"] == 0
+    assert rules["rule_2"]["share"] is None
+    assert rules["rule_2"]["stop"] is False
     assert rules["rule_4"]["unlocalized_rows"] == [{"item": "m2", "chunk": 0, "start": 0.2, "end": 71.4}]
 
 
-def test_rules_name_their_inputs_and_outcomes(root: Path, tmp_path: Path):
+def test_rules_name_their_inputs_and_outcomes(root: Path, tmp_path: Path) -> None:
     spans = (AnomalySpan(start=10.0, end=19.0), AnomalySpan(start=40.0, end=45.0))
     after = probe_row(repaired_after(), "redecoded", "decoder_anomaly", spans=spans)
     rules = rescored(root, tmp_path, probe_row(looped_before(), "decoder_anomaly"), after)["rules"]
-    assert rules["rule_1"]["before_rate"] == pytest.approx(2.2) and rules["rule_1"]["after_rate"] == pytest.approx(0.3)
-    assert (
-        rules["rule_1"]["difference"] < 0 and rules["rule_1"]["window_ci"]["low"] < rules["rule_1"]["window_ci"]["high"]
-    )
-    assert rules["rule_1"]["worse_with_ci_above_zero"] is False and rules["rule_1"]["ships"] is True
+    assert rules["rule_1"]["before_rate"] == pytest.approx(2.2)
+    assert rules["rule_1"]["after_rate"] == pytest.approx(0.3)
+    assert rules["rule_1"]["difference"] < 0
+    assert rules["rule_1"]["window_ci"]["low"] < rules["rule_1"]["window_ci"]["high"]
+    assert rules["rule_1"]["worse_with_ci_above_zero"] is False
+    assert rules["rule_1"]["ships"] is True
     assert rules["rule_2"] == {
         "looped_windows": 2,
         "still_flagged_unlocalized": 0,
@@ -632,11 +647,12 @@ def test_rules_name_their_inputs_and_outcomes(root: Path, tmp_path: Path):
         "share": 1.0,
         "stop": True,
     }
-    assert rules["rule_3"]["plan_dedupe"] is False and rules["rule_3"]["share"] == 0.0
+    assert rules["rule_3"]["plan_dedupe"] is False
+    assert rules["rule_3"]["share"] == 0.0
     assert rules["rule_4"]["unlocalized_rows"] == []
 
 
-def test_a_difference_the_guard_would_not_judge_a_failure_is_not_a_repair_and_is_listed_with_its_triggers():
+def test_a_difference_the_guard_would_not_judge_a_failure_is_not_a_repair_and_is_listed_with_its_triggers() -> None:
     varied = at(
         "we looked at several numbers this quarter and the team agreed on a new plan for hiring next year "
         "while costs stayed flat across most regions so margins held up better than many expected",
@@ -652,11 +668,12 @@ def test_a_difference_the_guard_would_not_judge_a_failure_is_not_a_repair_and_is
     file = rescore_item("m2", [before], [after], [], [])
     assert len(file.repaired_windows) == 1
     (rest,) = file.other_differences
-    assert rest.triggers == () and rest.in_redecoded_row is True
+    assert rest.triggers == ()
+    assert rest.in_redecoded_row is True
     assert total_repair([file]).other_differences == 1
 
 
-def test_a_loop_the_new_words_keep_is_not_a_repair_even_when_one_word_of_it_changed():
+def test_a_loop_the_new_words_keep_is_not_a_repair_even_when_one_word_of_it_changed() -> None:
     legit_old = at("yes " * 12, 50.0, 0.3)
     legit_new = at("yes " * 11 + "right", 50.0, 0.3)
     before = probe_row(HEAD + LOOP_A + legit_old + TAIL, "decoder_anomaly")
@@ -666,7 +683,7 @@ def test_a_loop_the_new_words_keep_is_not_a_repair_even_when_one_word_of_it_chan
     assert len(file.other_differences) == 1
 
 
-def test_score_counts_recordings_whose_rows_hold_more_than_one_language(root: Path):
+def test_score_counts_recordings_whose_rows_hold_more_than_one_language(root: Path) -> None:
     def rows_for(request: WorkerRequest) -> list[ChunkHypothesis]:
         (job,) = request.files
         second = "en" if job.id == "m1" else "zh"

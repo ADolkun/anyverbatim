@@ -121,9 +121,11 @@ def test_a_torn_last_verdict_line_is_judged_again(spans: list, tmp_path: Path) -
 
     client = FakeClient()
     verdicts = judge.run_judge(client, items, directory, model="m", batch_size=1)
-    assert len(client.requests) == 1 and len(verdicts) == 2
+    assert len(client.requests) == 1
+    assert len(verdicts) == 2
     lines = path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 2 and all(json.loads(line) for line in lines)
+    assert len(lines) == 2
+    assert all(json.loads(line) for line in lines)
 
 
 def test_needs_audio_counts_for_nobody(spans: list, tmp_path: Path) -> None:

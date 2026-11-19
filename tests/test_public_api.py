@@ -276,9 +276,14 @@ def test_a_members_playlist_is_told_from_other_references() -> None:
     members = anyverbatim.parse_youtube("https://www.youtube.com/playlist?list=UUMOabcdefgh")
     ordinary = anyverbatim.parse_youtube("https://www.youtube.com/playlist?list=PLabcdefgh")
     video = anyverbatim.parse_youtube("https://youtu.be/abcDEF_1234")
-    assert members is not None and members.kind is anyverbatim.RefKind.PLAYLIST and members.members_only
-    assert ordinary is not None and not ordinary.members_only
-    assert video is not None and video.kind is anyverbatim.RefKind.VIDEO and not video.members_only
+    assert members is not None
+    assert members.kind is anyverbatim.RefKind.PLAYLIST
+    assert members.members_only
+    assert ordinary is not None
+    assert not ordinary.members_only
+    assert video is not None
+    assert video.kind is anyverbatim.RefKind.VIDEO
+    assert not video.members_only
     assert video.url == anyverbatim.video_url("abcDEF_1234")
     assert anyverbatim.parse_youtube("https://example.com/watch?v=abcDEF_1234") is None
 

@@ -1751,7 +1751,7 @@ def _evidence_tracks(tracks: Sequence[CaptionTrack], source: Transcribed) -> lis
 
 
 def _base(code: str) -> str:
-    return code.split("-")[0].lower()
+    return code.split("-", maxsplit=1)[0].lower()
 
 
 def _track_key(track: CaptionTrack) -> str:

@@ -58,8 +58,10 @@ def test_missing_tools_are_other_failures(kit, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(shutil, "which", lambda name: None if name == "ffprobe" else f"/opt/bin/{name}")
     monkeypatch.setattr(jsruntime, "detect", lambda: jsruntime.JsRuntime(None, (), "no runtime"))
     checks = _by_name(doctor.run_doctor(kit.ok(), now=NOW))
-    assert checks["ffprobe"].status is Status.FAIL and "brew install ffmpeg" in checks["ffprobe"].fix
-    assert checks["js runtime"].status is Status.FAIL and "Deno" in checks["js runtime"].fix
+    assert checks["ffprobe"].status is Status.FAIL
+    assert "brew install ffmpeg" in checks["ffprobe"].fix
+    assert checks["js runtime"].status is Status.FAIL
+    assert "Deno" in checks["js runtime"].fix
     assert doctor.exit_code(list(checks.values())) == 1
 
 
@@ -67,7 +69,8 @@ def test_node_runtime_notes_deno_once(kit, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(jsruntime, "detect", lambda: jsruntime.JsRuntime("node", ("--js-runtimes", "node"), None))
     checks = doctor.run_doctor(kit.ok(), now=NOW)
     js = _by_name(checks)["js runtime"]
-    assert js.status is Status.OK and "Deno's sandbox is stricter" in js.message
+    assert js.status is Status.OK
+    assert "Deno's sandbox is stricter" in js.message
     assert sum("Deno" in c.message for c in checks) == 1
 
 
@@ -88,7 +91,8 @@ def test_no_source_is_an_auth_failure(kit) -> None:
     checks = _by_name(doctor.run_doctor(kit.ok(), now=NOW))
     assert checks["source"].status is Status.FAIL
     assert checks["source"].message.startswith("no_source")
-    assert "snapshot" not in checks and "login" not in checks
+    assert "snapshot" not in checks
+    assert "login" not in checks
     assert doctor.exit_code(list(checks.values())) == 2
 
 
@@ -105,7 +109,8 @@ def test_snapshot_failure_skips_login(kit) -> None:
     runner = kit.ok()
     checks = _by_name(doctor.run_doctor(runner, now=NOW))
     assert checks["source"].status is Status.OK
-    assert checks["snapshot"].status is Status.FAIL and "Always Allow" in checks["snapshot"].fix
+    assert checks["snapshot"].status is Status.FAIL
+    assert "Always Allow" in checks["snapshot"].fix
     assert checks["login"].status is Status.WARN
     assert runner.calls == []
 
@@ -114,20 +119,24 @@ def test_login_failure(kit) -> None:
     source.save_source(BrowserSource("chrome", "Default"))
     checks = _by_name(doctor.run_doctor(kit.fail(Signal.LOGIN_REQUIRED), now=NOW))
     assert checks["snapshot"].status is Status.OK
-    assert checks["login"].status is Status.FAIL and checks["login"].message.startswith("logged_out")
+    assert checks["login"].status is Status.FAIL
+    assert checks["login"].message.startswith("logged_out")
 
 
 def test_po_token_warning(kit) -> None:
     source.save_source(BrowserSource("chrome", "Default"))
     checks = _by_name(doctor.run_doctor(kit.ok(Signal.PO_TOKEN_SUBS), now=NOW))
-    assert checks["po token"].status is Status.WARN and "docs/auth.md#po-token" in checks["po token"].fix
+    assert checks["po token"].status is Status.WARN
+    assert "docs/auth.md#po-token" in checks["po token"].fix
 
 
 def test_active_cooldown_is_reported_with_its_fix(kit) -> None:
     start_cooldown(Signal.RATE_LIMITED, NOW)
     cooldown = _by_name(doctor.run_doctor(kit.ok(), now=NOW))["cooldown"]
-    assert cooldown.status is Status.FAIL and cooldown.message.startswith("rate_limited")
-    assert "Wait until " in cooldown.fix and "an hour has passed" not in cooldown.fix
+    assert cooldown.status is Status.FAIL
+    assert cooldown.message.startswith("rate_limited")
+    assert "Wait until " in cooldown.fix
+    assert "an hour has passed" not in cooldown.fix
 
 
 def test_expired_cooldown_is_ok(kit) -> None:
@@ -152,8 +161,10 @@ def test_cooldown_in_any_other_format_is_unreadable(kit, payload: object) -> Non
     paths.cooldown_file().write_text(json.dumps(payload), encoding="utf-8")
     runner = kit.ok()
     checks = _by_name(doctor.run_doctor(runner, now=NOW))
-    assert checks["cooldown"].status is Status.FAIL and "unreadable" in checks["cooldown"].message
-    assert checks["login"].status is Status.WARN and runner.calls == []
+    assert checks["cooldown"].status is Status.FAIL
+    assert "unreadable" in checks["cooldown"].message
+    assert checks["login"].status is Status.WARN
+    assert runner.calls == []
 
 
 def test_active_cooldown_skips_the_probe(kit) -> None:
@@ -163,8 +174,10 @@ def test_active_cooldown_skips_the_probe(kit) -> None:
     checks = _by_name(doctor.run_doctor(runner, now=NOW + timedelta(minutes=10)))
     assert runner.calls == []
     assert checks["snapshot"].status is Status.OK
-    assert checks["login"].status is Status.WARN and "--ignore-cooldown" in checks["login"].message
-    assert checks["cooldown"].status is Status.FAIL and "Wait until " in checks["cooldown"].fix
+    assert checks["login"].status is Status.WARN
+    assert "--ignore-cooldown" in checks["login"].message
+    assert checks["cooldown"].status is Status.FAIL
+    assert "Wait until " in checks["cooldown"].fix
     assert doctor.exit_code(list(checks.values())) == 2
 
 
@@ -173,7 +186,8 @@ def test_ignore_cooldown_probes_anyway(kit) -> None:
     start_cooldown(Signal.BOT_CHECK, NOW)
     runner = kit.ok()
     checks = _by_name(doctor.run_doctor(runner, now=NOW + timedelta(minutes=10), ignore_cooldown=True))
-    assert len(runner.calls) == 1 and checks["login"].status is Status.OK
+    assert len(runner.calls) == 1
+    assert checks["login"].status is Status.OK
 
 
 @pytest.mark.parametrize(
@@ -191,4 +205,5 @@ def test_a_stop_signal_on_the_probe_starts_a_cooldown(kit, runner_kind: str) -> 
     assert checks["login"].status is Status.FAIL
     assert checks["cooldown"].status is Status.FAIL
     cooldown = read_cooldown()
-    assert cooldown is not None and cooldown.until == NOW + timedelta(hours=1)
+    assert cooldown is not None
+    assert cooldown.until == NOW + timedelta(hours=1)

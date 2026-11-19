@@ -106,7 +106,9 @@ def test_exhausted_retries_raise_the_original_error_with_the_attempt_count() -> 
     with pytest.raises(LLMUnavailableError, match=r"gave up after 5 attempts") as raised:
         waits.client(inner).complete(REQUEST)
     assert raised.value is error
-    assert OVERLOADED in str(error) and error.code == OVERLOADED and error.transient is True
+    assert OVERLOADED in str(error)
+    assert error.code == OVERLOADED
+    assert error.transient is True
     assert inner.calls == RETRIES + 1
     assert waits.slept == [15.0, 30.0, 60.0, 120.0]
 
@@ -130,7 +132,8 @@ def test_other_failures_are_raised_on_the_first_attempt(error: Exception) -> Non
         waits.client(inner).complete(REQUEST)
     assert raised.value is error
     assert inner.calls == 1
-    assert waits.slept == [] and waits.notices == []
+    assert waits.slept == []
+    assert waits.notices == []
 
 
 def test_a_transient_failure_followed_by_another_kind_stops_there() -> None:
@@ -268,7 +271,8 @@ def test_a_stage_retries_a_transient_failure_and_reports_each_retry(out: Path, m
     events: list[ProgressEvent] = []
     result = run(CAPTIONED, out, llm, RefusingYtDlp(), events)
     assert result.document is not None, result.outcome
-    assert len(slept) == 2 and 12 <= slept[0] <= 18
+    assert len(slept) == 2
+    assert 12 <= slept[0] <= 18
     retries = [event for event in events if event.retry]
     assert [(event.id, event.stage) for event in retries] == [(CAPTIONED, "correct")] * 2
     assert retries[0].detail.startswith(f"LLM unavailable ({OVERLOADED}); retry 1/4 in ")

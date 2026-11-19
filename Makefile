@@ -10,7 +10,7 @@ format-check:
 	uv run ruff format --check .
 
 typecheck:
-	uv run pyrefly check
+	uv run pyrefly check --min-severity warn
 
 test:
 	uv run pytest
