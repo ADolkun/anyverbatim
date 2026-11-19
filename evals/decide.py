@@ -169,11 +169,13 @@ def render_decision(decision: Decision) -> str:
         lines += [f"| {c.name} | {'pass' if c.passed else 'fail'} | {c.detail} |" for c in language.checks]
         lines.append("")
     lines += [
-        "Rule: every span decided; Wilson 95% lower bound > 0.5 overall and in the language; "
-        "numeric/entity point estimate >= 0.5 with lower bound > 0.40; "
-        f"repetition and token-cap rates within +{REPETITION_TOLERANCE_PER_HOUR}/h and non-speech output within "
-        f"+{NONSPEECH_TOLERANCE:.1%} of the control; reference CER within +{CER_TOLERANCE:.0%} point. "
-        "Otherwise Whisper stays.",
+        (
+            "Rule: every span decided; Wilson 95% lower bound > 0.5 overall and in the language; "
+            "numeric/entity point estimate >= 0.5 with lower bound > 0.40; "
+            f"repetition and token-cap rates within +{REPETITION_TOLERANCE_PER_HOUR}/h and non-speech output within "
+            f"+{NONSPEECH_TOLERANCE:.1%} of the control; reference CER within +{CER_TOLERANCE:.0%} point. "
+            "Otherwise Whisper stays."
+        ),
         "",
     ]
     return "\n".join(lines)

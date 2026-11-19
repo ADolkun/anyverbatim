@@ -80,7 +80,7 @@ def parse_added_lines(diff: str) -> Iterator[tuple[str, int, str]]:
 
 
 def _git(*args: str) -> bytes:
-    return subprocess.run(["git", *args], check=True, capture_output=True).stdout
+    return subprocess.run(["git", *args], check=True, capture_output=True).stdout  # noqa: S607  # git is resolved from PATH
 
 
 def load_local_patterns() -> list[tuple[str, re.Pattern[str]]]:

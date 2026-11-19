@@ -63,7 +63,7 @@ def _exit_with_parent() -> None:
     threading.Thread(target=watch, name="exit-with-parent", daemon=True).start()
 
 
-def _import[T](name: str, kind: type[T]) -> T:
+def _import[T](name: str, _kind: type[T]) -> T:
     try:
         return cast(T, importlib.import_module(name))
     except ModuleNotFoundError as exc:

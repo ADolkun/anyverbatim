@@ -179,7 +179,7 @@ def paired_macro_bootstrap(
     if len(a) != len(b) or not a:
         raise ValueError("paired samples must be non-empty and equally long")
     gaps = [x - y for x, y in zip(a, b, strict=True)]
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # noqa: S311  # seeded, reproducible sampling
     means = sorted(sum(rng.choices(gaps, k=len(gaps))) / len(gaps) for _ in range(resamples))
     tail = (1 - confidence) / 2
     return MacroBootstrap(

@@ -144,7 +144,7 @@ def text_disputes(
 
 def select_text(disputes: Sequence[TextDispute], limit: int, seed: int) -> list[TextDispute]:
     """Up to ``MAX_EXAMPLES`` of each policy group, plus a seeded random sample of ``limit`` ungrouped disputes."""
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # noqa: S311  # seeded, reproducible sampling
     chosen: list[TextDispute] = []
     for group in sorted({d.group for d in disputes if d.group}):
         members = [d for d in disputes if d.group == group]
@@ -160,7 +160,7 @@ def select_attribution(disputes: Sequence[AttributionDispute], limit: int, seed:
     The sample carries neither the number of disputes it came from nor their durations, so a time-weighted win rate
     has to weight each item by its own duration.
     """
-    chosen = random.Random(seed).sample(list(disputes), min(limit, len(disputes)))
+    chosen = random.Random(seed).sample(list(disputes), min(limit, len(disputes)))  # noqa: S311  # seeded, reproducible sampling
     return sorted(chosen, key=lambda d: (d.start, d.id))
 
 

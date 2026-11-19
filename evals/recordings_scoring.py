@@ -57,7 +57,7 @@ WINDOW_TARGET_S = 30.0
 MIN_CUT_GAP_S = 0.75
 MEETINGS = "meetings"
 ASCEND_POOLED = "ascend-pooled"
-SPECIAL_TOKEN_MARK = "<|"
+SPECIAL_MARK = "<|"
 MIN_CLUSTERS = 2
 
 
@@ -224,7 +224,7 @@ def _window(item: str, index: int, reference: Sequence[str], hypothesis: Sequenc
 
 
 def _chunk(
-    item: str, index: int, reference: str, hypothesis: str, mixed_recording: bool, overlapped: bool = False
+    item: str, index: int, reference: str, hypothesis: str, *, mixed_recording: bool, overlapped: bool = False
 ) -> ChunkScore:
     ref_mix, hyp_mix = script_mix(reference), script_mix(hypothesis)
     return ChunkScore(
@@ -276,7 +276,7 @@ def score_item(item: Item, rows: Sequence[ChunkHypothesis], metric: Metric, view
         mixed = script_mix(reference.text).mixed
         return Scored(
             [_window(item.id, 0, wanted, heard, metric)],
-            [_chunk(item.id, 0, reference.text, row_text(rows), mixed)],
+            [_chunk(item.id, 0, reference.text, row_text(rows), mixed_recording=mixed)],
         )
     lines = sorted((u for u in reference.utterances if u.text.strip()), key=lambda u: (u.start, u.end, u.speaker))
     starts = reference_cuts(reference.utterances)
@@ -303,8 +303,8 @@ def score_item(item: Item, rows: Sequence[ChunkHypothesis], metric: Metric, view
                     ]
                 ]
             ),
-            mixed,
-            overlapped[i],
+            mixed_recording=mixed,
+            overlapped=overlapped[i],
         )
         for i, line in enumerate(lines)
     ]
@@ -437,7 +437,7 @@ def pool(scored: Mapping[str, Scored], corpora: Sequence[str]) -> Scored:
 
 def special_token_rows(rows: Iterable[ChunkHypothesis]) -> int:
     """Rows whose text still holds a Whisper special token such as ``<|en|>``."""
-    return sum(SPECIAL_TOKEN_MARK in row.text for row in rows)
+    return sum(SPECIAL_MARK in row.text for row in rows)
 
 
 def multi_language_recordings(rows: Mapping[str, Sequence[ChunkHypothesis]]) -> int:

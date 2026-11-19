@@ -45,6 +45,7 @@ from anyverbatim.diarize.protocol import FileJob as DiarizeFileJob
 from anyverbatim.diarize.protocol import load as load_diarization
 from anyverbatim.diarize.runner import DiarizeResult
 from anyverbatim.errors import AnyverbatimError, ConfigError, EngineError
+from anyverbatim.mlx_worker import default_memory_cap_bytes, mlx_lock
 from evals.diarization import (
     COLLARS_S,
     DerScore,
@@ -298,7 +299,7 @@ def summarize(scores: Sequence[RecordingScore | OwnerScore]) -> dict[str, object
             for i, collar in enumerate(COLLARS_S)
         }
 
-    def wder_block(items: Sequence[RecordingScore], smoothed: bool) -> float | None:
+    def wder_block(items: Sequence[RecordingScore], *, smoothed: bool) -> float | None:
         records = [s.wder_smoothed if smoothed else s.wder_raw for s in items]
         if any(r is None for r in records):
             return None
@@ -318,8 +319,8 @@ def summarize(scores: Sequence[RecordingScore | OwnerScore]) -> dict[str, object
             "recordings": len(items),
             "audio_hours": sum(s.duration_s for s in items) / 3600,
             "der": der_block(items),
-            "wder_raw": wder_block(items, False),
-            "wder_smoothed": wder_block(items, True),
+            "wder_raw": wder_block(items, smoothed=False),
+            "wder_smoothed": wder_block(items, smoothed=True),
             "mean_abs_speaker_count_error": sum(abs(s.speaker_count_error) for s in items) / len(items),
             "mean_signed_speaker_count_error": sum(s.speaker_count_error for s in items) / len(items),
             "mean_abs_smoothed_speaker_count_error": smoothed_count_error(items),
@@ -499,8 +500,6 @@ class ExternalBackend:
         self._command = list(command)
 
     def diarize(self, recording: Recording, out_dir: Path) -> Run:
-        from anyverbatim.mlx_worker import default_memory_cap_bytes, mlx_lock
-
         out_dir.mkdir(parents=True, exist_ok=True)
         rttm = out_dir / "output.rttm"
         argv = [*self._command, str(recording.wav), str(rttm)]
@@ -526,7 +525,7 @@ class ExternalBackend:
         attributed = _turns_for(exclusive, recording.id) if exclusive.is_file() else turns
         return Run(turns, elapsed, 0.0, peak, attributed)
 
-    def attribute(self, words: Sequence[Word], run: Run, *, smoothing: bool) -> list[str | None]:
+    def attribute(self, words: Sequence[Word], run: Run, *, smoothing: bool) -> list[str | None]:  # noqa: ARG002  # Backend protocol
         return list(attribute_by_turns(words, cast(Sequence[Turn], run.handle)))
 
 

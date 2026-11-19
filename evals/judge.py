@@ -84,7 +84,7 @@ class Verdict(BaseModel):
 def make_item(span_id: str, left: str, right: str, readings: Iterable[str], seed: int) -> JudgeItem:
     """Distinct readings in an order fixed by ``seed`` and the span alone, so reruns show the same prompt."""
     options = sorted(dict.fromkeys(readings))
-    random.Random(f"{seed}:{span_id}").shuffle(options)
+    random.Random(f"{seed}:{span_id}").shuffle(options)  # noqa: S311  # seeded, reproducible sampling
     return JudgeItem(span_id, left, right, tuple(options))
 
 

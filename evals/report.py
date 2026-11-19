@@ -124,7 +124,7 @@ def ab_result(layout: Layout, name: str, labels: dict[str, str]) -> ABResult:
         spans=len(shown),
         answered=answered,
         undecided=len(entries) - answered,
-        overall=where(lambda e: True),
+        overall=where(lambda _: True),
         by_language={lang: where(lambda e, lang=lang: e.language == lang) for lang in LANGUAGES},
         numeric=where(lambda e: e.stratum == "numeric"),
         numeric_by_language={
@@ -190,8 +190,10 @@ def _rate(rate: Rate | None) -> str:
 
 def _quality_rows(report: Report) -> list[str]:
     lines = [
-        "| hypothesis | language | files | hours | rep/h | token-cap/h | non-speech units | re-decoded chunks "
-        "| anomalies |"
+        (
+            "| hypothesis | language | files | hours | rep/h | token-cap/h | non-speech units | re-decoded chunks "
+            "| anomalies |"
+        )
     ]
     lines.append("|---|---|---|---|---|---|---|---|---|")
     for row in report.screen.hypotheses:
@@ -219,16 +221,20 @@ def render_markdown(report: Report) -> str:
         "",
         "## Screening",
         "",
-        f"{screen.spans} disputed spans ({screen.format_only_spans} differ only in written form and are excluded). "
-        f"Judge: {screen.judge_model or 'not run'} ({screen.judge_prompt_version or '—'}), seed {screen.judge_seed}, "
-        f"{screen.judge_answered} of {screen.judge_sample} sampled spans answered. The judge screens only; it does "
-        "not decide.",
+        (
+            f"{screen.spans} disputed spans ({screen.format_only_spans} differ only in written form and are excluded). "
+            f"Judge: {screen.judge_model or 'not run'} ({screen.judge_prompt_version or '—'}), "
+            f"seed {screen.judge_seed}, {screen.judge_answered} of {screen.judge_sample} sampled spans answered. "
+            "The judge screens only; it does not decide."
+        ),
         "",
         screen_table(screen),
         "",
         f"Recommended control: **{screen.recommendation.control or '—'}** ({screen.recommendation.control_reason}).",
-        f"Recommended challenger: **{screen.recommendation.challenger or '—'}** "
-        f"({screen.recommendation.challenger_reason}).",
+        (
+            f"Recommended challenger: **{screen.recommendation.challenger or '—'}** "
+            f"({screen.recommendation.challenger_reason})."
+        ),
         "",
         "## Absolute error against the manual reference",
         "",
@@ -272,9 +278,11 @@ def _ab_markdown(ab: ABResult | None) -> list[str]:
     return [
         "## Blind A/B",
         "",
-        f"Session `{ab.session}`: control **{ab.control}** vs challenger **{ab.challenger}**, seed {ab.seed}, "
-        f"{ab.answered} of {ab.spans} spans answered. Win rates are weighted back from the stratified sample; "
-        "'both fine', 'both wrong' and skips are excluded from them.",
+        (
+            f"Session `{ab.session}`: control **{ab.control}** vs challenger **{ab.challenger}**, seed {ab.seed}, "
+            f"{ab.answered} of {ab.spans} spans answered. Win rates are weighted back from the stratified sample; "
+            "'both fine', 'both wrong' and skips are excluded from them."
+        ),
         "",
         header,
         "|---|---|---|---|---|---|---|---|",

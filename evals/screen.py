@@ -386,7 +386,7 @@ def automatic_metrics(layout: Layout, manifest: Manifest, hypotheses: Sequence[s
 def judge_items(spans: Sequence[Span], sample: int, seed: int) -> list[JudgeItem]:
     """Draw a seeded uniform sample of the spans a listener could tell apart, with readings shuffled per span."""
     candidates = [s for s in spans if not s.format_only]
-    chosen = random.Random(seed).sample(candidates, min(sample, len(candidates)))
+    chosen = random.Random(seed).sample(candidates, min(sample, len(candidates)))  # noqa: S311  # seeded, reproducible sampling
     return [make_item(s.id, s.left, s.right, s.distinct, seed) for s in sorted(chosen, key=lambda s: s.id)]
 
 
@@ -420,7 +420,7 @@ def recommend(rows: Sequence[HypothesisScreen]) -> Recommendation:
     controls = [by_id[h] for h in CONTROLS if h in by_id]
     challengers = sorted(
         (by_id[h] for h in CHALLENGERS if h in by_id and by_id[h].judge is not None),
-        key=lambda row: _share(row),
+        key=_share,
         reverse=True,
     )
     control: HypothesisScreen | None = None
