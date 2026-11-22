@@ -183,7 +183,7 @@ DATACLASSES: dict[str, list[str]] = {
         "chapters: Literal['auto', 'none'] = 'auto'",
         "numeric_second_opinion: str = 'off'",
         "script: Literal['zh-Hans', 'keep'] = 'zh-Hans'",
-        "fillers: Literal['keep', 'remove'] = 'keep'",
+        "fillers: Literal['keep', 'remove'] = 'remove'",
         "numerals: Literal['digits', 'keep'] = 'digits'",
         "glossary: tuple[str, ...] = ()",
     ],

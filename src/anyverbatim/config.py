@@ -60,8 +60,8 @@ class TextOptions:
     # An ASR hypothesis id that re-decodes the numeric spans as independent evidence, or "off".
     numeric_second_opinion: str = "off"
     script: Literal["zh-Hans", "keep"] = "zh-Hans"
-    # Verbatim by default: fillers are what was said, and removing them edits the quotable text.
-    fillers: Literal["keep", "remove"] = "keep"
+    # Hesitation sounds are noise in a transcript read as context, so they go; "keep" is for exact verbatim text.
+    fillers: Literal["keep", "remove"] = "remove"
     # Mandarin amounts as digits per GB/T 15835-2011 (3.5万, 80%, 2026年), or "keep" for the form as recognized.
     numerals: Literal["digits", "keep"] = "digits"
     # Terms the correction pass should prefer (names, jargon), for every source; YouTube adds its tags after them.

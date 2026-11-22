@@ -65,7 +65,8 @@ CAPTIONED_MANUAL = ("so today we look at fifteen funds", "Markets rose twelve pe
 
 def options(video_id: str) -> config.Options:
     """The options each fixture video was made with; the rerun must use the same ones."""
-    base = config.Options(llm=config.LLMOptions(provider="none"))
+    # The fixtures predate fillers being removed by default; their stage keys and bytes pin the kept text.
+    base = config.Options(llm=config.LLMOptions(provider="none"), text=config.TextOptions(fillers="keep"))
     if video_id == MIXED:
         return replace(
             base,

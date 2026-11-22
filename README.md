@@ -137,7 +137,7 @@ The stages run in this order:
 1. Metadata, captions and audio for YouTube, or the file's audio for a recording.
 2. ASR (or, with `--source captions`, the manual caption track).
 3. For a diarized source, speaker diarization (see [Speakers](#speakers)).
-4. Normalize: Simplified Chinese by default, with ASCII marks next to Chinese characters written full-width (`[text] script = "keep"` leaves both alone). Both work on the characters, so Chinese inside an English stretch is converted too, whatever language the stretch was decoded in. Fillers are kept unless `[text] fillers = "remove"`, and they follow the stretch's language.
+4. Normalize: Simplified Chinese by default, with ASCII marks next to Chinese characters written full-width (`[text] script = "keep"` leaves both alone). Both work on the characters, so Chinese inside an English stretch is converted too, whatever language the stretch was decoded in. Hesitation fillers (English um, uh, hmm, er; Chinese standalone 嗯 and 啊 at a boundary, doubled 然后 and 就是说) are removed by default and follow the stretch's language; `[text] fillers = "keep"` leaves the text exactly as said.
 5. Punctuation, only where the transcript has too few sentence marks.
 6. Correction, whenever the text stages have an LLM (`--no-correct` or `[text] correct = false` turns it off). A name the LLM changed in Latin script is flagged `entity_corrected`, as tickers and acronyms are.
 7. Numeric verification against captions in the transcript's language. Without such captions or a second opinion the numbers rest on the transcript alone, and a warning says so (recordings have no captions).
