@@ -279,7 +279,7 @@ Both need `anyverbatim[whisper,asr]`.
 
 When a recording has stretches in more than one language, each stretch is treated by its own language:
 
-- Chinese fillers apply to the Chinese stretches.
+- Chinese fillers are removed only from the Chinese stretches.
 - Simplified-Chinese conversion and full-width punctuation next to Chinese characters work on the characters, so they apply in every stretch whatever its language: Chinese inside an English stretch is converted too, and text without Chinese characters never changes.
 - Punctuation follows each language's own style.
 - [Chinese numerals as digits](../README.md#numerals) apply to the Chinese stretches.
@@ -413,7 +413,7 @@ Set these in `~/.config/anyverbatim/config.toml`. A command-line option wins for
 | `[text] numeric_second_opinion` | `"off"` | An engine id whose reading of the numbers is checked against the first. It must decode chunk by chunk and re-decode single spans, such as `w-vad`; `w-prod` and `w-runs-lid` are refused. |
 | `[text] correct` | on with an LLM | `--correct/--no-correct`. |
 | `[text] script` | `"zh-Hans"` | `"keep"` leaves the script and punctuation as recognised. |
-| `[text] fillers` | `"keep"` | `"remove"` drops fillers. |
+| `[text] fillers` | `"remove"` | `"keep"` leaves fillers in, for exact verbatim text. |
 | `[text] numerals` | `"digits"` | `"keep"` leaves Chinese numerals as recognised. |
 | `[llm] provider`, `model`, `effort` | `chatgpt` | `--llm PROVIDER:MODEL`, or `--llm none`. |
 

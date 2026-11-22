@@ -124,6 +124,12 @@ Every error `process` and `expand` raise on purpose subclasses `AnyverbatimError
 
 ## Breaking changes
 
+### Next release: fillers are removed by default
+
+`TextOptions.fillers` now defaults to `"remove"`, not `"keep"`, so `Options()` and a `config.toml` without `[text] fillers` drop hesitation fillers from the text: English um, uh, hmm and er, Chinese standalone 嗯 and 啊 at a clause boundary, and a doubled 然后 or 就是说. Demonstratives are never removed, and a stretch is never emptied. To keep the text exactly as said, set `TextOptions(fillers="keep")` or `[text] fillers = "keep"`.
+
+A finished transcript made with the old default is not reused: `fillers` is part of the settings a finished document depends on, so the next `run` or `process` of each YouTube video or recording makes it again, from its stored stages. No Whisper run and no audio download happen. The normalize stage runs once more. Stages after it are redone only where their input text changed: a document with no filler in it makes no new LLM call, and in one with fillers, punctuation and correction ask the LLM again only for the batches whose text changed, and number verification only for a disputed batch whose prompt changed. A YouTube video may repeat its metadata request when the saved one is old. With `fillers = "keep"` set, the document stays current and nothing is redone.
+
 ### Next release: renamed to anyverbatim
 
 The project was renamed from ytverbatim to anyverbatim, since it transcribes recordings as well as YouTube videos. The surface is otherwise unchanged.
